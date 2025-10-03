@@ -9,8 +9,10 @@ from aiogram.client.telegram import TelegramAPIServer
 from aiogram.exceptions import TelegramAPIError
 from aiohttp import ClientError
 
-from uniclon.config import BOT_TOKEN, BOT_API_BASE
-from uniclon.handlers import router
+# REGION AI: local imports
+from config import BOT_TOKEN, BOT_API_BASE
+from handlers import router
+# END REGION AI
 
 
 def make_bot() -> Bot:

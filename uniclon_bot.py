@@ -2,12 +2,16 @@
 import asyncio
 import logging
 
+from dotenv import load_dotenv
+
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.exceptions import TelegramAPIError
 from aiohttp import ClientError
+
+load_dotenv()
 
 # REGION AI: local imports
 from config import BOT_TOKEN, BOT_API_BASE

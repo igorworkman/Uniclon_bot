@@ -2,7 +2,8 @@
 import re
 from pathlib import Path
 from typing import Optional, Tuple
-from uniclon.config import MAX_COPIES, BASE_DIR
+
+from uniclon.config import BASE_DIR
 
 
 def parse_copies_from_caption(caption: Optional[str]) -> Optional[int]:
@@ -11,8 +12,7 @@ def parse_copies_from_caption(caption: Optional[str]) -> Optional[int]:
     m = re.search(r"(\d+)", caption)
     if not m:
         return None
-    n = int(m.group(1))
-    return max(1, min(MAX_COPIES, n))
+    return int(m.group(1))
 
 
 def parse_filename_and_copies(text: Optional[str]) -> Optional[Tuple[Path, int]]:
@@ -23,5 +23,5 @@ def parse_filename_and_copies(text: Optional[str]) -> Optional[Tuple[Path, int]]
     if not m:
         return None
     filename = m.group(1).strip()
-    copies = max(1, min(MAX_COPIES, int(m.group(2))))
+    copies = int(m.group(2))
     return (BASE_DIR / filename, copies)

@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from pathlib import Path
 from aiogram import F, Router
@@ -229,7 +230,10 @@ async def _run_and_send(message: Message, ack: Message, input_path: Path, copies
 
     if CLEAN_UP_INPUT:
         try:
-            if input_path.exists():
-                input_path.unlink()
+            os.remove(input_path)
+        except FileNotFoundError:
+            pass
         except Exception:
             logger.exception("Failed to remove input file %s", input_path)
+        else:
+            logger.info("Temporary file %s deleted.", input_path)

@@ -1,0 +1,21 @@
+{
+  "copies_missing": "Укажи количество копий {hint} (1..{max_copies}).",
+  "copies_out_of_range": "Количество копий должно быть от 1 до {max_copies}.",
+  "hint_video_caption": "в подписи к видео",
+  "hint_document_caption": "в подписи к файлу",
+  "hint_message": "в сообщении",
+  "code_example": "<имя_файла>.mp4 <число>",
+  "start_text": "Привет! Я Uniclon.\n\nВарианты:\n• Пришли MP4 как *файл (Document)* с подписью-числом, например: 10.\n• Если файл большой и не грузится – положи его в папку проекта и пришли текст:\n  {code_example}.\n\nЛимит копий: до {max_copies}.\nРезультаты возвращаю из папки ‘{output_dir}’.",
+  "saving_video": "Сохраняю видео… Копий: {copies}",
+  "saving_document": "Сохраняю файл… Копий: {copies}",
+  "download_error": "Ошибка при скачивании файла: {error}",
+  "download_too_big_hint": "Файл слишком большой для Telegram Bot API.\nСкопируй видео в папку проекта и пришли сообщение формата:\n{code_example} — я запущу скрипт локально.",
+  "file_saved": "Файл сохранён: {filename}. Запускаю…",
+  "file_not_found": "Файл {filename} не найден в {base_dir}.\nСкопируй видео в папку проекта или пришли его как файл.",
+  "local_file_found": "Нашёл локальный файл {filename}. Копий: {copies}. Запускаю…",
+  "logs_tail": "Логи выполнения (хвост):\n{logs}",
+  "script_failed": "Произошла ошибка при уникализации видео. Скрипт завершился с кодом {rc}. Проверь логи и содержимое ‘{output_dir}’.",
+  "collecting_files": "Готово! Собираю готовые файлы…",
+  "no_new_files": "Скрипт завершён, но новые .mp4 не найдены в ‘{output_dir}’.",
+  "files_sent_summary": "Отправлено файлов: {sent}/{total}. ✅"
+}

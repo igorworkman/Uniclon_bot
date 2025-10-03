@@ -1,0 +1,21 @@
+{
+  "copies_missing": "Specify the number of copies {hint} (1..{max_copies}).",
+  "copies_out_of_range": "The number of copies must be between 1 and {max_copies}.",
+  "hint_video_caption": "in the video caption",
+  "hint_document_caption": "in the document caption",
+  "hint_message": "in the message",
+  "code_example": "<filename>.mp4 <number>",
+  "start_text": "Hi! I'm Uniclon.\n\nOptions:\n• Send an MP4 as a *file (Document)* with a numeric caption, e.g. 10.\n• If the file is too large to upload, place it in the project folder and send the text:\n  {code_example}.\n\nCopy limit: up to {max_copies}.\nI will return results from the '{output_dir}' folder.",
+  "saving_video": "Saving the video… Copies: {copies}",
+  "saving_document": "Saving the file… Copies: {copies}",
+  "download_error": "Failed to download the file: {error}",
+  "download_too_big_hint": "The file is too large for the Telegram Bot API.\nCopy the video into the project folder and send a message like:\n{code_example} — I'll run the script locally.",
+  "file_saved": "File saved: {filename}. Starting…",
+  "file_not_found": "File {filename} not found in {base_dir}.\nCopy the video into the project folder or send it as a file.",
+  "local_file_found": "Found local file {filename}. Copies: {copies}. Starting…",
+  "logs_tail": "Execution logs (tail):\n{logs}",
+  "script_failed": "An error occurred while processing the video. The script exited with code {rc}. Check the logs and the '{output_dir}' folder.",
+  "collecting_files": "Done! Collecting the generated files…",
+  "no_new_files": "The script finished, but no new .mp4 files were found in '{output_dir}'.",
+  "files_sent_summary": "Files sent: {sent}/{total}. ✅"
+}

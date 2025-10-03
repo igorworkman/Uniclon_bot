@@ -5,7 +5,7 @@
   "hint_document_caption": "in the document caption",
   "hint_message": "in the message",
   "code_example": "<filename>.mp4 <number>",
-  "start_text": "Hi! I'm Uniclon.\n\nOptions:\n• Send an MP4 as a *file (Document)* with a numeric caption, e.g. 10.\n• If the file is too large to upload, place it in the project folder and send the text:\n  {code_example}.\n\nCopy limit: up to {max_copies}.\nI will return results from the '{output_dir}' folder.",
+  "start_text": "Hi! I am Uniclon 👋\n\nSend me an MP4 as a *file (Document)* with a caption number (e.g. 10).\n\nI will create unique copies and send them back to you.\n\nMaximum copies: {max_copies}.",
   "saving_video": "Saving the video… Copies: {copies}",
   "saving_document": "Saving the file… Copies: {copies}",
   "download_error": "Failed to download the file: {error}",

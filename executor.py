@@ -1,9 +1,13 @@
 import asyncio
+import logging
 import os
 from pathlib import Path
 from typing import List, Tuple
 
 from uniclon.config import SCRIPT_PATH, OUTPUT_DIR
+
+
+logger = logging.getLogger(__name__)
 
 
 async def run_script_with_logs(input_file: Path, copies: int, cwd: Path) -> Tuple[int, str]:
@@ -26,9 +30,31 @@ async def run_script_with_logs(input_file: Path, copies: int, cwd: Path) -> Tupl
     lines: List[str] = []
     assert proc.stdout is not None
     async for raw in proc.stdout:
-        lines.append(raw.decode(errors="replace"))
+        decoded = raw.decode(errors="replace")
+        lines.append(decoded)
+        message = decoded.rstrip("\n")
+        if message:
+            logger.info(
+                "[%s|copies=%s] %s", input_file.name, copies, message
+            )
+        else:
+            logger.info("[%s|copies=%s]", input_file.name, copies)
 
     rc = await proc.wait()
+    if rc != 0:
+        tail = "".join(lines[-10:])
+        logger.error(
+            "Script %s exited with code %s for %s (copies=%s). Tail logs:\n%s",
+            SCRIPT_PATH,
+            rc,
+            input_file.name,
+            copies,
+            tail,
+        )
+        raise RuntimeError(
+            f"Script {SCRIPT_PATH.name} exited with code {rc}. Tail logs:\n{tail}"
+        )
+
     return rc, "".join(lines)
 
 

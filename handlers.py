@@ -7,10 +7,12 @@ from aiogram.types import Message
 from aiogram.utils.markdown import hcode
 from aiogram.types.input_file import FSInputFile
 
-from uniclon.config import BASE_DIR, OUTPUT_DIR, MAX_COPIES, LOG_TAIL_CHARS, CLEAN_UP_INPUT
-from uniclon.utils import parse_copies_from_caption, parse_filename_and_copies
-from uniclon.downloader import download_telegram_file
-from uniclon.executor import run_script_with_logs, list_new_mp4s
+# REGION AI: imports
+from config import BASE_DIR, OUTPUT_DIR, MAX_COPIES, LOG_TAIL_CHARS, CLEAN_UP_INPUT
+from utils import parse_copies_from_caption, parse_filename_and_copies
+from downloader import download_telegram_file
+from executor import run_script_with_logs, list_new_mp4s
+# END REGION AI
 from locales import get_text
 
 router = Router()

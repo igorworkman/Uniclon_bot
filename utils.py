@@ -3,7 +3,9 @@ import re
 from pathlib import Path
 from typing import Optional, Tuple
 
-from uniclon.config import BASE_DIR
+# REGION AI: imports
+from config import BASE_DIR
+# END REGION AI
 
 
 def parse_copies_from_caption(caption: Optional[str]) -> Optional[int]:

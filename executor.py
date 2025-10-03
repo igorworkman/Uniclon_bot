@@ -4,7 +4,9 @@ import os
 from pathlib import Path
 from typing import List, Tuple
 
-from uniclon.config import SCRIPT_PATH, OUTPUT_DIR
+# REGION AI: imports
+from config import SCRIPT_PATH, OUTPUT_DIR
+# END REGION AI
 
 
 logger = logging.getLogger(__name__)

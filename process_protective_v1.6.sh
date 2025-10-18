@@ -96,21 +96,36 @@ COUNT="${2:-1}"
 
 mkdir -p "$OUTPUT_DIR"
 
+MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen"
+
 if [ ! -f "$MANIFEST_PATH" ]; then
-  echo "filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate" > "$MANIFEST_PATH"
+  echo "$MANIFEST_HEADER" > "$MANIFEST_PATH"
 else
   if ! head -n1 "$MANIFEST_PATH" | grep -q "target_duration"; then
     TMP_MANIFEST=$(mktemp)
     {
       IFS= read -r header_line
-      echo "${header_line},target_duration,target_bitrate"
+      echo "${header_line},target_duration,target_bitrate,validated,regen"
       while IFS= read -r data_line; do
         [ -z "$data_line" ] && continue
-        echo "${data_line},," 
+        echo "${data_line},,,,"
       done
     } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
     mv "$TMP_MANIFEST" "$MANIFEST_PATH"
     echo "ℹ️ manifest обновлён: добавлены колонки target_duration и target_bitrate"
+    echo "ℹ️ manifest обновлён: добавлены колонки validated и regen"
+  elif ! head -n1 "$MANIFEST_PATH" | grep -q ",validated"; then
+    TMP_MANIFEST=$(mktemp)
+    {
+      IFS= read -r header_line
+      echo "${header_line},validated,regen"
+      while IFS= read -r data_line; do
+        [ -z "$data_line" ] && continue
+        echo "${data_line},,"
+      done
+    } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
+    mv "$TMP_MANIFEST" "$MANIFEST_PATH"
+    echo "ℹ️ manifest обновлён: добавлены колонки validated и regen"
   fi
 fi
 
@@ -353,11 +368,88 @@ fi
 
 COMBO_HISTORY=""
 declare -a LAST_COMBOS=()
+declare -a RUN_FILES=()
+declare -a RUN_BITRATES=()
+declare -a RUN_FPS=()
+declare -a RUN_DURATIONS=()
+declare -a RUN_SIZES=()
+declare -a RUN_ENCODERS=()
+declare -a RUN_SOFTWARES=()
+declare -a RUN_CREATION_TIMES=()
+declare -a RUN_SEEDS=()
+declare -a RUN_TARGET_DURS=()
+declare -a RUN_TARGET_BRS=()
+declare -a RUN_COMBOS=()
 
-for ((i=1;i<=COUNT;i++)); do
-  attempt=0
+REGEN_ITER=0
+REGEN_OCCURRED=0
+MAX_REGEN_ATTEMPTS=2
+
+duration_bucket() {
+  local value="$1"
+  awk -v v="$value" 'BEGIN { printf "%.1f", v }'
+}
+
+duplicate_threshold() {
+  local total="$1"
+  if [ "$total" -ge 10 ]; then
+    echo 4
+  elif [ "$total" -ge 6 ]; then
+    echo 3
+  else
+    echo 2
+  fi
+}
+
+calculate_duplicate_max() {
+  local -n fps_arr=$1
+  local -n br_arr=$2
+  local -n dur_arr=$3
+  declare -A counts=()
+  local max_count=0
+  for idx in "${!fps_arr[@]}"; do
+    local key="${fps_arr[$idx]}|${br_arr[$idx]}|$(duration_bucket "${dur_arr[$idx]}")"
+    local current=${counts[$key]:-0}
+    current=$((current + 1))
+    counts[$key]=$current
+    if [ "$current" -gt "$max_count" ]; then
+      max_count=$current
+    fi
+  done
+  echo "$max_count"
+}
+
+remove_last_generated() {
+  local remove_count="$1"
+  for ((drop=0; drop<remove_count; drop++)); do
+    local idx=$(( ${#RUN_FILES[@]} - 1 ))
+    [ "$idx" -lt 0 ] && break
+    local file_path="${OUTPUT_DIR}/${RUN_FILES[$idx]}"
+    rm -f "$file_path" 2>/dev/null || true
+    RUN_FILES=("${RUN_FILES[@]:0:$idx}")
+    RUN_BITRATES=("${RUN_BITRATES[@]:0:$idx}")
+    RUN_FPS=("${RUN_FPS[@]:0:$idx}")
+    RUN_DURATIONS=("${RUN_DURATIONS[@]:0:$idx}")
+    RUN_SIZES=("${RUN_SIZES[@]:0:$idx}")
+    RUN_ENCODERS=("${RUN_ENCODERS[@]:0:$idx}")
+    RUN_SOFTWARES=("${RUN_SOFTWARES[@]:0:$idx}")
+    RUN_CREATION_TIMES=("${RUN_CREATION_TIMES[@]:0:$idx}")
+    RUN_SEEDS=("${RUN_SEEDS[@]:0:$idx}")
+    RUN_TARGET_DURS=("${RUN_TARGET_DURS[@]:0:$idx}")
+    RUN_TARGET_BRS=("${RUN_TARGET_BRS[@]:0:$idx}")
+    RUN_COMBOS=("${RUN_COMBOS[@]:0:$idx}")
+    if [ ${#LAST_COMBOS[@]} -gt 0 ]; then
+      LAST_COMBOS=("${LAST_COMBOS[@]:0:${#LAST_COMBOS[@]}-1}")
+    fi
+  done
+}
+
+generate_copy() {
+  local copy_index="$1"
+  local regen_tag="${2:-0}"
+  local attempt=0
   while :; do
-    SEED_HEX=$(deterministic_md5 "${SRC}_${i}_соль_${attempt}")
+    SEED_HEX=$(deterministic_md5 "${SRC}_${copy_index}_соль_${regen_tag}_${attempt}")
     init_rng "$SEED_HEX"
 
     # параметры видео
@@ -425,7 +517,7 @@ for ((i=1;i<=COUNT;i++)); do
 
     attempt=$((attempt + 1))
     if [ "$attempt" -gt 12 ]; then
-      echo "⚠️ Не удалось подобрать уникальные параметры для копии $i, используем последние"
+      echo "⚠️ Не удалось подобрать уникальные параметры для копии $copy_index, используем последние"
       break
     fi
   done
@@ -515,10 +607,10 @@ for ((i=1;i<=COUNT;i++)); do
     "$OUT")
 
   if [ "$DEBUG" -eq 1 ]; then
-    echo "DEBUG copy=$i seed=$SEED fps=$FPS br=${BR}k maxrate=${MAXRATE}k bufsize=${BUFSIZE}k target_duration=$TARGET_DURATION stretch=$STRETCH_FACTOR audio=$AUDIO_PROFILE af='$AFILTER' music_track=${MUSIC_VARIANT_TRACK:-none} noise=$NOISE crop=${CROP_W}x${CROP_H}@${CROP_X},${CROP_Y} pad=${PAD_X},${PAD_Y}"
+    echo "DEBUG copy=$copy_index seed=$SEED fps=$FPS br=${BR}k maxrate=${MAXRATE}k bufsize=${BUFSIZE}k target_duration=$TARGET_DURATION stretch=$STRETCH_FACTOR audio=$AUDIO_PROFILE af='$AFILTER' music_track=${MUSIC_VARIANT_TRACK:-none} noise=$NOISE crop=${CROP_W}x${CROP_H}@${CROP_X},${CROP_Y} pad=${PAD_X},${PAD_Y}"
   fi
 
-  echo "▶️ [$i/$COUNT] $SRC → $OUT | fps=$FPS br=${BR}k noise=$NOISE crop=${CROP_W}x${CROP_H} duration=${TARGET_DURATION}s audio=${AUDIO_PROFILE}"
+  echo "▶️ [$copy_index/$COUNT] $SRC → $OUT | fps=$FPS br=${BR}k noise=$NOISE crop=${CROP_W}x${CROP_H} duration=${TARGET_DURATION}s audio=${AUDIO_PROFILE}"
 
   "${FFMPEG_CMD[@]}"
 
@@ -538,8 +630,64 @@ for ((i=1;i<=COUNT;i++)); do
   DURATION=$(awk -v d="$DURATION_RAW" 'BEGIN{if(d==""||d=="N/A") printf "0"; else printf "%.3f", d}')
   SIZE_BYTES=$(file_size_bytes "$OUT")
   SIZE_KB=$(awk -v s="$SIZE_BYTES" 'BEGIN{if(s==""||s==0) printf "0"; else printf "%.0f", s/1024}')
-  echo "$FILE_NAME,$BITRATE,$FPS,$DURATION,$SIZE_KB,$ENCODER_TAG,$SOFTWARE_TAG,$CREATION_TIME,$SEED,$TARGET_DURATION,$BR" >> "$MANIFEST_PATH"
+  RUN_FILES+=("$FILE_NAME")
+  RUN_BITRATES+=("$BITRATE")
+  RUN_FPS+=("$FPS")
+  RUN_DURATIONS+=("$DURATION")
+  RUN_SIZES+=("$SIZE_KB")
+  RUN_ENCODERS+=("$ENCODER_TAG")
+  RUN_SOFTWARES+=("$SOFTWARE_TAG")
+  RUN_CREATION_TIMES+=("$CREATION_TIME")
+  RUN_SEEDS+=("$SEED")
+  RUN_TARGET_DURS+=("$TARGET_DURATION")
+  RUN_TARGET_BRS+=("$BR")
+  RUN_COMBOS+=("$combo_key")
   echo "✅ done: $OUT"
+}
+
+for ((i=1;i<=COUNT;i++)); do
+  generate_copy "$i" "$REGEN_ITER"
+done
+
+regen_attempts=0
+threshold=$(duplicate_threshold "${#RUN_FILES[@]}")
+max_dup=0
+while :; do
+  max_dup=$(calculate_duplicate_max RUN_FPS RUN_BITRATES RUN_DURATIONS)
+  if [ "$max_dup" -lt "$threshold" ]; then
+    break
+  fi
+  if [ "$regen_attempts" -ge "$MAX_REGEN_ATTEMPTS" ]; then
+    echo "⚠️ После повторных попыток остаются похожие копии (max=$max_dup)"
+    break
+  fi
+  REGEN_OCCURRED=1
+  regen_attempts=$((regen_attempts + 1))
+  echo "⚠️ Обнаружены слишком похожие копии, выполняется перегенерация…"
+  local_regen_count=3
+  if [ "$local_regen_count" -gt "${#RUN_FILES[@]}" ]; then
+    local_regen_count="${#RUN_FILES[@]}"
+  fi
+  remove_last_generated "$local_regen_count"
+  REGEN_ITER=$((REGEN_ITER + 1))
+  start_index=$((COUNT - local_regen_count + 1))
+  for ((idx=start_index; idx<=COUNT; idx++)); do
+    generate_copy "$idx" "$REGEN_ITER"
+  done
+done
+
+validated_flag=true
+if [ "$max_dup" -ge "$threshold" ]; then
+  validated_flag=false
+fi
+
+regen_flag=false
+if [ "$REGEN_OCCURRED" -eq 1 ]; then
+  regen_flag=true
+fi
+
+for idx in "${!RUN_FILES[@]}"; do
+  echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag" >> "$MANIFEST_PATH"
 done
 
 echo "All done. Outputs in: $OUTPUT_DIR | Manifest: $MANIFEST_PATH"

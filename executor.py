@@ -25,12 +25,27 @@ async def run_script_with_logs(
     except Exception:
         pass
 
+    normalized_profile = (profile or "").strip().lower()
+    if normalized_profile == "default":
+        normalized_profile = ""
+
+    valid_profiles = {"tiktok", "instagram", "telegram"}
+    profile_args: List[str] = []
+    if normalized_profile in valid_profiles:
+        profile_args = ["--profile", normalized_profile]
+    elif normalized_profile:
+        logger.warning(
+            "Unknown profile '%s' for %s; invoking script without --profile",
+            normalized_profile,
+            input_file.name,
+        )
+        normalized_profile = ""
+
     proc = await asyncio.create_subprocess_exec(
         str(SCRIPT_PATH),
         input_file.name,
         str(int(copies)),
-        "--profile",
-        profile,
+        *profile_args,
         cwd=str(cwd),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -48,7 +63,7 @@ async def run_script_with_logs(
                 "[%s|copies=%s|profile=%s] %s",
                 input_file.name,
                 copies,
-                profile,
+                normalized_profile or "-",
                 message,
             )
         else:
@@ -56,7 +71,7 @@ async def run_script_with_logs(
                 "[%s|copies=%s|profile=%s]",
                 input_file.name,
                 copies,
-                profile,
+                normalized_profile or "-",
             )
 
     rc = await proc.wait()

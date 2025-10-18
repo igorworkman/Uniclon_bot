@@ -7,6 +7,8 @@ IFS=$'\n\t'
 DEBUG=0
 MUSIC_VARIANT=0
 PROFILE=""
+QT_META=1
+STRICT_CLEAN=0
 POSITIONAL=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -21,6 +23,16 @@ while [ "$#" -gt 0 ]; do
       PROFILE=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
       shift
       ;;
+    --qt-meta)
+      QT_META=1
+      ;;
+    --no-qt-meta)
+      QT_META=0
+      ;;
+    --strict-clean)
+      STRICT_CLEAN=1
+      QT_META=0
+      ;;
     *)
       POSITIONAL+=("$1")
       ;;
@@ -28,6 +40,10 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 set -- "${POSITIONAL[@]}"
+
+if [ "$STRICT_CLEAN" -eq 1 ]; then
+  QT_META=0
+fi
 
 OUTPUT_DIR="Новая папка"
 MANIFEST="manifest.csv"
@@ -97,7 +113,7 @@ COUNT="${2:-1}"
 
 mkdir -p "$OUTPUT_DIR"
 
-MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile"
+MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model"
 
 if [ ! -f "$MANIFEST_PATH" ]; then
   echo "$MANIFEST_HEADER" > "$MANIFEST_PATH"
@@ -140,6 +156,19 @@ else
     } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
     mv "$TMP_MANIFEST" "$MANIFEST_PATH"
     echo "ℹ️ manifest обновлён: добавлена колонка profile"
+  fi
+  if ! head -n1 "$MANIFEST_PATH" | grep -q ",qt_make"; then
+    TMP_MANIFEST=$(mktemp)
+    {
+      IFS= read -r header_line
+      echo "${header_line},qt_make,qt_model"
+      while IFS= read -r data_line; do
+        [ -z "$data_line" ] && continue
+        echo "${data_line},,"
+      done
+    } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
+    mv "$TMP_MANIFEST" "$MANIFEST_PATH"
+    echo "ℹ️ manifest обновлён: добавлены колонки qt_make и qt_model"
   fi
 fi
 
@@ -264,6 +293,19 @@ rand_description() {
   )
   local idx=$(( $(rng_next_chunk) % ${#choices[@]} ))
   echo "${choices[$idx]}"
+}
+
+pick_qt_combo() {
+  local profile="$1"
+  local -a combos
+  case "$profile" in
+    tiktok) combos=("Apple|iPhone 13 Pro" "Samsung|Galaxy S21" "Xiaomi|12") ;;
+    instagram) combos=("Apple|iPhone 13 Pro" "Google|Pixel 6" "Sony|Xperia 5 III") ;;
+    telegram) combos=("Samsung|Galaxy S21" "Google|Pixel 6" "OnePlus|9 Pro") ;;
+    *) combos=("Apple|iPhone 13 Pro" "Samsung|Galaxy S21" "Xiaomi|12" "Google|Pixel 6" "OnePlus|9 Pro" "Nothing|Phone (1)" "Sony|Xperia 5 III") ;;
+  esac
+  local idx=$(( $(rng_next_chunk) % ${#combos[@]} ))
+  echo "${combos[$idx]}"
 }
 
 select_fps() {
@@ -395,6 +437,8 @@ declare -a RUN_TARGET_DURS=()
 declare -a RUN_TARGET_BRS=()
 declare -a RUN_COMBOS=()
 declare -a RUN_PROFILES=()
+declare -a RUN_QT_MAKES=()
+declare -a RUN_QT_MODELS=()
 declare -A USED_SOFT_ENC=()
 
 pick_software_encoder() {
@@ -505,6 +549,8 @@ remove_last_generated() {
     RUN_TARGET_BRS=("${RUN_TARGET_BRS[@]:0:$idx}")
     RUN_COMBOS=("${RUN_COMBOS[@]:0:$idx}")
     RUN_PROFILES=("${RUN_PROFILES[@]:0:$idx}")
+    RUN_QT_MAKES=("${RUN_QT_MAKES[@]:0:$idx}")
+    RUN_QT_MODELS=("${RUN_QT_MODELS[@]:0:$idx}")
     if [ ${#LAST_COMBOS[@]} -gt 0 ]; then
       LAST_COMBOS=("${LAST_COMBOS[@]:0:${#LAST_COMBOS[@]}-1}")
     fi
@@ -631,6 +677,13 @@ EOF
   done
   TITLE="$FILE_STEM"
   DESCRIPTION="$(rand_description)"
+  local QT_MAKE="" QT_MODEL=""
+  if [ "$QT_META" -eq 1 ]; then
+    local qt_choice
+    qt_choice=$(pick_qt_combo "$PROFILE_VALUE")
+    QT_MAKE="${qt_choice%%|*}"
+    QT_MODEL="${qt_choice#*|}"
+  fi
 
   # UID
   if command -v uuidgen >/dev/null 2>&1; then
@@ -685,12 +738,23 @@ EOF
 
   "${FFMPEG_CMD[@]}"
 
-  exiftool -overwrite_original \
-    -GPS:all= -Location:all= -SerialNumber= \
-    -Software="$SOFTWARE_TAG" \
-    -CreateDate="$CREATION_TIME_EXIF" -ModifyDate="$CREATION_TIME_EXIF" \
-    -QuickTime:CreateDate="$CREATION_TIME_EXIF" -QuickTime:ModifyDate="$CREATION_TIME_EXIF" \
-    "$OUT" >/dev/null
+  EXIF_CMD=(
+    exiftool
+    -overwrite_original
+    -GPS:all=
+    -Location:all=
+    -SerialNumber=
+    -Software="$SOFTWARE_TAG"
+    -CreateDate="$CREATION_TIME_EXIF"
+    -ModifyDate="$CREATION_TIME_EXIF"
+    -QuickTime:CreateDate="$CREATION_TIME_EXIF"
+    -QuickTime:ModifyDate="$CREATION_TIME_EXIF"
+  )
+  if [ "$QT_META" -eq 1 ] && [ -n "$QT_MAKE" ] && [ -n "$QT_MODEL" ]; then
+    EXIF_CMD+=(-QuickTime:Make="$QT_MAKE" -QuickTime:Model="$QT_MODEL")
+  fi
+  EXIF_CMD+=("$OUT")
+  "${EXIF_CMD[@]}" >/dev/null
 
   FAKE_TS=$(iso_to_touch_ts "$CREATION_TIME")
   touch -t "$FAKE_TS" "$OUT"
@@ -714,6 +778,8 @@ EOF
   RUN_TARGET_BRS+=("$BR")
   RUN_COMBOS+=("$combo_key")
   RUN_PROFILES+=("$PROFILE_VALUE")
+  RUN_QT_MAKES+=("$QT_MAKE")
+  RUN_QT_MODELS+=("$QT_MODEL")
   echo "✅ done: $OUT"
 }
 
@@ -759,7 +825,7 @@ if [ "$REGEN_OCCURRED" -eq 1 ]; then
 fi
 
 for idx in "${!RUN_FILES[@]}"; do
-  echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]}" >> "$MANIFEST_PATH"
+  echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]},${RUN_QT_MAKES[$idx]},${RUN_QT_MODELS[$idx]}" >> "$MANIFEST_PATH"
 done
 
 echo "All done. Outputs in: $OUTPUT_DIR | Manifest: $MANIFEST_PATH"

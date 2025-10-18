@@ -19,6 +19,7 @@ AUDIO_TWEAK_PROB_PERCENT=50
 need() { command -v "$1" >/dev/null 2>&1 || { echo "❌ Требуется $1"; exit 1; }; }
 need ffmpeg
 need ffprobe
+need exiftool
 
 usage() { echo "Usage: $0 <input_video> [count]"; exit 1; }
 [ "${1:-}" ] || usage
@@ -42,6 +43,33 @@ rand_choice() {
   echo "${arr[$((RANDOM % ${#arr[@]}))]}"
 }
 rand_audio_factor() { awk -v r="$RANDOM" 'BEGIN{srand(r); printf "%.6f", 0.995 + rand()*0.01}'; }
+
+date_supports_d_flag() {
+  date -u -d "1970-01-01" >/dev/null 2>&1
+}
+
+generate_iso_timestamp() {
+  local days_ago seconds_offset
+  days_ago=$(rand_int 3 14)
+  seconds_offset=$(rand_int 0 86399)
+  if date_supports_d_flag; then
+    date -u -d "${days_ago} days ago + ${seconds_offset} seconds" +"%Y-%m-%dT%H:%M:%SZ"
+  else
+    date -u -v -"${days_ago}"d -v +"${seconds_offset}"S +"%Y-%m-%dT%H:%M:%SZ"
+  fi
+}
+
+rand_description() {
+  local choices=(
+    "Edited on mobile"
+    "Final export"
+    "Captured on phone"
+    "Shot in portrait"
+    "Quick highlight"
+  )
+  local idx=$((RANDOM % ${#choices[@]}))
+  echo "${choices[$idx]}"
+}
 
 base="$(basename "$SRC")"
 name="${base%.*}"
@@ -71,6 +99,23 @@ for ((i=1;i<=COUNT;i++)); do
     AFILTER="asetrate=44100*${FACTOR},aresample=44100"
   fi
 
+  ENC_MINOR=$(rand_int 2 5)
+  ENC_PATCH=$(rand_int 0 255)
+  ENCODER_TAG=$(printf "Lavf62.%d.%03d" "$ENC_MINOR" "$ENC_PATCH")
+
+  if [ $((RANDOM % 2)) -eq 0 ]; then
+    SOFTWARE_TAG="CapCut 12.$(rand_int 1 9)"
+  else
+    SOFTWARE_TAG="VN 2.$(rand_int 1 9)"
+  fi
+
+  CREATION_TIME=$(generate_iso_timestamp)
+  CREATION_TIME_EXIF=$(echo "$CREATION_TIME" | sed 's/T/ /; s/Z$//; s/-/:/g')
+
+  compact_ts="${CREATION_TIME//[-:TZ]/}"
+  TITLE="VID_${compact_ts:0:8}_${compact_ts:8:6}"
+  DESCRIPTION="$(rand_description)"
+
   VF="scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1"
   VF="${VF},eq=brightness=0.005:saturation=1.01"
   if [ "$NOISE" -eq 1 ]; then VF="${VF},noise=alls=1:allf=t"; fi
@@ -84,14 +129,25 @@ for ((i=1;i<=COUNT;i++)); do
   echo "▶️ [$i/$COUNT] $SRC → $OUT | fps=$FPS br=${BR}k noise=$NOISE crop=${CROP_PX}px audio_tweak=$AUDIO_TWEAK"
 
   ffmpeg -y -hide_banner -loglevel warning -i "$SRC" \
-    -map_metadata -1 \
     -c:v libx264 -preset slow -profile:v high -level 4.0 \
     -r "$FPS" -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k" \
     -vf "$VF" \
     -c:a aac -b:a "$AUDIO_BR" -af "$AFILTER" \
     -movflags +faststart \
+    -metadata encoder="$ENCODER_TAG" \
+    -metadata software="$SOFTWARE_TAG" \
+    -metadata creation_time="$CREATION_TIME" \
+    -metadata title="$TITLE" \
+    -metadata description="$DESCRIPTION" \
     -metadata comment="$UID_TAG" \
     "$OUT"
+
+  exiftool -overwrite_original \
+    -GPS:all= -Location:all= -SerialNumber= \
+    -Software="$SOFTWARE_TAG" \
+    -CreateDate="$CREATION_TIME_EXIF" -ModifyDate="$CREATION_TIME_EXIF" \
+    -QuickTime:CreateDate="$CREATION_TIME_EXIF" -QuickTime:ModifyDate="$CREATION_TIME_EXIF" \
+    "$OUT" >/dev/null
 
   WIDTH=$(ffprobe -v error -select_streams v:0 -show_entries stream=width  -of csv=p=0 "$OUT")
   HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$OUT")

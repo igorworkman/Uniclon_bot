@@ -113,7 +113,7 @@ COUNT="${2:-1}"
 
 mkdir -p "$OUTPUT_DIR"
 
-MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model"
+MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model,ssim,phash_delta,quality_pass"
 
 if [ ! -f "$MANIFEST_PATH" ]; then
   echo "$MANIFEST_HEADER" > "$MANIFEST_PATH"
@@ -169,6 +169,19 @@ else
     } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
     mv "$TMP_MANIFEST" "$MANIFEST_PATH"
     echo "ℹ️ manifest обновлён: добавлены колонки qt_make и qt_model"
+  fi
+  if ! head -n1 "$MANIFEST_PATH" | grep -q ",ssim"; then
+    TMP_MANIFEST=$(mktemp)
+    {
+      IFS= read -r header_line
+      echo "${header_line},ssim,phash_delta,quality_pass"
+      while IFS= read -r data_line; do
+        [ -z "$data_line" ] && continue
+        echo "${data_line},,,"
+      done
+    } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
+    mv "$TMP_MANIFEST" "$MANIFEST_PATH"
+    echo "ℹ️ manifest обновлён: добавлены колонки ssim, phash_delta и quality_pass"
   fi
 fi
 
@@ -439,6 +452,11 @@ declare -a RUN_COMBOS=()
 declare -a RUN_PROFILES=()
 declare -a RUN_QT_MAKES=()
 declare -a RUN_QT_MODELS=()
+declare -a RUN_SSIM=()
+declare -a RUN_PHASH=()
+declare -a RUN_QPASS=()
+declare -a QUALITY_ISSUES=()
+declare -a QUALITY_COPY_IDS=()
 declare -A USED_SOFT_ENC=()
 
 pick_software_encoder() {
@@ -551,8 +569,81 @@ remove_last_generated() {
     RUN_PROFILES=("${RUN_PROFILES[@]:0:$idx}")
     RUN_QT_MAKES=("${RUN_QT_MAKES[@]:0:$idx}")
     RUN_QT_MODELS=("${RUN_QT_MODELS[@]:0:$idx}")
+    RUN_SSIM=("${RUN_SSIM[@]:0:$idx}")
+    RUN_PHASH=("${RUN_PHASH[@]:0:$idx}")
+    RUN_QPASS=("${RUN_QPASS[@]:0:$idx}")
     if [ ${#LAST_COMBOS[@]} -gt 0 ]; then
       LAST_COMBOS=("${LAST_COMBOS[@]:0:${#LAST_COMBOS[@]}-1}")
+    fi
+  done
+}
+
+remove_indices_for_regen() {
+  local indices=("$@")
+  [ "${#indices[@]}" -eq 0 ] && return
+  local sorted
+  sorted=$(printf '%s\n' "${indices[@]}" | sort -rn)
+  while IFS= read -r idx; do
+    [ -z "$idx" ] && continue
+    [ "$idx" -lt 0 ] && continue
+    if [ "$idx" -ge "${#RUN_FILES[@]}" ]; then
+      continue
+    fi
+    local combo_key="${RUN_SOFTWARES[$idx]}|${RUN_ENCODERS[$idx]}"
+    unset "USED_SOFT_ENC[$combo_key]"
+    rm -f "${OUTPUT_DIR}/${RUN_FILES[$idx]}" 2>/dev/null || true
+    RUN_FILES=("${RUN_FILES[@]:0:$idx}" "${RUN_FILES[@]:$((idx + 1))}")
+    RUN_BITRATES=("${RUN_BITRATES[@]:0:$idx}" "${RUN_BITRATES[@]:$((idx + 1))}")
+    RUN_FPS=("${RUN_FPS[@]:0:$idx}" "${RUN_FPS[@]:$((idx + 1))}")
+    RUN_DURATIONS=("${RUN_DURATIONS[@]:0:$idx}" "${RUN_DURATIONS[@]:$((idx + 1))}")
+    RUN_SIZES=("${RUN_SIZES[@]:0:$idx}" "${RUN_SIZES[@]:$((idx + 1))}")
+    RUN_ENCODERS=("${RUN_ENCODERS[@]:0:$idx}" "${RUN_ENCODERS[@]:$((idx + 1))}")
+    RUN_SOFTWARES=("${RUN_SOFTWARES[@]:0:$idx}" "${RUN_SOFTWARES[@]:$((idx + 1))}")
+    RUN_CREATION_TIMES=("${RUN_CREATION_TIMES[@]:0:$idx}" "${RUN_CREATION_TIMES[@]:$((idx + 1))}")
+    RUN_SEEDS=("${RUN_SEEDS[@]:0:$idx}" "${RUN_SEEDS[@]:$((idx + 1))}")
+    RUN_TARGET_DURS=("${RUN_TARGET_DURS[@]:0:$idx}" "${RUN_TARGET_DURS[@]:$((idx + 1))}")
+    RUN_TARGET_BRS=("${RUN_TARGET_BRS[@]:0:$idx}" "${RUN_TARGET_BRS[@]:$((idx + 1))}")
+    RUN_COMBOS=("${RUN_COMBOS[@]:0:$idx}" "${RUN_COMBOS[@]:$((idx + 1))}")
+    RUN_PROFILES=("${RUN_PROFILES[@]:0:$idx}" "${RUN_PROFILES[@]:$((idx + 1))}")
+    RUN_QT_MAKES=("${RUN_QT_MAKES[@]:0:$idx}" "${RUN_QT_MAKES[@]:$((idx + 1))}")
+    RUN_QT_MODELS=("${RUN_QT_MODELS[@]:0:$idx}" "${RUN_QT_MODELS[@]:$((idx + 1))}")
+    RUN_SSIM=("${RUN_SSIM[@]:0:$idx}" "${RUN_SSIM[@]:$((idx + 1))}")
+    RUN_PHASH=("${RUN_PHASH[@]:0:$idx}" "${RUN_PHASH[@]:$((idx + 1))}")
+    RUN_QPASS=("${RUN_QPASS[@]:0:$idx}" "${RUN_QPASS[@]:$((idx + 1))}")
+  done <<<"$sorted"
+  LAST_COMBOS=("${RUN_COMBOS[@]}")
+}
+
+quality_check() {
+  QUALITY_ISSUES=()
+  QUALITY_COPY_IDS=()
+  RUN_SSIM=()
+  RUN_PHASH=()
+  RUN_QPASS=()
+  local idx
+  for idx in "${!RUN_FILES[@]}"; do
+    local copy_path="${OUTPUT_DIR}/${RUN_FILES[$idx]}"
+    local ssim_val
+    ssim_val=$(ffmpeg -v error -i "$SRC" -i "$copy_path" -lavfi "ssim" -f null - 2>&1 | awk -F'All:' '/All:/{gsub(/^[ \t]+/,"",$2); split($2,a," "); print a[1]; exit}')
+    [ -n "$ssim_val" ] || ssim_val="0.000"
+    local phash_delta="0.000"
+    local dur_delta
+    dur_delta=$(awk -v o="$ORIG_DURATION" -v c="${RUN_DURATIONS[$idx]}" 'BEGIN{o+=0;c+=0;diff=o-c;if(diff<0) diff=-diff;printf "%.3f",diff}')
+    local br_delta
+    br_delta=$(awk -v t="${RUN_TARGET_BRS[$idx]}" -v b="${RUN_BITRATES[$idx]}" 'BEGIN{t+=0;b+=0;diff=t-b;if(diff<0) diff=-diff;printf "%.0f",diff}')
+    local pass=true
+    if ! awk -v s="$ssim_val" 'BEGIN{exit (s>=0.95?0:1)}'; then pass=false; fi
+    if ! awk -v d="$dur_delta" 'BEGIN{exit (d<=0.50?0:1)}'; then pass=false; fi
+    if ! awk -v b="$br_delta" 'BEGIN{exit (b<=800?0:1)}'; then pass=false; fi
+    RUN_SSIM+=("$ssim_val")
+    RUN_PHASH+=("$phash_delta")
+    if [ "$pass" = true ]; then
+      RUN_QPASS+=("true")
+    else
+      RUN_QPASS+=("false")
+      QUALITY_ISSUES+=("$idx")
+      QUALITY_COPY_IDS+=("$((idx + 1))")
+      echo "⚠️ Подозрительное качество ${RUN_FILES[$idx]} (ssim=$ssim_val Δdur=$dur_delta Δbr=$br_delta)"
     fi
   done
 }
@@ -787,36 +878,62 @@ for ((i=1;i<=COUNT;i++)); do
   generate_copy "$i" "$REGEN_ITER"
 done
 
-regen_attempts=0
-threshold=$(duplicate_threshold "${#RUN_FILES[@]}")
-max_dup=0
+quality_round=0
+quality_pass_all=false
 while :; do
-  max_dup=$(calculate_duplicate_max RUN_FPS RUN_BITRATES RUN_DURATIONS)
-  if [ "$max_dup" -lt "$threshold" ]; then
+  regen_attempts=0
+  threshold=$(duplicate_threshold "${#RUN_FILES[@]}")
+  max_dup=0
+  while :; do
+    max_dup=$(calculate_duplicate_max RUN_FPS RUN_BITRATES RUN_DURATIONS)
+    if [ "$max_dup" -lt "$threshold" ]; then
+      break
+    fi
+    if [ "$regen_attempts" -ge "$MAX_REGEN_ATTEMPTS" ]; then
+      echo "⚠️ После повторных попыток остаются похожие копии (max=$max_dup)"
+      break
+    fi
+    REGEN_OCCURRED=1
+    regen_attempts=$((regen_attempts + 1))
+    echo "⚠️ Обнаружены слишком похожие копии, выполняется перегенерация…"
+    local_regen_count=3
+    if [ "$local_regen_count" -gt "${#RUN_FILES[@]}" ]; then
+      local_regen_count="${#RUN_FILES[@]}"
+    fi
+    remove_last_generated "$local_regen_count"
+    REGEN_ITER=$((REGEN_ITER + 1))
+    start_index=$((COUNT - local_regen_count + 1))
+    for ((idx=start_index; idx<=COUNT; idx++)); do
+      generate_copy "$idx" "$REGEN_ITER"
+    done
+  done
+
+  validated_flag=true
+  if [ "$max_dup" -ge "$threshold" ]; then
+    validated_flag=false
+  fi
+
+  quality_check
+  if [ "${#QUALITY_ISSUES[@]}" -eq 0 ]; then
+    quality_pass_all=true
     break
   fi
-  if [ "$regen_attempts" -ge "$MAX_REGEN_ATTEMPTS" ]; then
-    echo "⚠️ После повторных попыток остаются похожие копии (max=$max_dup)"
+  if [ "$quality_round" -ge 1 ]; then
+    echo "⚠️ Качество остаётся подозрительным, перегенерация прекращена"
     break
   fi
+  quality_round=$((quality_round + 1))
   REGEN_OCCURRED=1
-  regen_attempts=$((regen_attempts + 1))
-  echo "⚠️ Обнаружены слишком похожие копии, выполняется перегенерация…"
-  local_regen_count=3
-  if [ "$local_regen_count" -gt "${#RUN_FILES[@]}" ]; then
-    local_regen_count="${#RUN_FILES[@]}"
-  fi
-  remove_last_generated "$local_regen_count"
+  echo "⚠️ Перегенерация по качеству: ${#QUALITY_ISSUES[@]} копий"
+  remove_indices_for_regen "${QUALITY_ISSUES[@]}"
   REGEN_ITER=$((REGEN_ITER + 1))
-  start_index=$((COUNT - local_regen_count + 1))
-  for ((idx=start_index; idx<=COUNT; idx++)); do
-    generate_copy "$idx" "$REGEN_ITER"
+  for copy_id in "${QUALITY_COPY_IDS[@]}"; do
+    generate_copy "$copy_id" "$REGEN_ITER"
   done
 done
 
-validated_flag=true
-if [ "$max_dup" -ge "$threshold" ]; then
-  validated_flag=false
+if [ "$quality_pass_all" != true ]; then
+  quality_check
 fi
 
 regen_flag=false
@@ -825,7 +942,7 @@ if [ "$REGEN_OCCURRED" -eq 1 ]; then
 fi
 
 for idx in "${!RUN_FILES[@]}"; do
-  echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]},${RUN_QT_MAKES[$idx]},${RUN_QT_MODELS[$idx]}" >> "$MANIFEST_PATH"
+  echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]},${RUN_QT_MAKES[$idx]},${RUN_QT_MODELS[$idx]},${RUN_SSIM[$idx]},${RUN_PHASH[$idx]},${RUN_QPASS[$idx]}" >> "$MANIFEST_PATH"
 done
 
 echo "All done. Outputs in: $OUTPUT_DIR | Manifest: $MANIFEST_PATH"

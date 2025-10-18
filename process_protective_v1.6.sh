@@ -46,7 +46,7 @@ case "$PROFILE" in
     TARGET_W=1080
     TARGET_H=1920
     BR_MIN=3500
-    BR_MAX=4500
+    BR_MAX=3500
     FPS_BASE=(30 60)
     FPS_RARE=()
     AUDIO_SR=44100
@@ -55,7 +55,7 @@ case "$PROFILE" in
     TARGET_W=1080
     TARGET_H=1350
     BR_MIN=3000
-    BR_MAX=5000
+    BR_MAX=3000
     FPS_BASE=(30)
     FPS_RARE=()
     AUDIO_SR=48000
@@ -63,11 +63,11 @@ case "$PROFILE" in
   telegram)
     TARGET_W=1280
     TARGET_H=720
-    BR_MIN=2000
-    BR_MAX=4000
-    FPS_BASE=(24 25 30)
+    BR_MIN=2500
+    BR_MAX=2500
+    FPS_BASE=(25)
     FPS_RARE=()
-    AUDIO_SR=44100
+    AUDIO_SR=48000
     ;;
   "" )
     ;;
@@ -76,6 +76,7 @@ case "$PROFILE" in
     exit 1
     ;;
 esac
+PROFILE_VALUE="${PROFILE:-default}"
 NOISE_PROB_PERCENT=30
 CROP_MAX_PX=6
 AUDIO_TWEAK_PROB_PERCENT=50
@@ -96,7 +97,7 @@ COUNT="${2:-1}"
 
 mkdir -p "$OUTPUT_DIR"
 
-MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen"
+MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile"
 
 if [ ! -f "$MANIFEST_PATH" ]; then
   echo "$MANIFEST_HEADER" > "$MANIFEST_PATH"
@@ -121,11 +122,24 @@ else
       echo "${header_line},validated,regen"
       while IFS= read -r data_line; do
         [ -z "$data_line" ] && continue
-        echo "${data_line},,"
+        echo "${data_line},," 
       done
     } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
     mv "$TMP_MANIFEST" "$MANIFEST_PATH"
     echo "ℹ️ manifest обновлён: добавлены колонки validated и regen"
+  fi
+  if ! head -n1 "$MANIFEST_PATH" | grep -q ",profile"; then
+    TMP_MANIFEST=$(mktemp)
+    {
+      IFS= read -r header_line
+      echo "${header_line},profile"
+      while IFS= read -r data_line; do
+        [ -z "$data_line" ] && continue
+        echo "${data_line},"
+      done
+    } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
+    mv "$TMP_MANIFEST" "$MANIFEST_PATH"
+    echo "ℹ️ manifest обновлён: добавлена колонка profile"
   fi
 fi
 
@@ -380,6 +394,7 @@ declare -a RUN_SEEDS=()
 declare -a RUN_TARGET_DURS=()
 declare -a RUN_TARGET_BRS=()
 declare -a RUN_COMBOS=()
+declare -a RUN_PROFILES=()
 
 REGEN_ITER=0
 REGEN_OCCURRED=0
@@ -438,6 +453,7 @@ remove_last_generated() {
     RUN_TARGET_DURS=("${RUN_TARGET_DURS[@]:0:$idx}")
     RUN_TARGET_BRS=("${RUN_TARGET_BRS[@]:0:$idx}")
     RUN_COMBOS=("${RUN_COMBOS[@]:0:$idx}")
+    RUN_PROFILES=("${RUN_PROFILES[@]:0:$idx}")
     if [ ${#LAST_COMBOS[@]} -gt 0 ]; then
       LAST_COMBOS=("${LAST_COMBOS[@]:0:${#LAST_COMBOS[@]}-1}")
     fi
@@ -459,6 +475,26 @@ generate_copy() {
 
     compute_duration_profile
 
+    if [ "$PROFILE" = "tiktok" ]; then
+      if [ "$(awk -v dur="$TARGET_DURATION" 'BEGIN{print (dur>60)?1:0}')" -eq 1 ]; then
+        TARGET_DURATION="60.000"
+        read STRETCH_FACTOR TEMPO_FACTOR <<EOF
+$(awk -v orig="$ORIG_DURATION" 'BEGIN {
+  orig+=0;
+  target=60.0;
+  stretch=1.0;
+  tempo=1.0;
+  if (orig > 0.0) {
+    stretch=target/orig;
+    if (stretch == 0) stretch=1.0;
+    tempo=(stretch != 0) ? 1.0/stretch : 1.0;
+  }
+  printf "%.6f %.6f", stretch, tempo;
+}')
+EOF
+      fi
+    fi
+
     NOISE=0
     if [ "$(rand_int 1 100)" -le "$NOISE_PROB_PERCENT" ]; then
       NOISE=1
@@ -470,7 +506,7 @@ generate_copy() {
 
     local jitter_filters=()
     if (( RANDOM % 3 == 0 )); then
-      jitter_filters=("asetrate=44100*1.$((RANDOM%6))" "aresample=44100")
+      jitter_filters=("asetrate=${AUDIO_SR}*1.$((RANDOM%6))" "aresample=${AUDIO_SR}")
       AUDIO_PROFILE="${AUDIO_PROFILE}+jitter"
     else
       jitter_filters=("anull")
@@ -642,6 +678,7 @@ generate_copy() {
   RUN_TARGET_DURS+=("$TARGET_DURATION")
   RUN_TARGET_BRS+=("$BR")
   RUN_COMBOS+=("$combo_key")
+  RUN_PROFILES+=("$PROFILE_VALUE")
   echo "✅ done: $OUT"
 }
 
@@ -687,7 +724,7 @@ if [ "$REGEN_OCCURRED" -eq 1 ]; then
 fi
 
 for idx in "${!RUN_FILES[@]}"; do
-  echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag" >> "$MANIFEST_PATH"
+  echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]}" >> "$MANIFEST_PATH"
 done
 
 echo "All done. Outputs in: $OUTPUT_DIR | Manifest: $MANIFEST_PATH"

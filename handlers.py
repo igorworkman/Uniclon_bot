@@ -217,7 +217,7 @@ async def _enqueue_processing(
         return
 
     logger.info("Task queued for user=%s", user_id)
-    await message.answer("Задача добавлена в очередь. Дождитесь завершения предыдущих запросов.")
+    await message.answer("Видео поставлено в очередь. Ожидайте обработки…")
 
 
 async def _run_and_send(message: Message, ack: Message, input_path: Path, copies: int) -> None:
@@ -225,7 +225,13 @@ async def _run_and_send(message: Message, ack: Message, input_path: Path, copies
     start_ts = time.time()
     lang = _get_user_lang(message)
 
-    rc, logs_text = await run_script_with_logs(input_path, copies, BASE_DIR)
+    await message.answer("Начата обработка видео…")
+
+    try:
+        rc, logs_text = await run_script_with_logs(input_path, copies, BASE_DIR)
+    except Exception:
+        await message.answer("Произошла ошибка при обработке. Попробуйте ещё раз.")
+        raise
 
     if logs_text.strip():
         tail = logs_text[-LOG_TAIL_CHARS:]
@@ -241,6 +247,7 @@ async def _run_and_send(message: Message, ack: Message, input_path: Path, copies
             rc=rc,
             output_dir=OUTPUT_DIR.name,
         )
+        await message.answer("Произошла ошибка при обработке. Попробуйте ещё раз.")
         await ack.edit_text(error_text)
         await message.answer(error_text)
         return
@@ -256,9 +263,12 @@ async def _run_and_send(message: Message, ack: Message, input_path: Path, copies
         await ack.edit_text(
             get_text(lang, "no_new_files", output_dir=OUTPUT_DIR.name)
         )
+        await message.answer("Произошла ошибка при обработке. Попробуйте ещё раз.")
         return
 
     new_files = sorted(new_files)[:copies]
+
+    await message.answer("Готово! Отправляю уникализированные копии…")
 
     sent = 0
     for p in new_files:

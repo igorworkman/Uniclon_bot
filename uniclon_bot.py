@@ -35,6 +35,13 @@ class UserTaskQueue:
         async with self._lock:
             queue = self._queues.setdefault(user_id, asyncio.Queue())
             workers = self._workers.setdefault(user_id, [])
+            if workers:
+                alive_workers: List[asyncio.Task[None]] = []
+                for worker in workers:
+                    if not worker.done():
+                        alive_workers.append(worker)
+                if len(alive_workers) != len(workers):
+                    self._workers[user_id] = workers = alive_workers
             await queue.put(task_factory)
             while len(workers) < self._per_user_limit:
                 workers.append(asyncio.create_task(self._worker(user_id, queue)))
@@ -53,12 +60,18 @@ class UserTaskQueue:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _worker(self, user_id: int, queue: asyncio.Queue[Optional[Callable[[], Awaitable[None]]]]) -> None:
+        unregistered = False
         try:
             while True:
                 try:
                     task_factory = await asyncio.wait_for(queue.get(), timeout=self._idle_timeout)
                 except asyncio.TimeoutError:
-                    break
+                    async with self._lock:
+                        if queue.empty():
+                            self._unregister_worker_locked(user_id, queue)
+                            unregistered = True
+                            break
+                    continue
                 if task_factory is None:
                     queue.task_done()
                     break
@@ -69,15 +82,23 @@ class UserTaskQueue:
                 finally:
                     queue.task_done()
         finally:
-            async with self._lock:
-                workers = self._workers.get(user_id, [])
-                try:
-                    workers.remove(asyncio.current_task())
-                except ValueError:
-                    pass
-                if not workers:
-                    self._workers.pop(user_id, None)
-                    self._queues.pop(user_id, None)
+            if not unregistered:
+                async with self._lock:
+                    self._unregister_worker_locked(user_id, queue)
+
+    def _unregister_worker_locked(
+        self,
+        user_id: int,
+        queue: asyncio.Queue[Optional[Callable[[], Awaitable[None]]]],
+    ) -> None:
+        workers = self._workers.get(user_id, [])
+        current = asyncio.current_task()
+        if current in workers:
+            workers.remove(current)
+        if not workers:
+            self._workers.pop(user_id, None)
+            if queue.empty():
+                self._queues.pop(user_id, None)
 
 
 def make_bot() -> Bot:

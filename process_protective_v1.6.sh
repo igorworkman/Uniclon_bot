@@ -165,7 +165,9 @@ iso_to_components() {
 
 generate_media_name() {
   local iso="$1"
-  read y m d hh mm ss < <(iso_to_components "$iso")
+  local y m d hh mm ss
+  local IFS=' '
+  read -r y m d hh mm ss < <(iso_to_components "$iso")
   local ts_for_name=$(printf "%s%s%s_%s%s%s" "$y" "$m" "$d" "$hh" "$mm" "$ss")
   local roll=$(rand_int 0 99)
   if [ "$roll" -lt 25 ]; then
@@ -178,7 +180,9 @@ generate_media_name() {
 
 iso_to_touch_ts() {
   local iso="$1"
-  read y m d hh mm ss < <(iso_to_components "$iso")
+  local y m d hh mm ss
+  local IFS=' '
+  read -r y m d hh mm ss < <(iso_to_components "$iso")
   printf "%s%s%s%s%s.%s\n" "$y" "$m" "$d" "$hh" "$mm" "$ss"
 }
 

@@ -15,7 +15,7 @@ from aiohttp import ClientError
 load_dotenv()
 
 # REGION AI: local imports
-from config import BOT_TOKEN, BOT_API_BASE
+from config import BOT_TOKEN, BOT_API_BASE, OUTPUT_DIR
 from handlers import router, set_task_queue
 # END REGION AI
 
@@ -100,6 +100,7 @@ async def run_polling() -> None:
     try:
         bot = make_bot()
         dp = make_dispatcher()
+        logging.info("Outputs and manifest stored in %s", OUTPUT_DIR)
         task_queue = UserTaskQueue()
         set_task_queue(task_queue)
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())

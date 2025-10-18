@@ -395,6 +395,32 @@ declare -a RUN_TARGET_DURS=()
 declare -a RUN_TARGET_BRS=()
 declare -a RUN_COMBOS=()
 declare -a RUN_PROFILES=()
+declare -A USED_SOFT_ENC=()
+
+pick_software_encoder() {
+  local profile_key="${1:-default}" seed="$2" attempt=0 digest=""
+  local -a names majors
+  case "$profile_key" in
+    tiktok) names=("CapCut" "VN") majors=(12 2) ;;
+    instagram) names=("Premiere Rush" "iMovie") majors=(1 10) ;;
+    telegram) names=("ShotCut" "FFmpeg") majors=(3 5) ;;
+    *) names=("CapCut" "VN" "Premiere Rush" "iMovie" "ShotCut" "FFmpeg") majors=(12 2 1 10 3 5) ;;
+  esac
+  while :; do
+    digest=$(deterministic_md5 "${seed}_${profile_key}_soft_${attempt}")
+    local idx=$((16#${digest:0:2} % ${#names[@]}))
+    local minor=$((1 + 16#${digest:2:2} % 9))
+    local enc_minor=$((2 + 16#${digest:4:2} % 58))
+    SOFTWARE_TAG="${names[$idx]} ${majors[$idx]}.${minor}"
+    ENCODER_TAG=$(printf "Lavf62.%d.100" "$enc_minor")
+    local combo_key="${SOFTWARE_TAG}|${ENCODER_TAG}"
+    if [ -z "${USED_SOFT_ENC[$combo_key]:-}" ]; then
+      USED_SOFT_ENC[$combo_key]=1
+      break
+    fi
+    attempt=$((attempt + 1))
+  done
+}
 
 REGEN_ITER=0
 REGEN_OCCURRED=0
@@ -439,6 +465,8 @@ remove_last_generated() {
   for ((drop=0; drop<remove_count; drop++)); do
     local idx=$(( ${#RUN_FILES[@]} - 1 ))
     [ "$idx" -lt 0 ] && break
+    local combo_key="${RUN_SOFTWARES[$idx]}|${RUN_ENCODERS[$idx]}"
+    unset "USED_SOFT_ENC[$combo_key]"
     local file_path="${OUTPUT_DIR}/${RUN_FILES[$idx]}"
     rm -f "$file_path" 2>/dev/null || true
     RUN_FILES=("${RUN_FILES[@]:0:$idx}")
@@ -566,23 +594,7 @@ EOF
   MAXRATE=$((BR + RATE_PAD))
   BUFSIZE=$((BR * 2 + RATE_PAD * 2))
 
-  ENC_MINOR=$(rand_int 2 5)
-  ENCODER_TAG=$(printf "Lavf62.%d.100" "$ENC_MINOR")
-
-  case "$(rand_int 0 3)" in
-    0)
-      SOFTWARE_TAG="CapCut 12.$(rand_int 1 9)"
-      ;;
-    1)
-      SOFTWARE_TAG="VN 2.$(rand_int 1 9)"
-      ;;
-    2)
-      SOFTWARE_TAG="iMovie 10.$(rand_int 1 9)"
-      ;;
-    *)
-      SOFTWARE_TAG="Premiere Rush 1.$(rand_int 1 9)"
-      ;;
-  esac
+  pick_software_encoder "$PROFILE_VALUE" "$SEED_HEX"
 
   CREATION_TIME=$(generate_iso_timestamp)
   CREATION_TIME_EXIF="$CREATION_TIME"

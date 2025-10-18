@@ -6,6 +6,7 @@ IFS=$'\n\t'
 
 DEBUG=0
 MUSIC_VARIANT=0
+PROFILE=""
 POSITIONAL=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -14,6 +15,11 @@ while [ "$#" -gt 0 ]; do
       ;;
     --music-variant)
       MUSIC_VARIANT=1
+      ;;
+    --profile)
+      [ "${2:-}" ] || { echo "❌ --profile требует значение"; exit 1; }
+      PROFILE=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
+      shift
       ;;
     *)
       POSITIONAL+=("$1")
@@ -33,6 +39,43 @@ BR_MIN=2800
 BR_MAX=5000
 FPS_BASE=(24 25 30 50 59.94 60)
 FPS_RARE=(23.976 27 29.97 48 53.95 57)
+AUDIO_SR=44100
+
+case "$PROFILE" in
+  tiktok)
+    TARGET_W=1080
+    TARGET_H=1920
+    BR_MIN=3500
+    BR_MAX=4500
+    FPS_BASE=(30 60)
+    FPS_RARE=()
+    AUDIO_SR=44100
+    ;;
+  instagram)
+    TARGET_W=1080
+    TARGET_H=1350
+    BR_MIN=3000
+    BR_MAX=5000
+    FPS_BASE=(30)
+    FPS_RARE=()
+    AUDIO_SR=48000
+    ;;
+  telegram)
+    TARGET_W=1280
+    TARGET_H=720
+    BR_MIN=2000
+    BR_MAX=4000
+    FPS_BASE=(24 25 30)
+    FPS_RARE=()
+    AUDIO_SR=44100
+    ;;
+  "" )
+    ;;
+  *)
+    echo "❌ Неизвестный профиль: $PROFILE"
+    exit 1
+    ;;
+esac
 NOISE_PROB_PERCENT=30
 CROP_MAX_PX=6
 AUDIO_TWEAK_PROB_PERCENT=50
@@ -195,7 +238,11 @@ rand_description() {
 }
 
 select_fps() {
-  if [ "$(rand_int 1 100)" -le 22 ]; then
+  local use_rare=0
+  if [ ${#FPS_RARE[@]} -gt 0 ] && [ "$(rand_int 1 100)" -le 22 ]; then
+    use_rare=1
+  fi
+  if [ "$use_rare" -eq 1 ]; then
     rand_choice FPS_RARE
   else
     rand_choice FPS_BASE
@@ -238,14 +285,14 @@ pick_crop_offsets() {
 pick_audio_chain() {
   local roll=$(rand_int 1 100)
   AUDIO_PROFILE="resample"
-  local filters=("aresample=44100")
+  local filters=("aresample=${AUDIO_SR}")
   if [ "$roll" -le "$AUDIO_TWEAK_PROB_PERCENT" ]; then
     AUDIO_PROFILE="asetrate"
     local factor=$(rand_float 0.985 1.015 6)
-    filters=("asetrate=44100*${factor}" "aresample=44100")
+    filters=("asetrate=${AUDIO_SR}*${factor}" "aresample=${AUDIO_SR}")
   elif [ "$roll" -ge 85 ]; then
     AUDIO_PROFILE="anull"
-    filters=("anull" "aresample=44100")
+    filters=("anull" "aresample=${AUDIO_SR}")
   fi
   local tempo_target="$TEMPO_FACTOR"
   if [ "$MUSIC_VARIANT" -eq 1 ]; then
@@ -449,7 +496,7 @@ for ((i=1;i<=COUNT;i++)); do
   FFMPEG_CMD+=(-c:v libx264 -preset slow -profile:v high -level 4.0
     -r "$FPS" -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k"
     -vf "$VF"
-    -c:a aac -b:a "$AUDIO_BR" -af "$AFILTER"
+    -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -af "$AFILTER"
     -movflags +faststart
     -metadata encoder="$ENCODER_TAG"
     -metadata software="$SOFTWARE_TAG"

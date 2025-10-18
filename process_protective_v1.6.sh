@@ -38,6 +38,7 @@ CROP_MAX_PX=6
 AUDIO_TWEAK_PROB_PERCENT=50
 MUSIC_VARIANT_TRACKS=()
 MUSIC_VARIANT_TRACK=""
+AUDIO_TEMPO_TARGET=""
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "❌ Требуется $1"; exit 1; }; }
 need ffmpeg
@@ -229,6 +230,7 @@ BEGIN {
     AUDIO_PROFILE="${AUDIO_PROFILE}+tempo"
   fi
   filters+=("atempo=${tempo_target}")
+  AUDIO_TEMPO_TARGET="$tempo_target"
   AFILTER_CORE=$(IFS=,; echo "${filters[*]}")
 }
 
@@ -295,19 +297,37 @@ for ((i=1;i<=COUNT;i++)); do
     pick_audio_chain
 
     local jitter_filters=()
-    if (( RANDOM % 3 == 0 )); then
-      jitter_filters=("asetrate=44100*1.$((RANDOM%6))" "aresample=44100")
+    local jitter_chain=""
+    local jitter_factor="1.000"
+    if [ "$(rand_int 0 2)" -eq 0 ]; then
+      local jitter_step=$(rand_int 0 5)
+      jitter_factor=$(awk -v step="$jitter_step" 'BEGIN { printf "%.3f", 1.0 + step / 10.0 }')
+      jitter_filters=("asetrate=44100*${jitter_factor}" "aresample=44100")
+      jitter_chain="$(IFS=,; echo "${jitter_filters[*]}")"
       AUDIO_PROFILE="${AUDIO_PROFILE}+jitter"
-    else
-      jitter_filters=("anull")
     fi
-    local jitter_chain="$(IFS=,; echo "${jitter_filters[*]}")"
-    if [ "$jitter_chain" = "anull" ]; then
+    if [ -z "$jitter_chain" ]; then
       AFILTER="$AFILTER_CORE"
-    elif [ -n "${AFILTER_CORE:-}" ]; then
-      AFILTER="${jitter_chain},${AFILTER_CORE}"
     else
-      AFILTER="$jitter_chain"
+      local compensated_core="$AFILTER_CORE"
+      if [ -n "${AUDIO_TEMPO_TARGET:-}" ] && [[ "$AFILTER_CORE" == *"atempo="* ]]; then
+        local compensated_tempo
+        compensated_tempo=$(awk -v tempo="$AUDIO_TEMPO_TARGET" -v factor="$jitter_factor" 'BEGIN { tempo+=0; factor+=0; if (factor == 0) factor = 1; printf "%.6f", tempo / factor }')
+        local IFS=','
+        read -r -a filter_arr <<< "$AFILTER_CORE"
+        for idx in "${!filter_arr[@]}"; do
+          if [[ "${filter_arr[$idx]}" == atempo=* ]]; then
+            filter_arr[$idx]="atempo=${compensated_tempo}"
+            break
+          fi
+        done
+        compensated_core=$(IFS=,; echo "${filter_arr[*]}")
+      fi
+      if [ -n "${compensated_core:-}" ]; then
+        AFILTER="${jitter_chain},${compensated_core}"
+      else
+        AFILTER="$jitter_chain"
+      fi
     fi
 
     MUSIC_VARIANT_TRACK=""

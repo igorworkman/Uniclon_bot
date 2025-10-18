@@ -281,6 +281,9 @@ async def _run_and_send(
         await message.answer("Произошла ошибка при обработке. Попробуйте ещё раз.")
         raise
 
+    if "⚠️ Обнаружены слишком похожие копии" in logs_text:
+        await message.answer("⚠️ Обнаружены слишком похожие копии, выполняется перегенерация…")
+
     if logs_text.strip():
         tail = logs_text[-LOG_TAIL_CHARS:]
         await message.answer(

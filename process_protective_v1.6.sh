@@ -6,6 +6,7 @@ IFS=$'\n\t'
 
 OUTPUT_DIR="Новая папка"
 MANIFEST="manifest.csv"
+MANIFEST_PATH="${OUTPUT_DIR}/${MANIFEST}"
 TARGET_W=1080
 TARGET_H=1920
 AUDIO_BR="128k"
@@ -30,8 +31,8 @@ COUNT="${2:-1}"
 
 mkdir -p "$OUTPUT_DIR"
 
-if [ ! -f "$MANIFEST" ]; then
-  echo "timestamp,input,output,uid,fps,video_kbps,width,height,noise_level,crop_px,audio_tweak,encoder" > "$MANIFEST"
+if [ ! -f "$MANIFEST_PATH" ]; then
+  echo "filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed" > "$MANIFEST_PATH"
 fi
 
 # helpers
@@ -43,6 +44,19 @@ rand_choice() {
   echo "${arr[$((RANDOM % ${#arr[@]}))]}"
 }
 rand_audio_factor() { awk -v r="$RANDOM" 'BEGIN{srand(r); printf "%.6f", 0.995 + rand()*0.01}'; }
+
+file_size_bytes() {
+  local size
+  if size=$(stat -c %s "$1" 2>/dev/null); then
+    echo "$size"
+  else
+    stat -f %z "$1"
+  fi
+}
+
+generate_seed() {
+  od -An -N2 -tu2 /dev/urandom | tr -d ' \n'
+}
 
 date_supports_d_flag() {
   date -u -d "1970-01-01" >/dev/null 2>&1
@@ -75,6 +89,8 @@ base="$(basename "$SRC")"
 name="${base%.*}"
 
 for ((i=1;i<=COUNT;i++)); do
+  SEED=$(generate_seed)
+  RANDOM=$SEED
   # UID
   if command -v uuidgen >/dev/null 2>&1; then
     UID_HEX=$(uuidgen | sed 's/-//g' | cut -c1-8)
@@ -149,14 +165,15 @@ for ((i=1;i<=COUNT;i++)); do
     -QuickTime:CreateDate="$CREATION_TIME_EXIF" -QuickTime:ModifyDate="$CREATION_TIME_EXIF" \
     "$OUT" >/dev/null
 
-  WIDTH=$(ffprobe -v error -select_streams v:0 -show_entries stream=width  -of csv=p=0 "$OUT")
-  HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$OUT")
-  VKBPS=$(ffprobe -v error -select_streams v:0 -show_entries stream=bit_rate -of csv=p=0 "$OUT")
-  VKBPS=$((VKBPS/1000))
-  ENC=$(ffprobe -v error -show_entries format_tags=encoder -of csv=p=0 "$OUT")
-
-  echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ"),$SRC,$OUT,$UID_TAG,$FPS,$VKBPS,$WIDTH,$HEIGHT,$NOISE,$CROP_PX,$AUDIO_TWEAK,$ENC" >> "$MANIFEST"
+  FILE_NAME="$(basename "$OUT")"
+  BITRATE_RAW=$(ffprobe -v error -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 "$OUT")
+  BITRATE=$(awk -v b="$BITRATE_RAW" 'BEGIN{if(b==""||b=="N/A") printf "0"; else printf "%.0f", b/1000}')
+  DURATION_RAW=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$OUT")
+  DURATION=$(awk -v d="$DURATION_RAW" 'BEGIN{if(d==""||d=="N/A") printf "0"; else printf "%.3f", d}')
+  SIZE_BYTES=$(file_size_bytes "$OUT")
+  SIZE_KB=$(awk -v s="$SIZE_BYTES" 'BEGIN{if(s==""||s==0) printf "0"; else printf "%.0f", s/1024}')
+  echo "$FILE_NAME,$BITRATE,$FPS,$DURATION,$SIZE_KB,$ENCODER_TAG,$SOFTWARE_TAG,$CREATION_TIME,$SEED" >> "$MANIFEST_PATH"
   echo "✅ done: $OUT"
 done
 
-echo "All done. Outputs in: $OUTPUT_DIR | Manifest: $MANIFEST"
+echo "All done. Outputs in: $OUTPUT_DIR | Manifest: $MANIFEST_PATH"

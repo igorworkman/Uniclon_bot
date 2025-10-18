@@ -147,6 +147,41 @@ generate_iso_timestamp() {
   fi
 }
 
+iso_to_components() {
+  local iso="$1"
+  local date_part="${iso%%T*}"
+  local time_part="${iso#*T}"
+  time_part="${time_part%Z}"
+  local y="${date_part%%-*}"
+  local rest="${date_part#*-}"
+  local m="${rest%%-*}"
+  local d="${rest#*-}"
+  local hh="${time_part%%:*}"
+  rest="${time_part#*:}"
+  local mm="${rest%%:*}"
+  local ss="${rest#*:}"
+  printf "%s %s %s %s %s %s\n" "$y" "$m" "$d" "$hh" "$mm" "$ss"
+}
+
+generate_media_name() {
+  local iso="$1"
+  read y m d hh mm ss < <(iso_to_components "$iso")
+  local ts_for_name=$(printf "%s%s%s_%s%s%s" "$y" "$m" "$d" "$hh" "$mm" "$ss")
+  local roll=$(rand_int 0 99)
+  if [ "$roll" -lt 25 ]; then
+    local img_suffix=$(rand_int 6000 6999)
+    printf "IMG_%d MOV\n" "$img_suffix"
+  else
+    printf "VID_%s mp4\n" "$ts_for_name"
+  fi
+}
+
+iso_to_touch_ts() {
+  local iso="$1"
+  read y m d hh mm ss < <(iso_to_components "$iso")
+  printf "%s%s%s%s%s.%s\n" "$y" "$m" "$d" "$hh" "$mm" "$ss"
+}
+
 rand_description() {
   local choices=(
     "Edited on mobile"
@@ -368,9 +403,15 @@ for ((i=1;i<=COUNT;i++)); do
 
   CREATION_TIME=$(generate_iso_timestamp)
   CREATION_TIME_EXIF=$(echo "$CREATION_TIME" | sed 's/T/ /; s/Z$//; s/-/:/g')
-
-  compact_ts="${CREATION_TIME//[-:TZ]/}"
-  TITLE="VID_${compact_ts:0:8}_${compact_ts:8:6}"
+  read FILE_STEM FILE_EXT <<<"$(generate_media_name "$CREATION_TIME")"
+  OUT="${OUTPUT_DIR}/${FILE_STEM}.${FILE_EXT}"
+  while [ -e "$OUT" ]; do
+    CREATION_TIME=$(generate_iso_timestamp)
+    CREATION_TIME_EXIF=$(echo "$CREATION_TIME" | sed 's/T/ /; s/Z$//; s/-/:/g')
+    read FILE_STEM FILE_EXT <<<"$(generate_media_name "$CREATION_TIME")"
+    OUT="${OUTPUT_DIR}/${FILE_STEM}.${FILE_EXT}"
+  done
+  TITLE="$FILE_STEM"
   DESCRIPTION="$(rand_description)"
 
   # UID
@@ -379,7 +420,7 @@ for ((i=1;i<=COUNT;i++)); do
   else
     UID_HEX=$(printf "%08X" "$(rand_uint32)")
   fi
-  UID_TAG="UID-${UID_HEX}_$(date +%s)"
+  UID_TAG="UID-${UID_HEX}_$(rand_uint32)"
 
   CROP_TOTAL_W=$((CROP_W * 2))
   CROP_TOTAL_H=$((CROP_H * 2))
@@ -401,7 +442,6 @@ for ((i=1;i<=COUNT;i++)); do
   fi
   VF="${VF},drawtext=text='${UID_TAG}':fontcolor=white@0.08:fontsize=16:x=10:y=H-30"
 
-  OUT="${OUTPUT_DIR}/${name}_final_v${i}.mp4"
   FFMPEG_CMD=(ffmpeg -y -hide_banner -loglevel warning -i "$SRC")
   if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
     FFMPEG_CMD+=(-i "$MUSIC_VARIANT_TRACK" -map 0:v:0 -map 1:a:0 -shortest)
@@ -434,6 +474,8 @@ for ((i=1;i<=COUNT;i++)); do
     -QuickTime:CreateDate="$CREATION_TIME_EXIF" -QuickTime:ModifyDate="$CREATION_TIME_EXIF" \
     "$OUT" >/dev/null
 
+  FAKE_TS=$(iso_to_touch_ts "$CREATION_TIME")
+  touch -t "$FAKE_TS" "$OUT"
   FILE_NAME="$(basename "$OUT")"
   BITRATE_RAW=$(ffprobe -v error -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 "$OUT")
   BITRATE=$(awk -v b="$BITRATE_RAW" 'BEGIN{if(b==""||b=="N/A") printf "0"; else printf "%.0f", b/1000}')

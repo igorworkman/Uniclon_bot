@@ -50,7 +50,7 @@ def _get_user_lang(message: Message) -> str:
 
 
 def _get_profile(user_id: int) -> str:
-    return _user_profiles.get(user_id, "default")
+    return _user_profiles.get(user_id, "")
 
 
 def _set_profile(user_id: int, profile: str) -> None:
@@ -64,16 +64,16 @@ async def handle_profile(message: Message) -> None:
     user_id = message.from_user.id
     text = (message.text or "").split(maxsplit=1)
     if len(text) < 2:
-        await message.answer("Укажите профиль: /profile tiktok|instagram|telegram")
+        await message.answer("⚠️ Профиль не поддерживается. Доступны: tiktok, instagram, telegram")
         return
 
     value = text[1].strip().lower()
     if value not in _VALID_PROFILES:
-        await message.answer("❌ Недопустимый профиль. Доступны: TikTok, Instagram, Telegram.")
+        await message.answer("⚠️ Профиль не поддерживается. Доступны: tiktok, instagram, telegram")
         return
 
     _set_profile(user_id, value)
-    await message.answer(f"✅ Профиль установлен: {_VALID_PROFILES[value]}")
+    await message.answer(f"✅ Профиль {_VALID_PROFILES[value]} выбран")
 
 
 async def _ensure_valid_copies(message: Message, copies, hint_key: str):

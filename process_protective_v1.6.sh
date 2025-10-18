@@ -4,15 +4,31 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+DEBUG=0
+POSITIONAL=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --debug)
+      DEBUG=1
+      ;;
+    *)
+      POSITIONAL+=("$1")
+      ;;
+  esac
+  shift
+done
+set -- "${POSITIONAL[@]}"
+
 OUTPUT_DIR="Новая папка"
 MANIFEST="manifest.csv"
 MANIFEST_PATH="${OUTPUT_DIR}/${MANIFEST}"
 TARGET_W=1080
 TARGET_H=1920
 AUDIO_BR="128k"
-BR_MIN=3200
-BR_MAX=4600
-FPS_CHOICES=(24 25 30 50 59.615 60)
+BR_MIN=2800
+BR_MAX=5000
+FPS_BASE=(24 25 30 50 59.94 60)
+FPS_RARE=(23.976 27 29.97 48 53.95 57)
 NOISE_PROB_PERCENT=30
 CROP_MAX_PX=6
 AUDIO_TWEAK_PROB_PERCENT=50
@@ -32,18 +48,74 @@ COUNT="${2:-1}"
 mkdir -p "$OUTPUT_DIR"
 
 if [ ! -f "$MANIFEST_PATH" ]; then
-  echo "filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed" > "$MANIFEST_PATH"
+  echo "filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate" > "$MANIFEST_PATH"
+else
+  if ! head -n1 "$MANIFEST_PATH" | grep -q "target_duration"; then
+    TMP_MANIFEST=$(mktemp)
+    {
+      IFS= read -r header_line
+      echo "${header_line},target_duration,target_bitrate"
+      while IFS= read -r data_line; do
+        [ -z "$data_line" ] && continue
+        echo "${data_line},," 
+      done
+    } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
+    mv "$TMP_MANIFEST" "$MANIFEST_PATH"
+    echo "ℹ️ manifest обновлён: добавлены колонки target_duration и target_bitrate"
+  fi
 fi
 
 # helpers
-rand_int() { local A="$1" B="$2"; echo $(( A + RANDOM % (B - A + 1) )); }
-# bash 3 совместимый выбор случайного элемента массива
+deterministic_md5() {
+  if command -v md5 >/dev/null 2>&1; then
+    printf "%s" "$1" | md5 | tr -d ' \t\n' | tail -c 32
+  else
+    printf "%s" "$1" | md5sum | awk '{print $1}'
+  fi
+}
+
+RNG_HEX=""
+RNG_POS=0
+
+init_rng() {
+  RNG_HEX="$1"
+  RNG_POS=0
+}
+
+rng_next_chunk() {
+  if [ ${#RNG_HEX} -lt 4 ] || [ $((RNG_POS + 4)) -gt ${#RNG_HEX} ]; then
+    RNG_HEX="$(deterministic_md5 "${RNG_HEX}_${RNG_POS}")"
+    RNG_POS=0
+  fi
+  local chunk="${RNG_HEX:$RNG_POS:4}"
+  RNG_POS=$((RNG_POS + 4))
+  printf "%d" $((16#$chunk))
+}
+
+rand_int() {
+  local A="$1" B="$2" span=$((B - A + 1)) raw
+  raw=$(rng_next_chunk)
+  echo $((A + raw % span))
+}
+
 rand_choice() {
   local arrname=$1[@]
   local arr=("${!arrname}")
-  echo "${arr[$((RANDOM % ${#arr[@]}))]}"
+  local idx=$(( $(rng_next_chunk) % ${#arr[@]} ))
+  echo "${arr[$idx]}"
 }
-rand_audio_factor() { awk -v r="$RANDOM" 'BEGIN{srand(r); printf "%.6f", 0.995 + rand()*0.01}'; }
+
+rand_float() {
+  local MIN="$1" MAX="$2" SCALE="$3"
+  local raw=$(rng_next_chunk)
+  awk -v min="$MIN" -v max="$MAX" -v r="$raw" -v scale="$SCALE" 'BEGIN {s=r/65535; printf "%.*f", scale, min + s*(max-min)}'
+}
+
+rand_uint32() {
+  local hi=$(rng_next_chunk)
+  local lo=$(rng_next_chunk)
+  echo $(( (hi << 16) | lo ))
+}
 
 file_size_bytes() {
   local size
@@ -52,10 +124,6 @@ file_size_bytes() {
   else
     stat -f %z "$1"
   fi
-}
-
-generate_seed() {
-  od -An -N2 -tu2 /dev/urandom | tr -d ' \n'
 }
 
 date_supports_d_flag() {
@@ -81,45 +149,143 @@ rand_description() {
     "Shot in portrait"
     "Quick highlight"
   )
-  local idx=$((RANDOM % ${#choices[@]}))
+  local idx=$(( $(rng_next_chunk) % ${#choices[@]} ))
   echo "${choices[$idx]}"
+}
+
+select_fps() {
+  if [ "$(rand_int 1 100)" -le 22 ]; then
+    rand_choice FPS_RARE
+  else
+    rand_choice FPS_BASE
+  fi
+}
+
+compute_duration_profile() {
+  local delta=$(rand_float 0.10 0.35 3)
+  local sign=1
+  if [ "$(rand_int 0 1)" -eq 0 ]; then
+    sign=-1
+  fi
+  read TARGET_DURATION STRETCH_FACTOR TEMPO_FACTOR <<EOF
+$(awk -v orig="$ORIG_DURATION" -v delta="$delta" -v sign="$sign" 'BEGIN {
+  orig+=0; delta+=0; sign+=0;
+  target=orig + sign*delta;
+  if (target < 0.2) {
+    target=orig + delta;
+  }
+  if (target < 0.2) target=0.2;
+  stretch=1.0; tempo=1.0;
+  if (orig > 0.0) {
+    stretch=target/orig;
+    if (stretch == 0) stretch=1.0;
+    tempo=(stretch != 0) ? 1.0/stretch : 1.0;
+  }
+  printf "%.3f %.6f %.6f", target, stretch, tempo;
+}')
+EOF
+}
+
+pick_crop_offsets() {
+  CROP_W=$(rand_int 0 "$CROP_MAX_PX")
+  CROP_H=$(rand_int 0 "$CROP_MAX_PX")
+  CROP_X=0; CROP_Y=0
+  if [ "$CROP_W" -gt 0 ]; then CROP_X=$(rand_int 0 "$CROP_W"); fi
+  if [ "$CROP_H" -gt 0 ]; then CROP_Y=$(rand_int 0 "$CROP_H"); fi
+}
+
+pick_audio_chain() {
+  local roll=$(rand_int 1 100)
+  AUDIO_PROFILE="resample"
+  AFILTER="aresample=44100"
+  if [ "$roll" -le "$AUDIO_TWEAK_PROB_PERCENT" ]; then
+    AUDIO_PROFILE="asetrate"
+    local factor=$(rand_float 0.985 1.015 6)
+    AFILTER="asetrate=44100*${factor},aresample=44100"
+  elif [ "$roll" -ge 85 ]; then
+    AUDIO_PROFILE="anull"
+    AFILTER="anull,aresample=44100"
+  fi
+  AFILTER="${AFILTER},atempo=${TEMPO_FACTOR}"
 }
 
 base="$(basename "$SRC")"
 name="${base%.*}"
 
+ORIG_DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$SRC")
+if [ -z "$ORIG_DURATION" ] || [ "$ORIG_DURATION" = "N/A" ]; then
+  echo "❌ Не удалось получить длительность входного видео"
+  exit 1
+fi
+
+COMBO_HISTORY=""
+declare -a LAST_COMBOS=()
+
 for ((i=1;i<=COUNT;i++)); do
-  SEED=$(generate_seed)
-  RANDOM=$SEED
-  # UID
-  if command -v uuidgen >/dev/null 2>&1; then
-    UID_HEX=$(uuidgen | sed 's/-//g' | cut -c1-8)
-  else
-    UID_HEX=$(printf "%08X" $RANDOM)
-  fi
-  UID_TAG="UID-${UID_HEX}_$(date +%s)"
+  attempt=0
+  while :; do
+    SEED_HEX=$(deterministic_md5 "${SRC}_${i}_соль_${attempt}")
+    init_rng "$SEED_HEX"
 
-  FPS=$(rand_choice FPS_CHOICES)
-  BR=$(rand_int "$BR_MIN" "$BR_MAX")
-  MAXRATE=$(( BR + 500 ))
-  BUFSIZE=$(( BR * 2 ))
+    # параметры видео
+    FPS=$(select_fps)
 
-  NOISE=0; if [ "$(rand_int 1 100)" -le "$NOISE_PROB_PERCENT" ]; then NOISE=1; fi
-  CROP_PX=$(rand_int 0 "$CROP_MAX_PX")
+    BR=$(rand_int "$BR_MIN" "$BR_MAX")
 
-  AUDIO_TWEAK=0
-  AFILTER="aresample=44100"
-  if [ "$(rand_int 1 100)" -le "$AUDIO_TWEAK_PROB_PERCENT" ]; then
-    AUDIO_TWEAK=1
-    FACTOR="$(rand_audio_factor)"
-    AFILTER="asetrate=44100*${FACTOR},aresample=44100"
-  fi
+    compute_duration_profile
+
+    NOISE=0
+    if [ "$(rand_int 1 100)" -le "$NOISE_PROB_PERCENT" ]; then
+      NOISE=1
+    fi
+
+    pick_crop_offsets
+
+    pick_audio_chain
+
+    combo_key="${FPS}|${BR}|${TARGET_DURATION}"
+
+    duplicate=0
+    case " $COMBO_HISTORY " in
+      *" $combo_key "*) duplicate=1 ;;
+    esac
+
+    consec=0
+    len=${#LAST_COMBOS[@]}
+    if [ "$len" -gt 0 ]; then
+      for ((idx=len-1; idx>=0 && idx>=len-3; idx--)); do
+        if [ "${LAST_COMBOS[$idx]}" = "$combo_key" ]; then
+          consec=$((consec + 1))
+        else
+          break
+        fi
+      done
+    fi
+
+    if [ "$duplicate" -eq 0 ] && [ "$consec" -lt 3 ]; then
+      break
+    fi
+
+    attempt=$((attempt + 1))
+    if [ "$attempt" -gt 12 ]; then
+      echo "⚠️ Не удалось подобрать уникальные параметры для копии $i, используем последние"
+      break
+    fi
+  done
+
+  SEED="$SEED_HEX"
+  LAST_COMBOS+=("$combo_key")
+  COMBO_HISTORY="${COMBO_HISTORY}${combo_key} "
+
+  RATE_PAD=$(rand_int 250 650)
+  MAXRATE=$((BR + RATE_PAD))
+  BUFSIZE=$((BR * 2 + RATE_PAD * 2))
 
   ENC_MINOR=$(rand_int 2 5)
   ENC_PATCH=$(rand_int 0 255)
   ENCODER_TAG=$(printf "Lavf62.%d.%03d" "$ENC_MINOR" "$ENC_PATCH")
 
-  if [ $((RANDOM % 2)) -eq 0 ]; then
+  if [ "$(rand_int 0 1)" -eq 0 ]; then
     SOFTWARE_TAG="CapCut 12.$(rand_int 1 9)"
   else
     SOFTWARE_TAG="VN 2.$(rand_int 1 9)"
@@ -132,17 +298,41 @@ for ((i=1;i<=COUNT;i++)); do
   TITLE="VID_${compact_ts:0:8}_${compact_ts:8:6}"
   DESCRIPTION="$(rand_description)"
 
-  VF="scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1"
+  # UID
+  if command -v uuidgen >/dev/null 2>&1; then
+    UID_HEX=$(uuidgen | sed 's/-//g' | cut -c1-8)
+  else
+    UID_HEX=$(printf "%08X" "$(rand_uint32)")
+  fi
+  UID_TAG="UID-${UID_HEX}_$(date +%s)"
+
+  CROP_TOTAL_W=$((CROP_W * 2))
+  CROP_TOTAL_H=$((CROP_H * 2))
+  if [ "$CROP_TOTAL_W" -gt 0 ]; then PAD_X=$(rand_int 0 "$CROP_TOTAL_W"); else PAD_X=0; fi
+  if [ "$CROP_TOTAL_H" -gt 0 ]; then PAD_Y=$(rand_int 0 "$CROP_TOTAL_H"); else PAD_Y=0; fi
+
+  VF="setpts=${STRETCH_FACTOR}*PTS,scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1"
   VF="${VF},eq=brightness=0.005:saturation=1.01"
   if [ "$NOISE" -eq 1 ]; then VF="${VF},noise=alls=1:allf=t"; fi
-  if [ "$CROP_PX" -gt 0 ]; then
-    dbl=$((CROP_PX*2))
-    VF="${VF},crop=in_w-${dbl}:in_h-${dbl}:${CROP_PX}:${CROP_PX},pad=iw+${dbl}:ih+${dbl}:${CROP_PX}:${CROP_PX}"
+  if [ "$CROP_TOTAL_W" -gt 0 ] || [ "$CROP_TOTAL_H" -gt 0 ]; then
+    CROP_WIDTH=$((TARGET_W - CROP_TOTAL_W))
+    CROP_HEIGHT=$((TARGET_H - CROP_TOTAL_H))
+    if [ "$CROP_WIDTH" -lt 16 ]; then CROP_WIDTH=$((TARGET_W - CROP_W)); fi
+    if [ "$CROP_HEIGHT" -lt 16 ]; then CROP_HEIGHT=$((TARGET_H - CROP_H)); fi
+    if [ "$CROP_WIDTH" -lt 16 ]; then CROP_WIDTH=$TARGET_W; fi
+    if [ "$CROP_HEIGHT" -lt 16 ]; then CROP_HEIGHT=$TARGET_H; fi
+    VF="${VF},crop=${CROP_WIDTH}:${CROP_HEIGHT}:${CROP_X}:${CROP_Y}"
+    VF="${VF},pad=${TARGET_W}:${TARGET_H}:${PAD_X}:${PAD_Y}:black"
   fi
   VF="${VF},drawtext=text='${UID_TAG}':fontcolor=white@0.08:fontsize=16:x=10:y=H-30"
 
   OUT="${OUTPUT_DIR}/${name}_final_v${i}.mp4"
-  echo "▶️ [$i/$COUNT] $SRC → $OUT | fps=$FPS br=${BR}k noise=$NOISE crop=${CROP_PX}px audio_tweak=$AUDIO_TWEAK"
+
+  if [ "$DEBUG" -eq 1 ]; then
+    echo "DEBUG copy=$i seed=$SEED fps=$FPS br=${BR}k maxrate=${MAXRATE}k bufsize=${BUFSIZE}k target_duration=$TARGET_DURATION stretch=$STRETCH_FACTOR audio=$AUDIO_PROFILE noise=$NOISE crop=${CROP_W}x${CROP_H}@${CROP_X},${CROP_Y} pad=${PAD_X},${PAD_Y}"
+  fi
+
+  echo "▶️ [$i/$COUNT] $SRC → $OUT | fps=$FPS br=${BR}k noise=$NOISE crop=${CROP_W}x${CROP_H} duration=${TARGET_DURATION}s audio=${AUDIO_PROFILE}"
 
   ffmpeg -y -hide_banner -loglevel warning -i "$SRC" \
     -c:v libx264 -preset slow -profile:v high -level 4.0 \
@@ -172,7 +362,7 @@ for ((i=1;i<=COUNT;i++)); do
   DURATION=$(awk -v d="$DURATION_RAW" 'BEGIN{if(d==""||d=="N/A") printf "0"; else printf "%.3f", d}')
   SIZE_BYTES=$(file_size_bytes "$OUT")
   SIZE_KB=$(awk -v s="$SIZE_BYTES" 'BEGIN{if(s==""||s==0) printf "0"; else printf "%.0f", s/1024}')
-  echo "$FILE_NAME,$BITRATE,$FPS,$DURATION,$SIZE_KB,$ENCODER_TAG,$SOFTWARE_TAG,$CREATION_TIME,$SEED" >> "$MANIFEST_PATH"
+  echo "$FILE_NAME,$BITRATE,$FPS,$DURATION,$SIZE_KB,$ENCODER_TAG,$SOFTWARE_TAG,$CREATION_TIME,$SEED,$TARGET_DURATION,$BR" >> "$MANIFEST_PATH"
   echo "✅ done: $OUT"
 done
 

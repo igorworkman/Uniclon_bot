@@ -402,19 +402,42 @@ duplicate_threshold() {
 }
 
 calculate_duplicate_max() {
-  local -n fps_arr=$1
-  local -n br_arr=$2
-  local -n dur_arr=$3
-  declare -A counts=()
+  local fps_arr_name="$1"
+  local br_arr_name="$2"
+  local dur_arr_name="$3"
+  local -a seen_keys=()
+  local -a seen_counts=()
   local max_count=0
-  for idx in "${!fps_arr[@]}"; do
-    local key="${fps_arr[$idx]}|${br_arr[$idx]}|$(duration_bucket "${dur_arr[$idx]}")"
-    local current=${counts[$key]:-0}
-    current=$((current + 1))
-    counts[$key]=$current
+  local total=0
+  eval "total=\${#$fps_arr_name[@]}"
+  local idx=0
+  while [ "$idx" -lt "$total" ]; do
+    local fps_val br_val dur_val key
+    eval "fps_val=\${$fps_arr_name[$idx]}"
+    eval "br_val=\${$br_arr_name[$idx]}"
+    eval "dur_val=\${$dur_arr_name[$idx]}"
+    key="${fps_val}|${br_val}|$(duration_bucket "$dur_val")"
+    local found=0
+    local current=0
+    local list_idx=0
+    while [ "$list_idx" -lt "${#seen_keys[@]}" ]; do
+      if [ "${seen_keys[$list_idx]}" = "$key" ]; then
+        current=$(( ${seen_counts[$list_idx]} + 1 ))
+        seen_counts[$list_idx]=$current
+        found=1
+        break
+      fi
+      list_idx=$((list_idx + 1))
+    done
+    if [ "$found" -eq 0 ]; then
+      seen_keys+=("$key")
+      current=1
+      seen_counts+=("$current")
+    fi
     if [ "$current" -gt "$max_count" ]; then
       max_count=$current
     fi
+    idx=$((idx + 1))
   done
   echo "$max_count"
 }

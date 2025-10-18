@@ -2,6 +2,7 @@ import logging
 import os
 import time
 from pathlib import Path
+from typing import Optional, TYPE_CHECKING
 from aiogram import F, Router
 from aiogram.types import Message
 from aiogram.utils.markdown import hcode
@@ -15,8 +16,23 @@ from executor import run_script_with_logs, list_new_mp4s
 # END REGION AI
 from locales import get_text
 
+if TYPE_CHECKING:
+    from uniclon_bot import UserTaskQueue
+
+
 router = Router()
 logger = logging.getLogger(__name__)
+
+_task_queue: Optional["UserTaskQueue"] = None
+
+
+def set_task_queue(queue: "UserTaskQueue") -> None:
+    global _task_queue
+    _task_queue = queue
+
+
+def _get_task_queue() -> Optional["UserTaskQueue"]:
+    return _task_queue
 
 
 def _get_user_lang(message: Message) -> str:
@@ -100,7 +116,7 @@ async def handle_video(message: Message, bot) -> None:
     await ack.edit_text(
         get_text(lang, "file_saved", filename=hcode(input_path.name))
     )
-    await _run_and_send(message, ack, input_path, copies)
+    await _enqueue_processing(message, ack, input_path, copies, lang)
 
 
 # Принимаем документ (.mp4)
@@ -138,7 +154,7 @@ async def handle_document(message: Message, bot) -> None:
     await ack.edit_text(
         get_text(lang, "file_saved", filename=hcode(input_path.name))
     )
-    await _run_and_send(message, ack, input_path, copies)
+    await _enqueue_processing(message, ack, input_path, copies, lang)
 
 
 # Текстовая команда: "<filename>.mp4 <copies>"
@@ -173,10 +189,37 @@ async def handle_text(message: Message) -> None:
             copies=copies,
         )
     )
-    await _run_and_send(message, ack, input_path, copies)
+    await _enqueue_processing(message, ack, input_path, copies, lang)
 
 
 # Вспомогательная функция общего запуска
+async def _enqueue_processing(
+    message: Message,
+    ack: Message,
+    input_path: Path,
+    copies: int,
+    lang: str,
+) -> None:
+    queue = _get_task_queue()
+    user_id = message.from_user.id if message.from_user else 0
+
+    async def task() -> None:
+        await _run_and_send(message, ack, input_path, copies)
+
+    if queue is None:
+        await task()
+        return
+
+    try:
+        await queue.enqueue(user_id, task)
+    except RuntimeError:
+        await task()
+        return
+
+    logger.info("Task queued for user=%s", user_id)
+    await message.answer("Задача добавлена в очередь. Дождитесь завершения предыдущих запросов.")
+
+
 async def _run_and_send(message: Message, ack: Message, input_path: Path, copies: int) -> None:
     before = {p.resolve() for p in OUTPUT_DIR.glob('*.mp4')}
     start_ts = time.time()

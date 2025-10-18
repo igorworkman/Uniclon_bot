@@ -12,7 +12,9 @@ from config import SCRIPT_PATH, OUTPUT_DIR
 logger = logging.getLogger(__name__)
 
 
-async def run_script_with_logs(input_file: Path, copies: int, cwd: Path) -> Tuple[int, str]:
+async def run_script_with_logs(
+    input_file: Path, copies: int, cwd: Path, profile: str
+) -> Tuple[int, str]:
     """Запускает bash-скрипт и возвращает (returncode, объединённые логи)."""
     if not SCRIPT_PATH.exists():
         raise FileNotFoundError(f"Script not found: {SCRIPT_PATH}")
@@ -24,8 +26,14 @@ async def run_script_with_logs(input_file: Path, copies: int, cwd: Path) -> Tupl
         pass
 
     proc = await asyncio.create_subprocess_exec(
-        str(SCRIPT_PATH), input_file.name, str(int(copies)),
-        cwd=str(cwd), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        str(SCRIPT_PATH),
+        input_file.name,
+        str(int(copies)),
+        "--profile",
+        profile,
+        cwd=str(cwd),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
         env=os.environ.copy(),
     )
 
@@ -37,10 +45,19 @@ async def run_script_with_logs(input_file: Path, copies: int, cwd: Path) -> Tupl
         message = decoded.rstrip("\n")
         if message:
             logger.info(
-                "[%s|copies=%s] %s", input_file.name, copies, message
+                "[%s|copies=%s|profile=%s] %s",
+                input_file.name,
+                copies,
+                profile,
+                message,
             )
         else:
-            logger.info("[%s|copies=%s]", input_file.name, copies)
+            logger.info(
+                "[%s|copies=%s|profile=%s]",
+                input_file.name,
+                copies,
+                profile,
+            )
 
     rc = await proc.wait()
     if rc != 0:

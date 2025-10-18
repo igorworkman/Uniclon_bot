@@ -5,11 +5,15 @@ set -euo pipefail
 IFS=$'\n\t'
 
 DEBUG=0
+MUSIC_VARIANT=0
 POSITIONAL=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --debug)
       DEBUG=1
+      ;;
+    --music-variant)
+      MUSIC_VARIANT=1
       ;;
     *)
       POSITIONAL+=("$1")
@@ -32,6 +36,8 @@ FPS_RARE=(23.976 27 29.97 48 53.95 57)
 NOISE_PROB_PERCENT=30
 CROP_MAX_PX=6
 AUDIO_TWEAK_PROB_PERCENT=50
+MUSIC_VARIANT_TRACKS=()
+MUSIC_VARIANT_TRACK=""
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "❌ Требуется $1"; exit 1; }; }
 need ffmpeg
@@ -197,16 +203,57 @@ pick_crop_offsets() {
 pick_audio_chain() {
   local roll=$(rand_int 1 100)
   AUDIO_PROFILE="resample"
-  AFILTER="aresample=44100"
+  local filters=("aresample=44100")
   if [ "$roll" -le "$AUDIO_TWEAK_PROB_PERCENT" ]; then
     AUDIO_PROFILE="asetrate"
     local factor=$(rand_float 0.985 1.015 6)
-    AFILTER="asetrate=44100*${factor},aresample=44100"
+    filters=("asetrate=44100*${factor}" "aresample=44100")
   elif [ "$roll" -ge 85 ]; then
     AUDIO_PROFILE="anull"
-    AFILTER="anull,aresample=44100"
+    filters=("anull" "aresample=44100")
   fi
-  AFILTER="${AFILTER},atempo=${TEMPO_FACTOR}"
+  local tempo_target="$TEMPO_FACTOR"
+  if [ "$MUSIC_VARIANT" -eq 1 ]; then
+    local tempo_sign=$(rand_int 0 1)
+    local tempo_delta=$(rand_float 0.020 0.030 3)
+    tempo_target=$(awk -v base="$TEMPO_FACTOR" -v sign="$tempo_sign" -v delta="$tempo_delta" '
+BEGIN {
+  base+=0; delta+=0;
+  if (sign == 0) {
+    printf "%.6f", base * (1.0 - delta);
+  } else {
+    printf "%.6f", base * (1.0 + delta);
+  }
+}
+')
+    AUDIO_PROFILE="${AUDIO_PROFILE}+tempo"
+  fi
+  filters+=("atempo=${tempo_target}")
+  AFILTER_CORE=$(IFS=,; echo "${filters[*]}")
+}
+
+collect_music_variants() {
+  MUSIC_VARIANT_TRACKS=()
+  local src_dir="$(cd "$(dirname "$SRC")" && pwd)"
+  local search_dirs=("${src_dir}/music_variants" "$src_dir")
+  if [ -d "${PWD}/music_variants" ]; then
+    search_dirs+=("${PWD}/music_variants")
+  fi
+  for dir in "${search_dirs[@]}"; do
+    [ -d "$dir" ] || continue
+    while IFS= read -r -d '' track; do
+      MUSIC_VARIANT_TRACKS+=("$track")
+    done < <(find "$dir" -maxdepth 1 -type f \( -iname '*.mp3' -o -iname '*.wav' -o -iname '*.m4a' -o -iname '*.aac' -o -iname '*.flac' \) -print0)
+  done
+}
+
+pick_music_variant_track() {
+  MUSIC_VARIANT_TRACK=""
+  local total=${#MUSIC_VARIANT_TRACKS[@]}
+  if [ "$total" -gt 0 ]; then
+    local idx=$(( $(rng_next_chunk) % total ))
+    MUSIC_VARIANT_TRACK="${MUSIC_VARIANT_TRACKS[$idx]}"
+  fi
 }
 
 base="$(basename "$SRC")"
@@ -216,6 +263,10 @@ ORIG_DURATION=$(ffprobe -v error -show_entries format=duration -of default=nopri
 if [ -z "$ORIG_DURATION" ] || [ "$ORIG_DURATION" = "N/A" ]; then
   echo "❌ Не удалось получить длительность входного видео"
   exit 1
+fi
+
+if [ "$MUSIC_VARIANT" -eq 1 ]; then
+  collect_music_variants
 fi
 
 COMBO_HISTORY=""
@@ -242,6 +293,30 @@ for ((i=1;i<=COUNT;i++)); do
     pick_crop_offsets
 
     pick_audio_chain
+
+    local jitter_filters=()
+    if (( RANDOM % 3 == 0 )); then
+      jitter_filters=("asetrate=44100*1.$((RANDOM%6))" "aresample=44100")
+      AUDIO_PROFILE="${AUDIO_PROFILE}+jitter"
+    else
+      jitter_filters=("anull")
+    fi
+    local jitter_chain="$(IFS=,; echo "${jitter_filters[*]}")"
+    if [ "$jitter_chain" = "anull" ]; then
+      AFILTER="$AFILTER_CORE"
+    elif [ -n "${AFILTER_CORE:-}" ]; then
+      AFILTER="${jitter_chain},${AFILTER_CORE}"
+    else
+      AFILTER="$jitter_chain"
+    fi
+
+    MUSIC_VARIANT_TRACK=""
+    if [ "$MUSIC_VARIANT" -eq 1 ]; then
+      pick_music_variant_track
+      if [ -n "$MUSIC_VARIANT_TRACK" ]; then
+        AUDIO_PROFILE="${AUDIO_PROFILE}+music"
+      fi
+    fi
 
     combo_key="${FPS}|${BR}|${TARGET_DURATION}"
 
@@ -327,26 +402,30 @@ for ((i=1;i<=COUNT;i++)); do
   VF="${VF},drawtext=text='${UID_TAG}':fontcolor=white@0.08:fontsize=16:x=10:y=H-30"
 
   OUT="${OUTPUT_DIR}/${name}_final_v${i}.mp4"
+  FFMPEG_CMD=(ffmpeg -y -hide_banner -loglevel warning -i "$SRC")
+  if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
+    FFMPEG_CMD+=(-i "$MUSIC_VARIANT_TRACK" -map 0:v:0 -map 1:a:0 -shortest)
+  fi
+  FFMPEG_CMD+=(-c:v libx264 -preset slow -profile:v high -level 4.0
+    -r "$FPS" -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k"
+    -vf "$VF"
+    -c:a aac -b:a "$AUDIO_BR" -af "$AFILTER"
+    -movflags +faststart
+    -metadata encoder="$ENCODER_TAG"
+    -metadata software="$SOFTWARE_TAG"
+    -metadata creation_time="$CREATION_TIME"
+    -metadata title="$TITLE"
+    -metadata description="$DESCRIPTION"
+    -metadata comment="$UID_TAG"
+    "$OUT")
 
   if [ "$DEBUG" -eq 1 ]; then
-    echo "DEBUG copy=$i seed=$SEED fps=$FPS br=${BR}k maxrate=${MAXRATE}k bufsize=${BUFSIZE}k target_duration=$TARGET_DURATION stretch=$STRETCH_FACTOR audio=$AUDIO_PROFILE noise=$NOISE crop=${CROP_W}x${CROP_H}@${CROP_X},${CROP_Y} pad=${PAD_X},${PAD_Y}"
+    echo "DEBUG copy=$i seed=$SEED fps=$FPS br=${BR}k maxrate=${MAXRATE}k bufsize=${BUFSIZE}k target_duration=$TARGET_DURATION stretch=$STRETCH_FACTOR audio=$AUDIO_PROFILE af='$AFILTER' music_track=${MUSIC_VARIANT_TRACK:-none} noise=$NOISE crop=${CROP_W}x${CROP_H}@${CROP_X},${CROP_Y} pad=${PAD_X},${PAD_Y}"
   fi
 
   echo "▶️ [$i/$COUNT] $SRC → $OUT | fps=$FPS br=${BR}k noise=$NOISE crop=${CROP_W}x${CROP_H} duration=${TARGET_DURATION}s audio=${AUDIO_PROFILE}"
 
-  ffmpeg -y -hide_banner -loglevel warning -i "$SRC" \
-    -c:v libx264 -preset slow -profile:v high -level 4.0 \
-    -r "$FPS" -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k" \
-    -vf "$VF" \
-    -c:a aac -b:a "$AUDIO_BR" -af "$AFILTER" \
-    -movflags +faststart \
-    -metadata encoder="$ENCODER_TAG" \
-    -metadata software="$SOFTWARE_TAG" \
-    -metadata creation_time="$CREATION_TIME" \
-    -metadata title="$TITLE" \
-    -metadata description="$DESCRIPTION" \
-    -metadata comment="$UID_TAG" \
-    "$OUT"
+  "${FFMPEG_CMD[@]}"
 
   exiftool -overwrite_original \
     -GPS:all= -Location:all= -SerialNumber= \

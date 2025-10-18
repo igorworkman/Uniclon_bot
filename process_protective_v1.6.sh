@@ -624,8 +624,16 @@ quality_check() {
   for idx in "${!RUN_FILES[@]}"; do
     local copy_path="${OUTPUT_DIR}/${RUN_FILES[$idx]}"
     local ssim_val
-    ssim_val=$(ffmpeg -v error -i "$SRC" -i "$copy_path" -lavfi "ssim" -f null - 2>&1 | awk -F'All:' '/All:/{gsub(/^[ \t]+/,"",$2); split($2,a," "); print a[1]; exit}')
-    [ -n "$ssim_val" ] || ssim_val="0.000"
+    local ssim_log
+    if ! ssim_log=$(ffmpeg -v error -i "$SRC" -i "$copy_path" \
+      -filter_complex "[0:v][1:v]scale2ref=flags=bicubic[ref][copy];[ref][copy]ssim" \
+      -f null - 2>&1); then
+      echo "⚠️ Не удалось вычислить SSIM для ${RUN_FILES[$idx]} (ffmpeg завершился с ошибкой)" >&2
+      ssim_val="0.000"
+    else
+      ssim_val=$(awk -F'All:' '/All:/{gsub(/^[ \t]+/,"",$2); split($2,a," "); print a[1]; exit}' <<<"$ssim_log")
+      [ -n "$ssim_val" ] || ssim_val="0.000"
+    fi
     local phash_delta="0.000"
     local dur_delta
     dur_delta=$(awk -v o="$ORIG_DURATION" -v c="${RUN_DURATIONS[$idx]}" 'BEGIN{o+=0;c+=0;diff=o-c;if(diff<0) diff=-diff;printf "%.3f",diff}')

@@ -439,22 +439,30 @@ for ((i=1;i<=COUNT;i++)); do
   BUFSIZE=$((BR * 2 + RATE_PAD * 2))
 
   ENC_MINOR=$(rand_int 2 5)
-  ENC_PATCH=$(rand_int 0 255)
-  ENCODER_TAG=$(printf "Lavf62.%d.%03d" "$ENC_MINOR" "$ENC_PATCH")
+  ENCODER_TAG=$(printf "Lavf62.%d.100" "$ENC_MINOR")
 
-  if [ "$(rand_int 0 1)" -eq 0 ]; then
-    SOFTWARE_TAG="CapCut 12.$(rand_int 1 9)"
-  else
-    SOFTWARE_TAG="VN 2.$(rand_int 1 9)"
-  fi
+  case "$(rand_int 0 3)" in
+    0)
+      SOFTWARE_TAG="CapCut 12.$(rand_int 1 9)"
+      ;;
+    1)
+      SOFTWARE_TAG="VN 2.$(rand_int 1 9)"
+      ;;
+    2)
+      SOFTWARE_TAG="iMovie 10.$(rand_int 1 9)"
+      ;;
+    *)
+      SOFTWARE_TAG="Premiere Rush 1.$(rand_int 1 9)"
+      ;;
+  esac
 
   CREATION_TIME=$(generate_iso_timestamp)
-  CREATION_TIME_EXIF=$(echo "$CREATION_TIME" | sed 's/T/ /; s/Z$//; s/-/:/g')
+  CREATION_TIME_EXIF="$CREATION_TIME"
   read FILE_STEM FILE_EXT <<<"$(generate_media_name "$CREATION_TIME")"
   OUT="${OUTPUT_DIR}/${FILE_STEM}.${FILE_EXT}"
   while [ -e "$OUT" ]; do
     CREATION_TIME=$(generate_iso_timestamp)
-    CREATION_TIME_EXIF=$(echo "$CREATION_TIME" | sed 's/T/ /; s/Z$//; s/-/:/g')
+    CREATION_TIME_EXIF="$CREATION_TIME"
     read FILE_STEM FILE_EXT <<<"$(generate_media_name "$CREATION_TIME")"
     OUT="${OUTPUT_DIR}/${FILE_STEM}.${FILE_EXT}"
   done

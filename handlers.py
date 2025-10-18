@@ -2,8 +2,9 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Dict, Optional, TYPE_CHECKING
 from aiogram import F, Router
+from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.utils.markdown import hcode
 from aiogram.types.input_file import FSInputFile
@@ -24,6 +25,13 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 _task_queue: Optional["UserTaskQueue"] = None
+_user_profiles: Dict[int, str] = {}
+
+_VALID_PROFILES = {
+    "tiktok": "TikTok",
+    "instagram": "Instagram",
+    "telegram": "Telegram",
+}
 
 
 def set_task_queue(queue: "UserTaskQueue") -> None:
@@ -39,6 +47,33 @@ def _get_user_lang(message: Message) -> str:
     if message.from_user and message.from_user.language_code:
         return message.from_user.language_code
     return "ru"
+
+
+def _get_profile(user_id: int) -> str:
+    return _user_profiles.get(user_id, "default")
+
+
+def _set_profile(user_id: int, profile: str) -> None:
+    _user_profiles[user_id] = profile
+
+
+@router.message(Command("profile"))
+async def handle_profile(message: Message) -> None:
+    if not message.from_user:
+        return
+    user_id = message.from_user.id
+    text = (message.text or "").split(maxsplit=1)
+    if len(text) < 2:
+        await message.answer("Укажите профиль: /profile tiktok|instagram|telegram")
+        return
+
+    value = text[1].strip().lower()
+    if value not in _VALID_PROFILES:
+        await message.answer("❌ Недопустимый профиль. Доступны: TikTok, Instagram, Telegram.")
+        return
+
+    _set_profile(user_id, value)
+    await message.answer(f"✅ Профиль установлен: {_VALID_PROFILES[value]}")
 
 
 async def _ensure_valid_copies(message: Message, copies, hint_key: str):
@@ -208,9 +243,10 @@ async def _enqueue_processing(
 ) -> None:
     queue = _get_task_queue()
     user_id = message.from_user.id if message.from_user else 0
+    profile = _get_profile(user_id)
 
     async def task() -> None:
-        await _run_and_send(message, ack, input_path, copies)
+        await _run_and_send(message, ack, input_path, copies, profile)
 
     if queue is None:
         await task()
@@ -226,7 +262,13 @@ async def _enqueue_processing(
     await message.answer("Видео поставлено в очередь. Ожидайте обработки…")
 
 
-async def _run_and_send(message: Message, ack: Message, input_path: Path, copies: int) -> None:
+async def _run_and_send(
+    message: Message,
+    ack: Message,
+    input_path: Path,
+    copies: int,
+    profile: str,
+) -> None:
     before = {p.resolve() for p in OUTPUT_DIR.glob('*.mp4')}
     start_ts = time.time()
     lang = _get_user_lang(message)
@@ -234,7 +276,7 @@ async def _run_and_send(message: Message, ack: Message, input_path: Path, copies
     await message.answer("Начата обработка видео…")
 
     try:
-        rc, logs_text = await run_script_with_logs(input_path, copies, BASE_DIR)
+        rc, logs_text = await run_script_with_logs(input_path, copies, BASE_DIR, profile)
     except Exception:
         await message.answer("Произошла ошибка при обработке. Попробуйте ещё раз.")
         raise
@@ -246,7 +288,13 @@ async def _run_and_send(message: Message, ack: Message, input_path: Path, copies
         )
 
     if rc != 0:
-        logger.error("Script failed with code %s for %s (copies=%s)", rc, input_path, copies)
+        logger.error(
+            "Script failed with code %s for %s (copies=%s, profile=%s)",
+            rc,
+            input_path,
+            copies,
+            profile,
+        )
         error_text = get_text(
             lang,
             "script_failed",

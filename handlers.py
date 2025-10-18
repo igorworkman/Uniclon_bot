@@ -47,9 +47,12 @@ async def _ensure_valid_copies(message: Message, copies, hint_key: str):
     hint_text = get_text(lang, hint_key)
     if copies is None:
         logger.warning("Copies missing (%s): user=%s msg=%s", hint_key, user_id, message.message_id)
-        await message.reply(
-            get_text(lang, "copies_missing", hint=hint_text, max_copies=MAX_COPIES)
-        )
+        if hint_key == "hint_video_caption":
+            await message.reply("Укажите число копий в подписи к видео")
+        else:
+            await message.reply(
+                get_text(lang, "copies_missing", hint=hint_text, max_copies=MAX_COPIES)
+            )
         return None
     if copies < 1 or copies > MAX_COPIES:
         logger.warning(
@@ -59,9 +62,12 @@ async def _ensure_valid_copies(message: Message, copies, hint_key: str):
             user_id,
             message.message_id,
         )
-        await message.reply(
-            get_text(lang, "copies_out_of_range", max_copies=MAX_COPIES)
-        )
+        if hint_key == "hint_video_caption" and copies > MAX_COPIES:
+            await message.reply("Максимум — 20 копий. Уменьшите количество")
+        else:
+            await message.reply(
+                get_text(lang, "copies_out_of_range", max_copies=MAX_COPIES)
+            )
         return None
     return copies
 

@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 _task_queue: Optional["UserTaskQueue"] = None
 _user_profiles: Dict[int, str] = {}
+_user_quality: Dict[int, str] = {}
 
 _VALID_PROFILES = {
     "tiktok": "TikTok",
@@ -57,6 +58,14 @@ def _set_profile(user_id: int, profile: str) -> None:
     _user_profiles[user_id] = profile
 
 
+def _get_quality(user_id: int) -> str:
+    return _user_quality.get(user_id, "std")
+
+
+def _set_quality(user_id: int, quality: str) -> None:
+    _user_quality[user_id] = quality
+
+
 @router.message(Command("profile"))
 async def handle_profile(message: Message) -> None:
     if not message.from_user:
@@ -74,6 +83,27 @@ async def handle_profile(message: Message) -> None:
 
     _set_profile(user_id, value)
     await message.answer(f"✅ Профиль {_VALID_PROFILES[value]} выбран")
+
+
+@router.message(Command("quality"))
+async def handle_quality(message: Message) -> None:
+    if not message.from_user:
+        return
+
+    user_id = message.from_user.id
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("⚠️ Укажите: /quality high или /quality std")
+        return
+
+    value = parts[1].strip().lower()
+    if value not in {"high", "std"}:
+        await message.answer("⚠️ Укажите: /quality high или /quality std")
+        return
+
+    _set_quality(user_id, value)
+    label = "High" if value == "high" else "Std"
+    await message.answer(f"✅ Качество установлено: {label}")
 
 
 async def _ensure_valid_copies(message: Message, copies, hint_key: str):
@@ -244,9 +274,10 @@ async def _enqueue_processing(
     queue = _get_task_queue()
     user_id = message.from_user.id if message.from_user else 0
     profile = _get_profile(user_id)
+    quality = _get_quality(user_id)
 
     async def task() -> None:
-        await _run_and_send(message, ack, input_path, copies, profile)
+        await _run_and_send(message, ack, input_path, copies, profile, quality)
 
     if queue is None:
         await task()
@@ -268,6 +299,7 @@ async def _run_and_send(
     input_path: Path,
     copies: int,
     profile: str,
+    quality: str,
 ) -> None:
     before = {p.resolve() for p in OUTPUT_DIR.glob('*.mp4')}
     start_ts = time.time()
@@ -276,7 +308,13 @@ async def _run_and_send(
     await message.answer("Начата обработка видео…")
 
     try:
-        rc, logs_text = await run_script_with_logs(input_path, copies, BASE_DIR, profile)
+        rc, logs_text = await run_script_with_logs(
+            input_path,
+            copies,
+            BASE_DIR,
+            profile,
+            quality,
+        )
     except Exception:
         await message.answer("Произошла ошибка при обработке. Попробуйте ещё раз.")
         raise

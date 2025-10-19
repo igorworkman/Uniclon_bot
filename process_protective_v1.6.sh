@@ -9,6 +9,7 @@ MUSIC_VARIANT=0
 PROFILE=""
 QT_META=1
 STRICT_CLEAN=0
+QUALITY="std"
 POSITIONAL=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -32,6 +33,19 @@ while [ "$#" -gt 0 ]; do
     --strict-clean)
       STRICT_CLEAN=1
       QT_META=0
+      ;;
+    --quality)
+      [ "${2:-}" ] || { echo "❌ --quality требует значение"; exit 1; }
+      QUALITY=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
+      case "$QUALITY" in
+        high|std)
+          ;;
+        *)
+          echo "❌ Неизвестное качество: $2"
+          exit 1
+          ;;
+      esac
+      shift
       ;;
     *)
       POSITIONAL+=("$1")
@@ -99,6 +113,20 @@ AUDIO_TWEAK_PROB_PERCENT=50
 MUSIC_VARIANT_TRACKS=()
 MUSIC_VARIANT_TRACK=""
 
+case "$QUALITY" in
+  high)
+    CRF=18
+    BR_MIN=4500
+    BR_MAX=5500
+    ;;
+  std|*)
+    QUALITY="std"
+    CRF=22
+    BR_MIN=3000
+    BR_MAX=4000
+    ;;
+esac
+
 need() { command -v "$1" >/dev/null 2>&1 || { echo "❌ Требуется $1"; exit 1; }; }
 need ffmpeg
 need ffprobe
@@ -113,7 +141,7 @@ COUNT="${2:-1}"
 
 mkdir -p "$OUTPUT_DIR"
 
-MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model,ssim,phash_delta,quality_pass"
+MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model,ssim,phash_delta,quality_pass,quality"
 
 if [ ! -f "$MANIFEST_PATH" ]; then
   echo "$MANIFEST_HEADER" > "$MANIFEST_PATH"
@@ -182,6 +210,19 @@ else
     } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
     mv "$TMP_MANIFEST" "$MANIFEST_PATH"
     echo "ℹ️ manifest обновлён: добавлены колонки ssim, phash_delta и quality_pass"
+  fi
+  if ! head -n1 "$MANIFEST_PATH" | grep -q "quality_pass,quality"; then
+    TMP_MANIFEST=$(mktemp)
+    {
+      IFS= read -r header_line
+      echo "${header_line},quality"
+      while IFS= read -r data_line; do
+        [ -z "$data_line" ] && continue
+        echo "${data_line},"
+      done
+    } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
+    mv "$TMP_MANIFEST" "$MANIFEST_PATH"
+    echo "ℹ️ manifest обновлён: добавлена колонка quality"
   fi
 fi
 
@@ -450,6 +491,7 @@ declare -a RUN_TARGET_DURS=()
 declare -a RUN_TARGET_BRS=()
 declare -a RUN_COMBOS=()
 declare -a RUN_PROFILES=()
+declare -a RUN_QUALITIES=()
 declare -a RUN_QT_MAKES=()
 declare -a RUN_QT_MODELS=()
 declare -a RUN_SSIM=()
@@ -567,6 +609,7 @@ remove_last_generated() {
     RUN_TARGET_BRS=("${RUN_TARGET_BRS[@]:0:$idx}")
     RUN_COMBOS=("${RUN_COMBOS[@]:0:$idx}")
     RUN_PROFILES=("${RUN_PROFILES[@]:0:$idx}")
+    RUN_QUALITIES=("${RUN_QUALITIES[@]:0:$idx}")
     RUN_QT_MAKES=("${RUN_QT_MAKES[@]:0:$idx}")
     RUN_QT_MODELS=("${RUN_QT_MODELS[@]:0:$idx}")
     RUN_SSIM=("${RUN_SSIM[@]:0:$idx}")
@@ -605,6 +648,7 @@ remove_indices_for_regen() {
     RUN_TARGET_BRS=("${RUN_TARGET_BRS[@]:0:$idx}" "${RUN_TARGET_BRS[@]:$((idx + 1))}")
     RUN_COMBOS=("${RUN_COMBOS[@]:0:$idx}" "${RUN_COMBOS[@]:$((idx + 1))}")
     RUN_PROFILES=("${RUN_PROFILES[@]:0:$idx}" "${RUN_PROFILES[@]:$((idx + 1))}")
+    RUN_QUALITIES=("${RUN_QUALITIES[@]:0:$idx}" "${RUN_QUALITIES[@]:$((idx + 1))}")
     RUN_QT_MAKES=("${RUN_QT_MAKES[@]:0:$idx}" "${RUN_QT_MAKES[@]:$((idx + 1))}")
     RUN_QT_MODELS=("${RUN_QT_MODELS[@]:0:$idx}" "${RUN_QT_MODELS[@]:$((idx + 1))}")
     RUN_SSIM=("${RUN_SSIM[@]:0:$idx}" "${RUN_SSIM[@]:$((idx + 1))}")
@@ -808,7 +852,7 @@ EOF
   if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
     FFMPEG_CMD+=(-i "$MUSIC_VARIANT_TRACK" -map 0:v:0 -map 1:a:0 -shortest)
   fi
-  FFMPEG_CMD+=(-c:v libx264 -preset slow -profile:v high -level 4.0
+  FFMPEG_CMD+=(-c:v libx264 -preset slow -profile:v high -level 4.0 -crf "$CRF"
     -r "$FPS" -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k"
     -vf "$VF"
     -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -af "$AFILTER"
@@ -822,7 +866,7 @@ EOF
     "$OUT")
 
   if [ "$DEBUG" -eq 1 ]; then
-    echo "DEBUG copy=$copy_index seed=$SEED fps=$FPS br=${BR}k maxrate=${MAXRATE}k bufsize=${BUFSIZE}k target_duration=$TARGET_DURATION stretch=$STRETCH_FACTOR audio=$AUDIO_PROFILE af='$AFILTER' music_track=${MUSIC_VARIANT_TRACK:-none} noise=$NOISE crop=${CROP_W}x${CROP_H}@${CROP_X},${CROP_Y} pad=${PAD_X},${PAD_Y}"
+    echo "DEBUG copy=$copy_index seed=$SEED fps=$FPS br=${BR}k crf=$CRF maxrate=${MAXRATE}k bufsize=${BUFSIZE}k target_duration=$TARGET_DURATION stretch=$STRETCH_FACTOR audio=$AUDIO_PROFILE af='$AFILTER' music_track=${MUSIC_VARIANT_TRACK:-none} noise=$NOISE crop=${CROP_W}x${CROP_H}@${CROP_X},${CROP_Y} pad=${PAD_X},${PAD_Y} quality=$QUALITY"
   fi
 
   echo "▶️ [$copy_index/$COUNT] $SRC → $OUT | fps=$FPS br=${BR}k noise=$NOISE crop=${CROP_W}x${CROP_H} duration=${TARGET_DURATION}s audio=${AUDIO_PROFILE}"
@@ -869,6 +913,7 @@ EOF
   RUN_TARGET_BRS+=("$BR")
   RUN_COMBOS+=("$combo_key")
   RUN_PROFILES+=("$PROFILE_VALUE")
+  RUN_QUALITIES+=("$QUALITY")
   RUN_QT_MAKES+=("$QT_MAKE")
   RUN_QT_MODELS+=("$QT_MODEL")
   echo "✅ done: $OUT"
@@ -942,7 +987,7 @@ if [ "$REGEN_OCCURRED" -eq 1 ]; then
 fi
 
 for idx in "${!RUN_FILES[@]}"; do
-  echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]},${RUN_QT_MAKES[$idx]},${RUN_QT_MODELS[$idx]},${RUN_SSIM[$idx]},${RUN_PHASH[$idx]},${RUN_QPASS[$idx]}" >> "$MANIFEST_PATH"
+  echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]},${RUN_QT_MAKES[$idx]},${RUN_QT_MODELS[$idx]},${RUN_SSIM[$idx]},${RUN_PHASH[$idx]},${RUN_QPASS[$idx]},${RUN_QUALITIES[$idx]}" >> "$MANIFEST_PATH"
 done
 
 echo "All done. Outputs in: $OUTPUT_DIR | Manifest: $MANIFEST_PATH"

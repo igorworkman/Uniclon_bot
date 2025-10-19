@@ -6,8 +6,11 @@ IFS=$'\n\t'
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK_DIR="${BASE_DIR}/checks"
+LOW_UNIQUENESS_FLAG="${CHECK_DIR}/low_uniqueness.flag"
 
 mkdir -p "$CHECK_DIR"
+mkdir -p "$OUTPUT_DIR" "$PREVIEW_DIR"
+rm -f "$LOW_UNIQUENESS_FLAG"
 
 DEBUG=0
 MUSIC_VARIANT=0
@@ -19,6 +22,7 @@ AUTO_CLEAN=0
 ENABLE_MIRROR=${ENABLE_MIRROR:-0}
 ENABLE_INTRO=${ENABLE_INTRO:-0}
 ENABLE_LUT=${ENABLE_LUT:-0}
+DEVICE_INFO=1
 POSITIONAL=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -68,6 +72,9 @@ while [ "$#" -gt 0 ]; do
     --lut)
       ENABLE_LUT=1
       ;;
+    --no-device-info)
+      DEVICE_INFO=0
+      ;;
     *)
       POSITIONAL+=("$1")
       ;;
@@ -83,6 +90,7 @@ fi
 OUTPUT_DIR="Новая папка"
 MANIFEST="manifest.csv"
 MANIFEST_PATH="${OUTPUT_DIR}/${MANIFEST}"
+PREVIEW_DIR="${OUTPUT_DIR}/previews"
 TARGET_W=1080
 TARGET_H=1920
 AUDIO_BR="128k"
@@ -156,8 +164,8 @@ case "$QUALITY" in
     BR_MAX=5500
     ;;
   std|*)
-    QUALITY="std"
-    CRF=22
+QUALITY="std"
+CRF=22
     BR_MIN=3000
     BR_MAX=4000
     ;;
@@ -213,9 +221,6 @@ cleanup_temp_artifacts() {
 MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model,qt_software,ssim,phash_delta,quality_pass,quality,creative_mirror,creative_intro,creative_lut,preview"
 
 MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model,ssim,psnr,phash,quality_pass,quality"
-
-PHASH_TOOL_NOTIFIED=0
-PHASH_CMD=""
 
 if [ ! -f "$MANIFEST_PATH" ]; then
   echo "$MANIFEST_HEADER" > "$MANIFEST_PATH"
@@ -552,10 +557,45 @@ pick_qt_combo() {
   local profile="$1"
   local -a combos
   case "$profile" in
-    tiktok) combos=("Apple|iPhone 13 Pro" "Samsung|Galaxy S21" "Xiaomi|12") ;;
-    instagram) combos=("Apple|iPhone 13 Pro" "Google|Pixel 6" "Sony|Xperia 5 III") ;;
-    telegram) combos=("Samsung|Galaxy S21" "Google|Pixel 6" "OnePlus|9 Pro") ;;
-    *) combos=("Apple|iPhone 13 Pro" "Samsung|Galaxy S21" "Xiaomi|12" "Google|Pixel 6" "OnePlus|9 Pro" "Nothing|Phone (1)" "Sony|Xperia 5 III") ;;
+    tiktok)
+      combos=(
+        "Apple|iPhone 13 Pro|iPhone14,2"
+        "Apple|iPhone 12|iPhone13,2"
+        "Apple|iPhone 13 mini|iPhone14,4"
+        "Samsung|Galaxy S21|SM-G991B"
+      )
+      ;;
+    instagram)
+      combos=(
+        "Apple|iPhone 12 Pro|iPhone13,3"
+        "Apple|iPhone 14|iPhone15,2"
+        "Google|Pixel 6|Pixel 6"
+        "Sony|Xperia 5 III|XQ-BQ72"
+      )
+      ;;
+    telegram)
+      combos=(
+        "Apple|iPhone 12 mini|iPhone13,1"
+        "Samsung|Galaxy S22|SM-S901B"
+        "Google|Pixel 7|GVU6C"
+        "OnePlus|9 Pro|LE2123"
+      )
+      ;;
+    *)
+      combos=(
+        "Apple|iPhone 13 Pro|iPhone14,2"
+        "Apple|iPhone 12|iPhone13,2"
+        "Apple|iPhone 12 mini|iPhone13,1"
+        "Apple|iPhone 14|iPhone15,2"
+        "Samsung|Galaxy S21|SM-G991B"
+        "Samsung|Galaxy S22|SM-S901B"
+        "Google|Pixel 6|Pixel 6"
+        "Google|Pixel 7|GVU6C"
+        "OnePlus|9 Pro|LE2123"
+        "Sony|Xperia 5 III|XQ-BQ72"
+        "Nothing|Phone (1)|A063"
+      )
+      ;;
   esac
   local idx=$(( $(rng_next_chunk) % ${#combos[@]} ))
   echo "${combos[$idx]}"
@@ -583,7 +623,7 @@ compute_duration_profile() {
   if [ "$(rand_int 0 1)" -eq 0 ]; then
     sign=-1
   fi
-  read TARGET_DURATION STRETCH_FACTOR TEMPO_FACTOR <<EOF
+read TARGET_DURATION STRETCH_FACTOR TEMPO_FACTOR <<EOF
 $(awk -v orig="$ORIG_DURATION" -v delta="$delta" -v sign="$sign" 'BEGIN {
   orig+=0; delta+=0; sign+=0;
   target=orig + sign*delta;
@@ -598,6 +638,63 @@ $(awk -v orig="$ORIG_DURATION" -v delta="$delta" -v sign="$sign" 'BEGIN {
     tempo=(stretch != 0) ? 1.0/stretch : 1.0;
   }
   printf "%.3f %.6f %.6f", target, stretch, tempo;
+}')
+EOF
+}
+
+compute_clip_window() {
+  local base_target="$1"
+  local start_cap
+  start_cap=$(awk -v orig="$ORIG_DURATION" 'BEGIN{orig+=0; cap=orig*0.08; if(cap>0.35) cap=0.35; if(cap<0.0) cap=0.0; print cap}')
+  local shift="0.000"
+  if awk -v cap="$start_cap" 'BEGIN{exit (cap>0.05?0:1)}'; then
+    shift=$(rand_float 0.00 "$start_cap" 3)
+  fi
+  local dur_delta=$(rand_float 0.10 0.35 3)
+  local dur_sign=$(rand_int 0 1)
+  read CLIP_START CLIP_DURATION STRETCH_FACTOR TEMPO_FACTOR <<EOF
+$(awk -v orig="$ORIG_DURATION" -v base="$base_target" -v shift="$shift" -v delta="$dur_delta" -v sign="$dur_sign" 'BEGIN {
+  orig+=0; base+=0; shift+=0; delta+=0;
+  start=shift;
+  if (orig <= 0.6) {
+    start=0.0;
+  }
+  avail=orig - start;
+  if (avail < 0.6) {
+    start=0.0;
+    avail=orig;
+  }
+  target=base;
+  if (sign == 0) {
+    target=base - delta;
+  } else {
+    target=base + delta;
+  }
+  if (target < 0.30) {
+    target=0.30;
+  }
+  if (target >= avail) {
+    target=avail - 0.05;
+    if (target < 0.30) {
+      target=(avail > 0.35) ? avail - 0.02 : avail;
+    }
+  }
+  if (target <= 0.0) {
+    target=(avail > 0.35) ? avail - 0.02 : 0.30;
+  }
+  if (target <= 0.0) {
+    target=0.30;
+  }
+  stretch=1.0;
+  tempo=1.0;
+  if (avail > 0.0 && target > 0.0) {
+    stretch=target/avail;
+    if (stretch == 0) {
+      stretch=1.0;
+    }
+    tempo=(stretch != 0) ? 1.0/stretch : 1.0;
+  }
+  printf "%.3f %.3f %.6f %.6f", start, target, stretch, tempo;
 }')
 EOF
 }
@@ -785,6 +882,7 @@ pick_software_encoder() {
 
 REGEN_ITER=0
 REGEN_OCCURRED=0
+LOW_UNIQUENESS_TRIGGERED=0
 MAX_REGEN_ATTEMPTS=2
 
 duration_bucket() {
@@ -934,42 +1032,38 @@ remove_indices_for_regen() {
   LAST_COMBOS=("${RUN_COMBOS[@]}")
 }
 
-detect_phash_tool() {
-  if [ -n "$PHASH_CMD" ]; then
-    return 0
+compute_phash_diff() {
+  local source_file="$1" compare_file="$2" value="NA"
+  local py_path="$BASE_DIR"
+  if [ -n "${PYTHONPATH:-}" ]; then
+    py_path="${BASE_DIR}:${PYTHONPATH}"
   fi
-  if command -v phash-tool >/dev/null 2>&1; then
-    PHASH_CMD="phash-tool"
-    return 0
-  fi
-  if command -v ffmpeg-hash >/dev/null 2>&1; then
-    PHASH_CMD="ffmpeg-hash"
-    return 0
-  fi
-  return 1
-}
+  value=$(PYTHONPATH="$py_path" python3 - "$source_file" "$compare_file" <<'PY'
+import pathlib
+import sys
 
-compute_phash_value() {
-  local file_path="$1" value="NA"
-  if detect_phash_tool; then
-    case "$PHASH_CMD" in
-      phash-tool)
-        value=$(phash-tool "$file_path" 2>/dev/null || true)
-        value=$(printf '%s' "$value" | awk 'NF{print $NF; exit}')
-        ;;
-      ffmpeg-hash)
-        value=$(ffmpeg-hash "$file_path" 2>/dev/null || true)
-        value=$(printf '%s' "$value" | awk 'NF{print $NF; exit}')
-        ;;
-    esac
-    [ -n "$value" ] || value="NA"
-  else
-    if [ "$PHASH_TOOL_NOTIFIED" -eq 0 ]; then
-      echo "ℹ️ phash утилита не найдена, значения будут NA"
-      PHASH_TOOL_NOTIFIED=1
-    fi
-  fi
-  printf '%s' "$value"
+try:
+    import phash_check
+except Exception:  # noqa: BLE001
+    print("NA")
+    sys.exit(0)
+
+src = pathlib.Path(sys.argv[1])
+dst = pathlib.Path(sys.argv[2])
+
+try:
+    src_frame = phash_check._read_frame(src)
+    dst_frame = phash_check._read_frame(dst)
+    src_hash = phash_check._phash(src_frame)
+    dst_hash = phash_check._phash(dst_frame)
+    diff = phash_check._hamming(src_hash, dst_hash)
+except Exception:  # noqa: BLE001
+    print("NA")
+else:
+    print(diff)
+PY
+)
+  printf '%s' "${value:-NA}"
 }
 
 compute_metrics_for_copy() {
@@ -986,7 +1080,7 @@ compute_metrics_for_copy() {
       psnr_val="99.99"
       ;;
   esac
-  phash_val=$(compute_phash_value "$compare_file")
+  phash_val=$(compute_phash_diff "$source_file" "$compare_file")
   printf '%s|%s|%s' "$ssim_val" "$psnr_val" "$phash_val"
 }
 
@@ -1074,6 +1168,102 @@ warn_similar_copies() {
   fi
 }
 
+low_uniqueness_fallback() {
+  local total=${#RUN_FILES[@]}
+  if [ "$total" -lt 2 ]; then
+    return 1
+  fi
+
+  local idx low_ssim=0 low_phash=0
+  local -a candidates=()
+  local -a seen_indices=()
+
+  for idx in "${!RUN_FILES[@]}"; do
+    local ssim_val="${RUN_SSIM[$idx]:-0}"
+    local phash_val="${RUN_PHASH[$idx]:-0}"
+    local flag=0
+    local ssim_bad=0
+    local phash_bad=0
+    if awk -v s="$ssim_val" 'BEGIN{s+=0; exit (s<0.91?0:1)}'; then
+      low_ssim=$((low_ssim + 1))
+      flag=1
+      ssim_bad=1
+    fi
+    if [ "$phash_val" != "NA" ] && [ -n "$phash_val" ]; then
+      if awk -v p="$phash_val" 'BEGIN{p+=0; exit (p<5?0:1)}'; then
+        low_phash=$((low_phash + 1))
+        flag=1
+        phash_bad=1
+      fi
+    fi
+    if [ "$flag" -eq 1 ]; then
+      local score
+      score=$(awk -v s="$ssim_val" -v p="$phash_val" -v sb="$ssim_bad" -v pb="$phash_bad" 'BEGIN {
+        s+=0; p+=0;
+        bad_s = (sb>0 && s<0.91)?(0.91-s)*120:0;
+        bad_p = (pb>0 && p<5)?(5-p)*12:0;
+        printf "%07.3f", bad_s + bad_p;
+      }')
+      candidates+=("${score}|${idx}")
+    fi
+  done
+
+  local trigger=1
+  if ! awk -v low="$low_ssim" -v total="$total" 'BEGIN{exit (low*2>total?0:1)}'; then
+    if ! awk -v low="$low_phash" -v total="$total" 'BEGIN{exit (low*2>total?0:1)}'; then
+      trigger=0
+    fi
+  fi
+
+  if [ "$trigger" -eq 0 ] || [ "${#candidates[@]}" -eq 0 ]; then
+    return 1
+  fi
+
+  local regen_count=2
+  if [ "$total" -ge 3 ]; then
+    regen_count=$(rand_int 2 3)
+  fi
+  if [ "$regen_count" -gt "$total" ]; then
+    regen_count="$total"
+  fi
+
+  local selection
+  selection=$(printf '%s\n' "${candidates[@]}" | sort -r)
+  local -a regen_indices=()
+  while IFS='|' read -r _score raw_idx; do
+    [ -z "$raw_idx" ] && continue
+    regen_indices+=("$raw_idx")
+    if [ "${#regen_indices[@]}" -ge "$regen_count" ]; then
+      break
+    fi
+  done <<<"$selection"
+
+  if [ "${#regen_indices[@]}" -eq 0 ]; then
+    return 1
+  fi
+
+  echo "⚠️ Low uniqueness fallback triggered. Перегенерация копий: ${#regen_indices[@]}"
+  LOW_UNIQUENESS_TRIGGERED=1
+  REGEN_OCCURRED=1
+
+  local -a copy_ids=()
+  for idx in "${regen_indices[@]}"; do
+    copy_ids+=("$((idx + 1))")
+  done
+
+  remove_indices_for_regen "${regen_indices[@]}"
+
+  REGEN_ITER=$((REGEN_ITER + 1))
+  local sorted_ids
+  sorted_ids=$(printf '%s\n' "${copy_ids[@]}" | sort -n)
+  while IFS= read -r cid; do
+    [ -z "$cid" ] && continue
+    generate_copy "$cid" "$REGEN_ITER"
+  done <<<"$sorted_ids"
+
+  return 0
+}
+
 report_template_statistics() {
   [ -f "$MANIFEST_PATH" ] || return
   local stats
@@ -1129,6 +1319,10 @@ EOF
         echo "⚠️ Профиль $PROFILE_VALUE ограничил длительность ${original_duration}s → ${TARGET_DURATION}s"
       fi
     fi
+
+    local CLIP_START="0.000" CLIP_DURATION="$TARGET_DURATION"
+    compute_clip_window "$TARGET_DURATION"
+    TARGET_DURATION="$CLIP_DURATION"
 
     NOISE=0
     if [ "$(rand_int 1 100)" -le "$NOISE_PROB_PERCENT" ]; then
@@ -1253,31 +1447,50 @@ EOF
   fi
   TITLE="$FILE_STEM"
   DESCRIPTION="$(rand_description)"
-  local QT_MAKE="" QT_MODEL="" QT_SOFTWARE=""
+  local QT_MAKE="" QT_MODEL="" QT_SOFTWARE="" DEVICE_MODEL_CODE=""
   if [ "$QT_META" -eq 1 ]; then
+    local qt_choice=""
     case "$PROFILE_VALUE" in
       tiktok)
-        QT_MAKE="Apple"
-        QT_MODEL="iPhone 13 Pro"
+        qt_choice="Apple|iPhone 13 Pro|iPhone14,2"
         ;;
       instagram)
-        QT_MAKE="Samsung"
-        QT_MODEL="Galaxy S21"
+        qt_choice="Apple|iPhone 12 Pro|iPhone13,3"
         ;;
       telegram)
-        QT_MAKE="Google"
-        QT_MODEL="Pixel 6"
+        qt_choice="Apple|iPhone 12 mini|iPhone13,1"
         ;;
       *)
         ;;
     esac
-    if [ -z "$QT_MAKE" ] || [ -z "$QT_MODEL" ]; then
-      local qt_choice
+    if [ -z "$qt_choice" ] || [ "$(rand_int 0 1)" -eq 1 ]; then
       qt_choice=$(pick_qt_combo "$PROFILE_VALUE")
-      QT_MAKE="${qt_choice%%|*}"
-      QT_MODEL="${qt_choice#*|}"
     fi
-    QT_SOFTWARE=$(printf "VN 2.%02d" "$(rand_int 0 99)")
+    if [ -n "$qt_choice" ]; then
+      QT_MAKE="${qt_choice%%|*}"
+      local rest="${qt_choice#*|}"
+      QT_MODEL="${rest%%|*}"
+      if [ "$rest" != "$QT_MODEL" ]; then
+        DEVICE_MODEL_CODE="${rest#*|}"
+      fi
+    fi
+    if [ -z "$DEVICE_MODEL_CODE" ] && [ -n "$QT_MODEL" ]; then
+      case "$QT_MODEL" in
+        "iPhone 13 Pro") DEVICE_MODEL_CODE="iPhone14,2" ;;
+        "iPhone 12 Pro") DEVICE_MODEL_CODE="iPhone13,3" ;;
+        "iPhone 12") DEVICE_MODEL_CODE="iPhone13,2" ;;
+        "iPhone 13 mini") DEVICE_MODEL_CODE="iPhone14,4" ;;
+        "iPhone 12 mini") DEVICE_MODEL_CODE="iPhone13,1" ;;
+        *) DEVICE_MODEL_CODE="" ;;
+      esac
+    fi
+    local sw_major=$(rand_int 2 3)
+    local sw_minor=$(rand_int 0 9)
+    QT_SOFTWARE=$(printf "VN %d.%d" "$sw_major" "$sw_minor")
+    if [ "$(rand_int 0 1)" -eq 1 ]; then
+      local sw_patch=$(rand_int 0 9)
+      QT_SOFTWARE=$(printf "VN %d.%d.%d" "$sw_major" "$sw_minor" "$sw_patch")
+    fi
   fi
 
   # UID
@@ -1314,11 +1527,15 @@ EOF
   fi
   VF="${VF},drawtext=text='${UID_TAG}':fontcolor=white@0.08:fontsize=16:x=10:y=H-30"
 
-  FFMPEG_CMD=(ffmpeg -y -hide_banner -loglevel warning -i "$SRC")
-  if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
-    FFMPEG_CMD+=(-i "$MUSIC_VARIANT_TRACK" -map 0:v:0 -map 1:a:0 -shortest)
+  if ! awk -v d="$CLIP_DURATION" 'BEGIN{exit (d>0?0:1)}'; then
+    CLIP_DURATION="$TARGET_DURATION"
   fi
-  FFMPEG_CMD+=(-c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$VIDEO_LEVEL" -crf "$CRF"
+
+  FFMPEG_CMD=(ffmpeg -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC")
+  if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
+    FFMPEG_CMD+=(-ss "$CLIP_START" -i "$MUSIC_VARIANT_TRACK" -map 0:v:0 -map 1:a:0 -shortest)
+  fi
+  FFMPEG_CMD+=(-t "$CLIP_DURATION" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$VIDEO_LEVEL" -crf "$CRF"
     -r "$FPS" -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k"
     -vf "$VF"
     -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$AFILTER"
@@ -1332,7 +1549,7 @@ EOF
     "$ENCODE_TARGET")
 
   if [ "$DEBUG" -eq 1 ]; then
-    echo "DEBUG copy=$copy_index seed=$SEED fps=$FPS br=${BR}k crf=$CRF maxrate=${MAXRATE}k bufsize=${BUFSIZE}k target_duration=$TARGET_DURATION stretch=$STRETCH_FACTOR audio=$AUDIO_PROFILE af='$AFILTER' music_track=${MUSIC_VARIANT_TRACK:-none} noise=$NOISE crop=${CROP_W}x${CROP_H}@${CROP_X},${CROP_Y} pad=${PAD_X},${PAD_Y} quality=$QUALITY mirror=${MIRROR_DESC} lut=${LUT_DESC} intro=${INTRO_DESC}"
+    echo "DEBUG copy=$copy_index seed=$SEED fps=$FPS br=${BR}k crf=$CRF maxrate=${MAXRATE}k bufsize=${BUFSIZE}k clip_start=${CLIP_START}s target_duration=$TARGET_DURATION stretch=$STRETCH_FACTOR audio=$AUDIO_PROFILE af='$AFILTER' music_track=${MUSIC_VARIANT_TRACK:-none} noise=$NOISE crop=${CROP_W}x${CROP_H}@${CROP_X},${CROP_Y} pad=${PAD_X},${PAD_Y} quality=$QUALITY mirror=${MIRROR_DESC} lut=${LUT_DESC} intro=${INTRO_DESC}"
   fi
 
   echo "▶️ [$copy_index/$COUNT] $SRC → $OUT | fps=$FPS br=${BR}k noise=$NOISE crop=${CROP_W}x${CROP_H} duration=${TARGET_DURATION}s audio=${AUDIO_PROFILE} mirror=${MIRROR_DESC} lut=${LUT_DESC} intro=${INTRO_DESC}"
@@ -1371,11 +1588,25 @@ EOF
     -QuickTime:ModifyDate="$CREATION_TIME_EXIF"
   )
   if [ "$QT_META" -eq 1 ]; then
-    if [ -n "$QT_MAKE" ] && [ -n "$QT_MODEL" ]; then
-      EXIF_CMD+=(-QuickTime:Make="$QT_MAKE" -QuickTime:Model="$QT_MODEL")
+    if [ "$DEVICE_INFO" -eq 1 ]; then
+      if [ -n "$QT_MAKE" ]; then
+        EXIF_CMD+=(-Make="$QT_MAKE")
+      fi
+      local model_payload=""
+      if [ -n "$DEVICE_MODEL_CODE" ]; then
+        model_payload="$DEVICE_MODEL_CODE"
+      elif [ -n "$QT_MODEL" ]; then
+        model_payload="$QT_MODEL"
+      fi
+      if [ -n "$model_payload" ]; then
+        EXIF_CMD+=(-Model="$model_payload")
+      fi
+      if [ -n "$QT_MAKE" ] && [ -n "$QT_MODEL" ]; then
+        EXIF_CMD+=(-QuickTime:Make="$QT_MAKE" -QuickTime:Model="$QT_MODEL" -QuickTime:com.apple.quicktime.make="$QT_MAKE" -QuickTime:com.apple.quicktime.model="$QT_MODEL")
+      fi
     fi
     if [ -n "$QT_SOFTWARE" ]; then
-      EXIF_CMD+=(-com.apple.quicktime.software="$QT_SOFTWARE")
+      EXIF_CMD+=(-QuickTime:com.apple.quicktime.software="$QT_SOFTWARE")
     fi
   fi
   EXIF_CMD+=("$OUT")
@@ -1384,10 +1615,10 @@ EOF
   touch_randomize_mtime "$OUT"
   FILE_NAME="$(basename "$OUT")"
   local PREVIEW_NAME=""
-  local PREVIEW_PATH="${OUTPUT_DIR}/${FILE_STEM}_preview.png"
-  if ffmpeg -y -hide_banner -loglevel error -i "$OUT" -ss 00:00:01 -vframes 1 "$PREVIEW_PATH"; then
+  local PREVIEW_PATH="${PREVIEW_DIR}/${FILE_STEM}.png"
+  if ffmpeg -y -hide_banner -loglevel error -ss 00:00:01.000 -i "$OUT" -vframes 1 "$PREVIEW_PATH"; then
     if [ -s "$PREVIEW_PATH" ]; then
-      PREVIEW_NAME="$(basename "$PREVIEW_PATH")"
+      PREVIEW_NAME="previews/${FILE_STEM}.png"
     else
       echo "⚠️ Превью для $FILE_NAME пустое"
       rm -f "$PREVIEW_PATH"
@@ -1440,6 +1671,14 @@ for ((i=1;i<=COUNT;i++)); do
   generate_copy "$i" "$REGEN_ITER"
 done
 
+fallback_attempts=0
+while low_uniqueness_fallback; do
+  fallback_attempts=$((fallback_attempts + 1))
+  if [ "$fallback_attempts" -ge 2 ]; then
+    break
+  fi
+done
+
 quality_round=0
 quality_pass_all=false
 while :; do
@@ -1469,6 +1708,18 @@ while :; do
       generate_copy "$idx" "$REGEN_ITER"
     done
   done
+
+  local fallback_happened=0
+  while low_uniqueness_fallback; do
+    fallback_happened=1
+    fallback_attempts=$((fallback_attempts + 1))
+    if [ "$fallback_attempts" -ge 3 ]; then
+      break
+    fi
+  done
+  if [ "$fallback_happened" -eq 1 ]; then
+    continue
+  fi
 
   validated_flag=true
   if [ "$max_dup" -ge "$threshold" ]; then
@@ -1550,6 +1801,10 @@ run_self_audit_pipeline() {
 }
 
 run_self_audit_pipeline
+
+if [ "$LOW_UNIQUENESS_TRIGGERED" -eq 1 ]; then
+  printf '⚠️ Low uniqueness fallback triggered.' >"$LOW_UNIQUENESS_FLAG"
+fi
 
 if [ "$AUTO_CLEAN" -eq 1 ]; then
   cleanup_temp_artifacts

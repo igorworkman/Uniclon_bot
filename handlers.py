@@ -14,7 +14,15 @@ from aiogram.utils.markdown import hcode
 from aiogram.types.input_file import FSInputFile
 
 # REGION AI: imports
-from config import BASE_DIR, OUTPUT_DIR, MAX_COPIES, LOG_TAIL_CHARS, CLEAN_UP_INPUT
+from config import (
+    BASE_DIR,
+    OUTPUT_DIR,
+    MAX_COPIES,
+    LOG_TAIL_CHARS,
+    CLEAN_UP_INPUT,
+    CHECKS_DIR,
+    FORCE_ZIP_ARCHIVE,
+)
 from utils import parse_copies_from_caption, parse_filename_and_copies
 from downloader import download_telegram_file
 from executor import run_script_with_logs, list_new_mp4s, probe_video_duration
@@ -651,6 +659,7 @@ async def _run_and_send(
     before = {p.resolve() for p in OUTPUT_DIR.glob('*.mp4')}
     start_ts = time.time()
     lang = _get_user_lang(message)
+    preview_dir = OUTPUT_DIR / "previews"
 
     if profile and profile.lower() == "tiktok":
         try:
@@ -723,7 +732,7 @@ async def _run_and_send(
         removed_previews = 0
         user_id = message.from_user.id if message.from_user else 0
         for file_path in new_files:
-            preview_path = file_path.with_name(f"{file_path.stem}_preview.png")
+            preview_path = preview_dir / f"{file_path.stem}.png"
             if preview_path.exists():
                 try:
                     preview_path.unlink()
@@ -749,7 +758,8 @@ async def _run_and_send(
     archive_path: Optional[Path] = None
     archive_sent = False
 
-    if len(new_files) > 10:
+    should_zip = len(new_files) > 10 or FORCE_ZIP_ARCHIVE
+    if should_zip:
         total_size = 0
         total_known = True
         for file_path in new_files:
@@ -760,6 +770,20 @@ async def _run_and_send(
                 logger.warning("Failed to read size of %s for archive estimation: %s", file_path, exc)
             if total_size > _TELEGRAM_DOCUMENT_LIMIT:
                 break
+
+        manifest_path = OUTPUT_DIR / "manifest.csv"
+        report_path = CHECKS_DIR / "uniclon_report.csv"
+        extra_files: List[Path] = []
+        if manifest_path.exists():
+            extra_files.append(manifest_path)
+        if report_path.exists():
+            extra_files.append(report_path)
+
+        for extra in extra_files:
+            try:
+                total_size += extra.stat().st_size
+            except OSError:
+                continue
 
         if total_size <= _TELEGRAM_DOCUMENT_LIMIT:
             archive_name = f"uniclon_{int(time.time())}_{message.message_id or 'zip'}"
@@ -772,13 +796,18 @@ async def _run_and_send(
                         except OSError as exc:
                             logger.exception("Failed to add %s to archive: %s", file_path, exc)
                             raise
+                    for extra in extra_files:
+                        try:
+                            archive.write(extra, arcname=extra.name)
+                        except OSError as exc:
+                            logger.warning("Failed to add %s to archive: %s", extra, exc)
             except Exception:
                 logger.exception("Failed to build archive %s", archive_path)
             else:
                 try:
                     await message.answer_document(
                         document=FSInputFile(archive_path),
-                        caption="📦 Ваши уникализированные видео в архиве (10+ файлов)",
+                        caption="📦 Архив с уникализированными видео + manifest.csv + uniclon_report.csv",
                     )
                 except Exception:
                     logger.exception("Failed to send archive %s", archive_path)
@@ -801,6 +830,16 @@ async def _run_and_send(
                 logger.exception("Failed to send video %s; fallback to document", p)
                 await message.answer_document(document=FSInputFile(p), caption=p.name)
             sent += 1
+            if save_preview:
+                preview_path = preview_dir / f"{p.stem}.png"
+                if preview_path.exists():
+                    try:
+                        await message.answer_photo(
+                            photo=FSInputFile(preview_path),
+                            caption=f"Preview: {preview_path.name}",
+                        )
+                    except Exception:
+                        logger.exception("Failed to send preview %s", preview_path)
 
     if archive_path and archive_path.exists():
         try:
@@ -828,13 +867,23 @@ async def _run_and_send(
         diversified = "Yes" if audit_summary.encoder_diversified else "No"
         timestamps_label = "Yes" if audit_summary.timestamps_randomized else "No"
 
+        fallback_line = None
+        if audit_summary.low_uniqueness_fallback:
+            fallback_line = (
+                audit_summary.low_uniqueness_message
+                or "⚠️ Low uniqueness fallback triggered."
+            )
+
         warning_text = ""
         if audit_summary.status_warnings:
             humanized: List[str] = []
             for raw in audit_summary.status_warnings:
+                if fallback_line and raw.strip() == fallback_line.strip():
+                    continue
                 cleaned = raw.replace("WARNING_", "").replace(";", ", ")
                 humanized.append(cleaned.replace("_", " ").title())
-            warning_text = f"⚠️ Status warnings: {', '.join(humanized)}"
+            if humanized:
+                warning_text = f"⚠️ Status warnings: {', '.join(humanized)}"
 
         report_lines = [
             f"🧾 Uniclon Audit Report ({audit_summary.source_name})",
@@ -845,6 +894,8 @@ async def _run_and_send(
             f"🧠 Encoder/software diversified: {diversified}",
             f"🕒 Timestamps randomized: {timestamps_label}",
         ]
+        if fallback_line:
+            report_lines.insert(1, fallback_line)
         if warning_text:
             report_lines.append(warning_text)
         report_lines.extend(

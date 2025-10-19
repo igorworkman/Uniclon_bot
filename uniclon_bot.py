@@ -8,6 +8,7 @@ from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
@@ -181,7 +182,7 @@ def make_bot() -> Bot:
 
 
 def make_dispatcher() -> Dispatcher:
-    dp = Dispatcher()
+    dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     dp.message.register(handle_clean_command, Command("clean"))
     return dp

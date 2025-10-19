@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Dict, Iterable, Optional, Set, Tuple, TYPE_CHECKING
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.markdown import hcode
 from aiogram.types.input_file import FSInputFile
 
@@ -36,7 +39,22 @@ _VALID_PROFILES = {
     "tiktok": "TikTok",
     "instagram": "Instagram",
     "telegram": "Telegram",
+    "youtube": "YouTube Shorts",
 }
+
+
+class FSM(StatesGroup):
+    awaiting_copies = State()
+    awaiting_profile = State()
+
+
+def _profile_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(text=_VALID_PROFILES["tiktok"], callback_data="profile:tiktok"),
+        InlineKeyboardButton(text=_VALID_PROFILES["instagram"], callback_data="profile:instagram"),
+        InlineKeyboardButton(text=_VALID_PROFILES["youtube"], callback_data="profile:youtube"),
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
 
 
 def set_task_queue(queue: "UserTaskQueue") -> None:
@@ -172,12 +190,16 @@ async def handle_profile(message: Message) -> None:
     user_id = message.from_user.id
     text = (message.text or "").split(maxsplit=1)
     if len(text) < 2:
-        await message.answer("⚠️ Профиль не поддерживается. Доступны: tiktok, instagram, telegram")
+        await message.answer(
+            "⚠️ Профиль не поддерживается. Доступны: tiktok, instagram, telegram, youtube"
+        )
         return
 
     value = text[1].strip().lower()
     if value not in _VALID_PROFILES:
-        await message.answer("⚠️ Профиль не поддерживается. Доступны: tiktok, instagram, telegram")
+        await message.answer(
+            "⚠️ Профиль не поддерживается. Доступны: tiktok, instagram, telegram, youtube"
+        )
         return
 
     _set_profile(user_id, value)
@@ -203,6 +225,16 @@ async def handle_quality(message: Message) -> None:
     _set_quality(user_id, value)
     label = "High" if value == "high" else "Std"
     await message.answer(f"✅ Качество установлено: {label}")
+
+
+@router.message(Command("cancel"))
+async def handle_cancel(message: Message, state: FSMContext) -> None:
+    current = await state.get_state()
+    if not current:
+        await message.answer("Нет активного диалога.")
+        return
+    await state.clear()
+    await message.answer("Диалог отменён.")
 
 
 @router.message(Command("status"))
@@ -279,17 +311,18 @@ async def on_start(message: Message) -> None:
 
 
 # Принимаем видео
-@router.message(F.video)
-async def handle_video(message: Message, bot) -> None:
-    lang = _get_user_lang(message)
-    copies = parse_copies_from_caption(message.caption or "")
-    copies = await _ensure_valid_copies(message, copies, "hint_video_caption")
-    if copies is None:
-        return
 
+
+async def _process_video_submission(
+    message: Message,
+    bot,
+    copies: int,
+    lang: str,
+    *,
+    profile_override: Optional[str] = None,
+) -> None:
     ack = await message.reply(get_text(lang, "saving_video", copies=copies))
 
-    # Download input
     tmp_name = f"input_{message.message_id}.mp4"
     dest_path = BASE_DIR / tmp_name
     try:
@@ -314,7 +347,109 @@ async def handle_video(message: Message, bot) -> None:
     await ack.edit_text(
         get_text(lang, "file_saved", filename=hcode(input_path.name))
     )
-    await _enqueue_processing(message, ack, input_path, copies, lang)
+    await _enqueue_processing(
+        message,
+        ack,
+        input_path,
+        copies,
+        lang,
+        profile_override=profile_override,
+    )
+
+
+@router.message(F.video)
+async def handle_video(message: Message, bot, state: FSMContext) -> None:
+    lang = _get_user_lang(message)
+    copies = parse_copies_from_caption(message.caption or "")
+    copies = await _ensure_valid_copies(message, copies, "hint_video_caption")
+    if copies is None:
+        await state.clear()
+        await state.set_state(FSM.awaiting_copies)
+        await state.update_data(message=message)
+        await message.answer(
+            f"Сколько копий вам нужно создать? Введите число от 1 до {MAX_COPIES}."
+        )
+        return
+
+    await state.clear()
+    await _process_video_submission(message, bot, copies, lang)
+
+
+@router.message(FSM.awaiting_copies)
+async def handle_copies_input(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    original_message: Optional[Message] = data.get("message")
+    if (
+        not original_message
+        or not message.from_user
+        or not original_message.from_user
+        or message.from_user.id != original_message.from_user.id
+    ):
+        await message.answer("Сессия не найдена. Отправьте видео ещё раз.")
+        await state.clear()
+        return
+
+    text = (message.text or "").strip()
+    try:
+        copies = int(text)
+    except ValueError:
+        await message.answer(f"Введите число от 1 до {MAX_COPIES}.")
+        return
+
+    if copies < 1 or copies > MAX_COPIES:
+        await message.answer(f"Введите число от 1 до {MAX_COPIES}.")
+        return
+
+    await state.update_data(copies=copies)
+    await message.answer("Выберите профиль платформы:", reply_markup=_profile_keyboard())
+    await state.set_state(FSM.awaiting_profile)
+
+
+@router.callback_query(FSM.awaiting_profile)
+async def handle_profile_choice(callback: CallbackQuery, state: FSMContext) -> None:
+    data = callback.data or ""
+    if not data.startswith("profile:"):
+        await callback.answer("Некорректный выбор", show_alert=True)
+        return
+
+    profile = data.split(":", 1)[1]
+    if profile not in {"tiktok", "instagram", "youtube"}:
+        await callback.answer("Профиль недоступен", show_alert=True)
+        return
+
+    stored = await state.get_data()
+    original_message: Optional[Message] = stored.get("message")
+    copies = stored.get("copies")
+
+    if (
+        not original_message
+        or copies is None
+        or not callback.from_user
+        or not original_message.from_user
+        or callback.from_user.id != original_message.from_user.id
+    ):
+        await state.clear()
+        await callback.answer("Сессия устарела", show_alert=True)
+        return
+
+    await state.clear()
+    if callback.message:
+        try:
+            await callback.message.edit_reply_markup()
+        except Exception:
+            pass
+
+    await callback.answer(f"{_VALID_PROFILES.get(profile, profile)} выбрано")
+
+    lang = _get_user_lang(original_message)
+    bot = callback.bot
+    await _process_video_submission(
+        original_message,
+        bot,
+        copies,
+        lang,
+        profile_override=profile,
+    )
 
 
 # Принимаем документ (.mp4)
@@ -397,10 +532,12 @@ async def _enqueue_processing(
     input_path: Path,
     copies: int,
     lang: str,
+    *,
+    profile_override: Optional[str] = None,
 ) -> None:
     queue = _get_task_queue()
     user_id = message.from_user.id if message.from_user else 0
-    profile = _get_profile(user_id)
+    profile = profile_override if profile_override is not None else _get_profile(user_id)
     quality = _get_quality(user_id)
 
     removed_auto = auto_cleanup_stale_outputs(user_id)

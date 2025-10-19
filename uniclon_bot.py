@@ -1,6 +1,7 @@
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
@@ -11,13 +12,20 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.exceptions import TelegramAPIError
+from aiogram.filters import Command
+from aiogram.types import Message
 from aiohttp import ClientError
 
 load_dotenv()
 
 # REGION AI: local imports
 from config import BOT_TOKEN, BOT_API_BASE, OUTPUT_DIR
-from handlers import router, set_task_queue
+from handlers import (
+    cleanup_user_outputs,
+    get_user_output_paths,
+    router,
+    set_task_queue,
+)
 # END REGION AI
 
 
@@ -26,6 +34,8 @@ class TaskInfo:
     task_id: int
     label: str
     status: str
+    created_at: float
+    started_at: Optional[float] = None
 
 
 class UserTaskQueue:
@@ -52,7 +62,9 @@ class UserTaskQueue:
             workers = self._workers.setdefault(user_id, [])
             self._task_counter += 1
             task_id = self._task_counter
-            self._tasks.setdefault(user_id, []).append(TaskInfo(task_id, label, "pending"))
+            self._tasks.setdefault(user_id, []).append(
+                TaskInfo(task_id, label, "pending", time.time())
+            )
             await queue.put((task_id, task_factory))
             while len(workers) < self._per_user_limit:
                 workers.append(asyncio.create_task(self._worker(user_id, queue)))
@@ -90,6 +102,7 @@ class UserTaskQueue:
                     for info in self._tasks.get(user_id, []):
                         if info.task_id == task_id:
                             info.status = "active"
+                            info.started_at = time.time()
                             break
                 try:
                     await task_factory()
@@ -121,6 +134,42 @@ class UserTaskQueue:
             return list(self._tasks.get(user_id, []))
 
 
+_TASK_QUEUE_REF: Optional["UserTaskQueue"] = None
+
+
+def set_task_queue_reference(queue: Optional["UserTaskQueue"]) -> None:
+    global _TASK_QUEUE_REF
+    _TASK_QUEUE_REF = queue
+
+
+async def handle_clean_command(message: Message) -> None:
+    if not message.from_user:
+        return
+
+    user_id = message.from_user.id
+    keep_newer_than: Optional[float] = None
+    queue = _TASK_QUEUE_REF
+    if queue is not None:
+        tasks = await queue.get_user_tasks(user_id)
+        active_starts = [info.started_at for info in tasks if info.status == "active"]
+        active_starts = [ts for ts in active_starts if ts]
+        if active_starts:
+            guard_window = 30.0
+            keep_newer_than = max(0.0, min(active_starts) - guard_window)
+
+    existing = get_user_output_paths(user_id)
+    if existing:
+        removed, skipped = cleanup_user_outputs(user_id, keep_newer_than=keep_newer_than)
+        logging.info(
+            "Manual clean for user=%s removed=%s skipped=%s", user_id, removed, skipped
+        )
+    else:
+        # ensure registry cleanup even if no files are tracked
+        cleanup_user_outputs(user_id, keep_newer_than=keep_newer_than)
+
+    await message.answer("🧹 Старые копии удалены.")
+
+
 def make_bot() -> Bot:
     if BOT_API_BASE:
         session = AiohttpSession(api=TelegramAPIServer.from_base(BOT_API_BASE))
@@ -131,6 +180,7 @@ def make_bot() -> Bot:
 def make_dispatcher() -> Dispatcher:
     dp = Dispatcher()
     dp.include_router(router)
+    dp.message.register(handle_clean_command, Command("clean"))
     return dp
 
 
@@ -144,6 +194,7 @@ async def run_polling() -> None:
         logging.info("Outputs and manifest stored in %s", OUTPUT_DIR)
         task_queue = UserTaskQueue()
         set_task_queue(task_queue)
+        set_task_queue_reference(task_queue)
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     except (TelegramAPIError, ClientError, ValueError) as exc:
         logging.exception("Failed to start polling due to invalid token or API configuration: %s", exc)
@@ -153,6 +204,7 @@ async def run_polling() -> None:
             await bot.session.close()
         if task_queue:
             await task_queue.close()
+        set_task_queue_reference(None)
 
 
 if __name__ == "__main__":

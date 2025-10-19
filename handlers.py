@@ -2,7 +2,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Dict, Optional, TYPE_CHECKING
+from typing import Dict, Iterable, Optional, Set, Tuple, TYPE_CHECKING
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 _task_queue: Optional["UserTaskQueue"] = None
 _user_profiles: Dict[int, str] = {}
 _user_quality: Dict[int, str] = {}
+_user_outputs: Dict[int, Set[Path]] = {}
 
 _VALID_PROFILES = {
     "tiktok": "TikTok",
@@ -64,6 +65,101 @@ def _get_quality(user_id: int) -> str:
 
 def _set_quality(user_id: int, quality: str) -> None:
     _user_quality[user_id] = quality
+
+
+def register_user_outputs(user_id: int, files: Iterable[Path]) -> None:
+    files = list(files)
+    if not files:
+        return
+
+    registry = _user_outputs.setdefault(user_id, set())
+    for raw_path in files:
+        try:
+            resolved = raw_path.resolve()
+        except FileNotFoundError:
+            continue
+        registry.add(resolved)
+
+
+def get_user_output_paths(user_id: int) -> Set[Path]:
+    recorded = _user_outputs.get(user_id)
+    if not recorded:
+        return set()
+
+    existing: Set[Path] = set()
+    for item in recorded:
+        try:
+            if item.exists():
+                existing.add(item)
+        except OSError:
+            continue
+
+    if existing:
+        _user_outputs[user_id] = existing
+    else:
+        _user_outputs.pop(user_id, None)
+
+    return set(existing)
+
+
+def cleanup_user_outputs(
+    user_id: int,
+    *,
+    keep_newer_than: Optional[float] = None,
+    max_mtime: Optional[float] = None,
+) -> Tuple[int, int]:
+    recorded = list(_user_outputs.get(user_id, set()))
+    removed = 0
+    skipped = 0
+
+    if not recorded:
+        _user_outputs.pop(user_id, None)
+        return removed, skipped
+
+    remaining: Set[Path] = set()
+    for path in recorded:
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logger.warning("Failed to stat %s during cleanup: %s", path, exc)
+            remaining.add(path)
+            continue
+
+        mtime = stat.st_mtime
+        should_remove = True
+        if keep_newer_than is not None and mtime >= keep_newer_than:
+            should_remove = False
+        if max_mtime is not None and mtime > max_mtime:
+            should_remove = False
+
+        if should_remove:
+            try:
+                path.unlink()
+                removed += 1
+            except FileNotFoundError:
+                removed += 1
+            except OSError as exc:
+                logger.warning("Failed to remove %s during cleanup: %s", path, exc)
+                remaining.add(path)
+                continue
+        else:
+            remaining.add(path)
+            skipped += 1
+
+    if remaining:
+        _user_outputs[user_id] = remaining
+    else:
+        _user_outputs.pop(user_id, None)
+
+    return removed, skipped
+
+
+def auto_cleanup_stale_outputs(user_id: int, older_than_seconds: int = 3600) -> int:
+    threshold = time.time() - older_than_seconds
+    removed, _ = cleanup_user_outputs(user_id, max_mtime=threshold)
+    return removed
 
 
 @router.message(Command("profile"))
@@ -300,6 +396,10 @@ async def _enqueue_processing(
     profile = _get_profile(user_id)
     quality = _get_quality(user_id)
 
+    removed_auto = auto_cleanup_stale_outputs(user_id)
+    if removed_auto:
+        logger.info("Auto-clean removed %s stale files for user=%s", removed_auto, user_id)
+
     async def task() -> None:
         await _run_and_send(message, ack, input_path, copies, profile, quality)
 
@@ -386,6 +486,9 @@ async def _run_and_send(
         return
 
     new_files = sorted(new_files)[:copies]
+
+    if message.from_user:
+        register_user_outputs(message.from_user.id, new_files)
 
     await message.answer("Готово! Отправляю уникализированные копии…")
 

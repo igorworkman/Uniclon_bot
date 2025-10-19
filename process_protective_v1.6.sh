@@ -10,6 +10,7 @@ PROFILE=""
 QT_META=1
 STRICT_CLEAN=0
 QUALITY="std"
+AUTO_CLEAN=0
 POSITIONAL=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -46,6 +47,9 @@ while [ "$#" -gt 0 ]; do
           ;;
       esac
       shift
+      ;;
+    --auto-clean)
+      AUTO_CLEAN=1
       ;;
     *)
       POSITIONAL+=("$1")
@@ -140,6 +144,38 @@ COUNT="${2:-1}"
 [[ "$COUNT" =~ ^[0-9]+$ ]] || { echo "❌ count должен быть числом"; exit 1; }
 
 mkdir -p "$OUTPUT_DIR"
+
+cleanup_temp_artifacts() {
+  local removed=0
+  local -a patterns=("*.tmp" "*.log" "*.txt" "*.info" "*.wav" "*.m4a" "*.aac" "*.mp3" "*.mov" "*.MOV")
+  local dir pattern file
+
+  for dir in "." "$OUTPUT_DIR"; do
+    [ -d "$dir" ] || continue
+    for pattern in "${patterns[@]}"; do
+      while IFS= read -r -d '' file; do
+        if [ "$dir" = "$OUTPUT_DIR" ] && [[ "$file" == *.mp4 ]]; then
+          continue
+        fi
+        if rm -f "$file" 2>/dev/null; then
+          removed=$((removed + 1))
+        fi
+      done < <(find "$dir" -maxdepth 1 -type f -name "$pattern" -print0)
+    done
+  done
+
+  for dir in "logs" "$OUTPUT_DIR/logs"; do
+    if [ -d "$dir" ]; then
+      if rm -rf "$dir" 2>/dev/null; then
+        removed=$((removed + 1))
+      fi
+    fi
+  done
+
+  if [ "$removed" -gt 0 ]; then
+    echo "🧹 Auto-clean удалил временные файлы: $removed"
+  fi
+}
 
 MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model,ssim,phash_delta,quality_pass,quality"
 
@@ -989,5 +1025,9 @@ fi
 for idx in "${!RUN_FILES[@]}"; do
   echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]},${RUN_QT_MAKES[$idx]},${RUN_QT_MODELS[$idx]},${RUN_SSIM[$idx]},${RUN_PHASH[$idx]},${RUN_QPASS[$idx]},${RUN_QUALITIES[$idx]}" >> "$MANIFEST_PATH"
 done
+
+if [ "$AUTO_CLEAN" -eq 1 ]; then
+  cleanup_temp_artifacts
+fi
 
 echo "All done. Outputs in: $OUTPUT_DIR | Manifest: $MANIFEST_PATH"

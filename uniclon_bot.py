@@ -166,63 +166,71 @@ async def perform_self_audit(
         return None
 
     report_rows: List[Dict[str, str]] = []
+    metrics_map: Dict[str, Dict[str, str]] = {}
     with report_path.open("r", encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh)
         for row in reader:
             report_rows.append(row)
+            name = (row.get("file") or row.get("filename") or "").strip()
+            if name:
+                metrics_map[name] = row
 
     target_names = {p.name for p in generated_files}
     if not target_names:
-        target_names = {
-            (row.get("file") or row.get("filename") or "").strip()
-            for row in report_rows
-            if (row.get("file") or row.get("filename"))
-        }
+        target_names = set(metrics_map)
 
     mean_ssim = 0.0
     ssim_values: List[float] = []
-    if quality_path.exists():
+    phash_values: List[float] = []
+    bitrates: List[float] = []
+
+    for name in target_names:
+        row = metrics_map.get(name)
+        if not row:
+            continue
+        ssim_values.extend(
+            _extract_float([row.get("SSIM"), row.get("ssim")])
+        )
+        phash_values.extend(
+            _extract_float([row.get("pHash"), row.get("phash"), row.get("phash_diff")])
+        )
+        bitrates.extend(
+            _extract_float([row.get("bitrate"), row.get("bitrate_kbps")])
+        )
+
+    if not ssim_values and quality_path.exists():
         with quality_path.open("r", encoding="utf-8", newline="") as fh:
             reader = csv.DictReader(fh)
             for row in reader:
                 name = (row.get("file") or row.get("filename") or "").strip()
                 if name and name in target_names:
-                    ssim = row.get("SSIM") or row.get("ssim")
-                    try:
-                        ssim_values.append(float(ssim))
-                    except (TypeError, ValueError):
-                        continue
-    if ssim_values:
-        mean_ssim = round(mean(ssim_values), 3)
+                    ssim_values.extend(
+                        _extract_float([row.get("SSIM"), row.get("ssim")])
+                    )
 
-    phash_values: List[float] = []
-    if phash_path.exists():
+    if not phash_values and phash_path.exists():
         with phash_path.open("r", encoding="utf-8", newline="") as fh:
             reader = csv.DictReader(fh)
             for row in reader:
                 name = (row.get("file") or row.get("filename") or "").strip()
                 if name and name in target_names:
-                    diff = row.get("phash_diff") or row.get("phash")
-                    try:
-                        phash_values.append(float(diff))
-                    except (TypeError, ValueError):
-                        continue
+                    phash_values.extend(
+                        _extract_float([row.get("phash_diff"), row.get("phash")])
+                    )
+
+    if ssim_values:
+        mean_ssim = round(mean(ssim_values), 3)
+
     mean_phash = round(mean(phash_values), 1) if phash_values else 0.0
 
     bitrate_variation = 0.0
-    bitrates: List[float] = []
-    for row in report_rows:
-        name = (row.get("file") or row.get("filename") or "").strip()
-        if name and name in target_names:
-            bitrates.extend(
-                _extract_float([row.get("bitrate_kbps"), row.get("bitrate")])
-            )
-
     if bitrates:
         avg_bitrate = sum(bitrates) / len(bitrates)
         if avg_bitrate > 0:
-            deviation = max(abs(b - avg_bitrate) for b in bitrates)
+            deviation = sum(abs(b - avg_bitrate) for b in bitrates) / len(bitrates)
             bitrate_variation = round((deviation / avg_bitrate) * 100, 1)
+        else:
+            bitrate_variation = 0.0
 
     trust_score = _calculate_trust_score(
         mean_ssim,

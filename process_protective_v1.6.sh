@@ -178,6 +178,8 @@ cleanup_temp_artifacts() {
 }
 
 MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model,ssim,phash_delta,quality_pass,quality"
+IMG_COUNTER_BASE=0
+IMG_COUNTER_NEXT=0
 
 if [ ! -f "$MANIFEST_PATH" ]; then
   echo "$MANIFEST_HEADER" > "$MANIFEST_PATH"
@@ -314,6 +316,44 @@ rand_uint32() {
   echo $(( (hi << 16) | lo ))
 }
 
+ensure_img_counters() {
+  if [ "$IMG_COUNTER_BASE" -eq 0 ]; then
+    IMG_COUNTER_BASE=$(rand_int 6200 7999)
+    IMG_COUNTER_NEXT="$IMG_COUNTER_BASE"
+  fi
+}
+
+iso_to_epoch() {
+  local iso="$1"
+  if date_supports_d_flag; then
+    date -u -d "$iso" +%s
+  else
+    date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$iso" +%s
+  fi
+}
+
+epoch_to_iso() {
+  local epoch="$1"
+  if date_supports_d_flag; then
+    date -u -d "@$epoch" +"%Y-%m-%dT%H:%M:%SZ"
+  else
+    date -u -r "$epoch" +"%Y-%m-%dT%H:%M:%SZ"
+  fi
+}
+
+jitter_iso_timestamp() {
+  local iso="$1"
+  local minutes=$(rand_int 1 5)
+  local seconds=$((minutes * 60))
+  if [ "$(rand_int 0 1)" -eq 0 ]; then
+    seconds=$(( -seconds ))
+  fi
+  local epoch
+  epoch=$(iso_to_epoch "$iso")
+  epoch=$((epoch + seconds))
+  epoch_to_iso "$epoch"
+}
+
 file_size_bytes() {
   local size
   if size=$(stat -c %s "$1" 2>/dev/null); then
@@ -360,8 +400,10 @@ generate_media_name() {
   local ts_for_name=$(printf "%s%s%s_%s%s%s" "$y" "$m" "$d" "$hh" "$mm" "$ss")
   local roll=$(rand_int 0 99)
   if [ "$roll" -lt 25 ]; then
-    local img_suffix=$(rand_int 6000 6999)
-    printf "IMG_%d MOV\n" "$img_suffix"
+    ensure_img_counters
+    local img_id="$IMG_COUNTER_NEXT"
+    IMG_COUNTER_NEXT=$((IMG_COUNTER_NEXT + 1))
+    printf "IMG_%04d MOV\n" "$img_id"
   else
     printf "VID_%s mp4\n" "$ts_for_name"
   fi
@@ -837,11 +879,13 @@ EOF
   pick_software_encoder "$PROFILE_VALUE" "$SEED_HEX"
 
   CREATION_TIME=$(generate_iso_timestamp)
+  CREATION_TIME=$(jitter_iso_timestamp "$CREATION_TIME")
   CREATION_TIME_EXIF="$CREATION_TIME"
   read FILE_STEM FILE_EXT <<<"$(generate_media_name "$CREATION_TIME")"
   OUT="${OUTPUT_DIR}/${FILE_STEM}.${FILE_EXT}"
   while [ -e "$OUT" ]; do
     CREATION_TIME=$(generate_iso_timestamp)
+    CREATION_TIME=$(jitter_iso_timestamp "$CREATION_TIME")
     CREATION_TIME_EXIF="$CREATION_TIME"
     read FILE_STEM FILE_EXT <<<"$(generate_media_name "$CREATION_TIME")"
     OUT="${OUTPUT_DIR}/${FILE_STEM}.${FILE_EXT}"

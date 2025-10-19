@@ -224,7 +224,11 @@ async def handle_status(message: Message) -> None:
     lines = ["📊 Ваши задачи:"]
     for idx, task in enumerate(tasks, 1):
         status = status_labels.get(task.status, task.status)
-        lines.append(f"{idx}. {task.label} — {status}")
+        profile_label = ""
+        if getattr(task, "profile", None):
+            human = _VALID_PROFILES.get(task.profile or "", task.profile)
+            profile_label = f" [{human}]"
+        lines.append(f"{idx}. {task.label}{profile_label} — {status}")
 
     await message.answer("\n".join(lines))
 
@@ -411,7 +415,7 @@ async def _enqueue_processing(
         return
 
     try:
-        await queue.enqueue(user_id, task, input_path.name)
+        await queue.enqueue(user_id, task, input_path.name, profile=profile or None)
     except RuntimeError:
         await task()
         return

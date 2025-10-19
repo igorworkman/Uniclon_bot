@@ -11,6 +11,9 @@ QT_META=1
 STRICT_CLEAN=0
 QUALITY="std"
 AUTO_CLEAN=0
+ENABLE_MIRROR=${ENABLE_MIRROR:-0}
+ENABLE_INTRO=${ENABLE_INTRO:-0}
+ENABLE_LUT=${ENABLE_LUT:-0}
 POSITIONAL=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -51,6 +54,15 @@ while [ "$#" -gt 0 ]; do
     --auto-clean)
       AUTO_CLEAN=1
       ;;
+    --mirror)
+      ENABLE_MIRROR=1
+      ;;
+    --intro)
+      ENABLE_INTRO=1
+      ;;
+    --lut)
+      ENABLE_LUT=1
+      ;;
     *)
       POSITIONAL+=("$1")
       ;;
@@ -74,6 +86,10 @@ BR_MAX=5000
 FPS_BASE=(24 25 30 50 59.94 60)
 FPS_RARE=(23.976 27 29.97 48 53.95 57)
 AUDIO_SR=44100
+PROFILE_FORCE_FPS=""
+PROFILE_MAX_DURATION=0
+VIDEO_PROFILE="high"
+VIDEO_LEVEL="4.0"
 
 case "$PROFILE" in
   tiktok)
@@ -81,9 +97,13 @@ case "$PROFILE" in
     TARGET_H=1920
     BR_MIN=3500
     BR_MAX=3500
-    FPS_BASE=(30 60)
+    FPS_BASE=(30)
     FPS_RARE=()
     AUDIO_SR=44100
+    PROFILE_FORCE_FPS=30
+    PROFILE_MAX_DURATION=60
+    VIDEO_PROFILE="high"
+    VIDEO_LEVEL="4.0"
     ;;
   instagram)
     TARGET_W=1080
@@ -93,6 +113,8 @@ case "$PROFILE" in
     FPS_BASE=(30)
     FPS_RARE=()
     AUDIO_SR=48000
+    VIDEO_PROFILE="high"
+    VIDEO_LEVEL="4.1"
     ;;
   telegram)
     TARGET_W=1280
@@ -102,6 +124,8 @@ case "$PROFILE" in
     FPS_BASE=(25)
     FPS_RARE=()
     AUDIO_SR=48000
+    VIDEO_PROFILE="main"
+    VIDEO_LEVEL="3.1"
     ;;
   "" )
     ;;
@@ -116,6 +140,8 @@ CROP_MAX_PX=6
 AUDIO_TWEAK_PROB_PERCENT=50
 MUSIC_VARIANT_TRACKS=()
 MUSIC_VARIANT_TRACK=""
+INTRO_CLIPS=()
+LUT_FILES=()
 
 case "$QUALITY" in
   high)
@@ -177,7 +203,7 @@ cleanup_temp_artifacts() {
   fi
 }
 
-MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model,ssim,phash_delta,quality_pass,quality"
+MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model,qt_software,ssim,phash_delta,quality_pass,quality,creative_mirror,creative_intro,creative_lut,preview"
 IMG_COUNTER_BASE=0
 IMG_COUNTER_NEXT=0
 
@@ -227,14 +253,14 @@ else
     TMP_MANIFEST=$(mktemp)
     {
       IFS= read -r header_line
-      echo "${header_line},qt_make,qt_model"
+      echo "${header_line},qt_make,qt_model,qt_software"
       while IFS= read -r data_line; do
         [ -z "$data_line" ] && continue
-        echo "${data_line},,"
+        echo "${data_line},,,"
       done
     } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
     mv "$TMP_MANIFEST" "$MANIFEST_PATH"
-    echo "ℹ️ manifest обновлён: добавлены колонки qt_make и qt_model"
+    echo "ℹ️ manifest обновлён: добавлены колонки qt_make, qt_model и qt_software"
   fi
   if ! head -n1 "$MANIFEST_PATH" | grep -q ",ssim"; then
     TMP_MANIFEST=$(mktemp)
@@ -261,6 +287,19 @@ else
     } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
     mv "$TMP_MANIFEST" "$MANIFEST_PATH"
     echo "ℹ️ manifest обновлён: добавлена колонка quality"
+  fi
+  if ! head -n1 "$MANIFEST_PATH" | grep -q ",creative_mirror"; then
+    TMP_MANIFEST=$(mktemp)
+    {
+      IFS= read -r header_line
+      echo "${header_line},creative_mirror,creative_intro,creative_lut,preview"
+      while IFS= read -r data_line; do
+        [ -z "$data_line" ] && continue
+        echo "${data_line},,,,"
+      done
+    } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
+    mv "$TMP_MANIFEST" "$MANIFEST_PATH"
+    echo "ℹ️ manifest обновлён: добавлены creative-колонки и preview"
   fi
 fi
 
@@ -314,6 +353,10 @@ rand_uint32() {
   local hi=$(rng_next_chunk)
   local lo=$(rng_next_chunk)
   echo $(( (hi << 16) | lo ))
+}
+
+escape_single_quotes() {
+  printf "%s" "$1" | sed "s/'/\\\\'/g"
 }
 
 ensure_img_counters() {
@@ -441,6 +484,10 @@ pick_qt_combo() {
 }
 
 select_fps() {
+  if [ -n "$PROFILE_FORCE_FPS" ]; then
+    echo "$PROFILE_FORCE_FPS"
+    return
+  fi
   local use_rare=0
   if [ ${#FPS_RARE[@]} -gt 0 ] && [ "$(rand_int 1 100)" -le 22 ]; then
     use_rare=1
@@ -532,6 +579,42 @@ collect_music_variants() {
   done
 }
 
+collect_intro_clips() {
+  INTRO_CLIPS=()
+  local src_dir="$(cd "$(dirname "$SRC")" && pwd)"
+  local search_dirs=()
+  if [ -d "${src_dir}/intros" ]; then
+    search_dirs+=("${src_dir}/intros")
+  fi
+  if [ -d "${PWD}/intros" ]; then
+    search_dirs+=("${PWD}/intros")
+  fi
+  for dir in "${search_dirs[@]}"; do
+    [ -d "$dir" ] || continue
+    while IFS= read -r -d '' clip; do
+      INTRO_CLIPS+=("$clip")
+    done < <(find "$dir" -maxdepth 1 -type f \( -iname '*.mp4' -o -iname '*.mov' -o -iname '*.mkv' -o -iname '*.webm' \) -print0)
+  done
+}
+
+collect_lut_files() {
+  LUT_FILES=()
+  local src_dir="$(cd "$(dirname "$SRC")" && pwd)"
+  local search_dirs=()
+  if [ -d "${src_dir}/luts" ]; then
+    search_dirs+=("${src_dir}/luts")
+  fi
+  if [ -d "${PWD}/luts" ]; then
+    search_dirs+=("${PWD}/luts")
+  fi
+  for dir in "${search_dirs[@]}"; do
+    [ -d "$dir" ] || continue
+    while IFS= read -r -d '' lut; do
+      LUT_FILES+=("$lut")
+    done < <(find "$dir" -maxdepth 1 -type f -iname '*.cube' -print0)
+  done
+}
+
 pick_music_variant_track() {
   MUSIC_VARIANT_TRACK=""
   local total=${#MUSIC_VARIANT_TRACKS[@]}
@@ -554,6 +637,18 @@ if [ "$MUSIC_VARIANT" -eq 1 ]; then
   collect_music_variants
 fi
 
+if [ "$ENABLE_INTRO" -eq 1 ]; then
+  collect_intro_clips
+  if [ ${#INTRO_CLIPS[@]} -eq 0 ]; then
+    echo "⚠️ Включено интро, но клипы не найдены (ожидается папка intros/)"
+    ENABLE_INTRO=0
+  fi
+fi
+
+if [ "$ENABLE_LUT" -eq 1 ]; then
+  collect_lut_files
+fi
+
 COMBO_HISTORY=""
 declare -a LAST_COMBOS=()
 declare -a RUN_FILES=()
@@ -572,9 +667,14 @@ declare -a RUN_PROFILES=()
 declare -a RUN_QUALITIES=()
 declare -a RUN_QT_MAKES=()
 declare -a RUN_QT_MODELS=()
+declare -a RUN_QT_SOFTWARES=()
 declare -a RUN_SSIM=()
 declare -a RUN_PHASH=()
 declare -a RUN_QPASS=()
+declare -a RUN_CREATIVE_MIRROR=()
+declare -a RUN_CREATIVE_INTRO=()
+declare -a RUN_CREATIVE_LUT=()
+declare -a RUN_PREVIEWS=()
 declare -a QUALITY_ISSUES=()
 declare -a QUALITY_COPY_IDS=()
 declare -A USED_SOFT_ENC=()
@@ -673,7 +773,11 @@ remove_last_generated() {
     local combo_key="${RUN_SOFTWARES[$idx]}|${RUN_ENCODERS[$idx]}"
     unset "USED_SOFT_ENC[$combo_key]"
     local file_path="${OUTPUT_DIR}/${RUN_FILES[$idx]}"
+    local preview_file="${RUN_PREVIEWS[$idx]:-}"
     rm -f "$file_path" 2>/dev/null || true
+    if [ -n "$preview_file" ]; then
+      rm -f "${OUTPUT_DIR}/${preview_file}" 2>/dev/null || true
+    fi
     RUN_FILES=("${RUN_FILES[@]:0:$idx}")
     RUN_BITRATES=("${RUN_BITRATES[@]:0:$idx}")
     RUN_FPS=("${RUN_FPS[@]:0:$idx}")
@@ -690,9 +794,14 @@ remove_last_generated() {
     RUN_QUALITIES=("${RUN_QUALITIES[@]:0:$idx}")
     RUN_QT_MAKES=("${RUN_QT_MAKES[@]:0:$idx}")
     RUN_QT_MODELS=("${RUN_QT_MODELS[@]:0:$idx}")
+    RUN_QT_SOFTWARES=("${RUN_QT_SOFTWARES[@]:0:$idx}")
     RUN_SSIM=("${RUN_SSIM[@]:0:$idx}")
     RUN_PHASH=("${RUN_PHASH[@]:0:$idx}")
     RUN_QPASS=("${RUN_QPASS[@]:0:$idx}")
+    RUN_CREATIVE_MIRROR=("${RUN_CREATIVE_MIRROR[@]:0:$idx}")
+    RUN_CREATIVE_INTRO=("${RUN_CREATIVE_INTRO[@]:0:$idx}")
+    RUN_CREATIVE_LUT=("${RUN_CREATIVE_LUT[@]:0:$idx}")
+    RUN_PREVIEWS=("${RUN_PREVIEWS[@]:0:$idx}")
     if [ ${#LAST_COMBOS[@]} -gt 0 ]; then
       LAST_COMBOS=("${LAST_COMBOS[@]:0:${#LAST_COMBOS[@]}-1}")
     fi
@@ -713,6 +822,9 @@ remove_indices_for_regen() {
     local combo_key="${RUN_SOFTWARES[$idx]}|${RUN_ENCODERS[$idx]}"
     unset "USED_SOFT_ENC[$combo_key]"
     rm -f "${OUTPUT_DIR}/${RUN_FILES[$idx]}" 2>/dev/null || true
+    if [ -n "${RUN_PREVIEWS[$idx]:-}" ]; then
+      rm -f "${OUTPUT_DIR}/${RUN_PREVIEWS[$idx]}" 2>/dev/null || true
+    fi
     RUN_FILES=("${RUN_FILES[@]:0:$idx}" "${RUN_FILES[@]:$((idx + 1))}")
     RUN_BITRATES=("${RUN_BITRATES[@]:0:$idx}" "${RUN_BITRATES[@]:$((idx + 1))}")
     RUN_FPS=("${RUN_FPS[@]:0:$idx}" "${RUN_FPS[@]:$((idx + 1))}")
@@ -729,9 +841,14 @@ remove_indices_for_regen() {
     RUN_QUALITIES=("${RUN_QUALITIES[@]:0:$idx}" "${RUN_QUALITIES[@]:$((idx + 1))}")
     RUN_QT_MAKES=("${RUN_QT_MAKES[@]:0:$idx}" "${RUN_QT_MAKES[@]:$((idx + 1))}")
     RUN_QT_MODELS=("${RUN_QT_MODELS[@]:0:$idx}" "${RUN_QT_MODELS[@]:$((idx + 1))}")
+    RUN_QT_SOFTWARES=("${RUN_QT_SOFTWARES[@]:0:$idx}" "${RUN_QT_SOFTWARES[@]:$((idx + 1))}")
     RUN_SSIM=("${RUN_SSIM[@]:0:$idx}" "${RUN_SSIM[@]:$((idx + 1))}")
     RUN_PHASH=("${RUN_PHASH[@]:0:$idx}" "${RUN_PHASH[@]:$((idx + 1))}")
     RUN_QPASS=("${RUN_QPASS[@]:0:$idx}" "${RUN_QPASS[@]:$((idx + 1))}")
+    RUN_CREATIVE_MIRROR=("${RUN_CREATIVE_MIRROR[@]:0:$idx}" "${RUN_CREATIVE_MIRROR[@]:$((idx + 1))}")
+    RUN_CREATIVE_INTRO=("${RUN_CREATIVE_INTRO[@]:0:$idx}" "${RUN_CREATIVE_INTRO[@]:$((idx + 1))}")
+    RUN_CREATIVE_LUT=("${RUN_CREATIVE_LUT[@]:0:$idx}" "${RUN_CREATIVE_LUT[@]:$((idx + 1))}")
+    RUN_PREVIEWS=("${RUN_PREVIEWS[@]:0:$idx}" "${RUN_PREVIEWS[@]:$((idx + 1))}")
   done <<<"$sorted"
   LAST_COMBOS=("${RUN_COMBOS[@]}")
 }
@@ -785,23 +902,25 @@ generate_copy() {
 
     compute_duration_profile
 
-    if [ "$PROFILE" = "tiktok" ]; then
-      if [ "$(awk -v dur="$TARGET_DURATION" 'BEGIN{print (dur>60)?1:0}')" -eq 1 ]; then
-        TARGET_DURATION="60.000"
+    if [ -n "$PROFILE_MAX_DURATION" ] && [ "$PROFILE_MAX_DURATION" -gt 0 ]; then
+      if [ "$(awk -v dur="$TARGET_DURATION" -v limit="$PROFILE_MAX_DURATION" 'BEGIN{print (dur>limit)?1:0}')" -eq 1 ]; then
+        local original_duration="$TARGET_DURATION"
+        TARGET_DURATION=$(awk -v limit="$PROFILE_MAX_DURATION" 'BEGIN{printf "%.3f", limit+0}')
         read STRETCH_FACTOR TEMPO_FACTOR <<EOF
-$(awk -v orig="$ORIG_DURATION" 'BEGIN {
+$(awk -v orig="$ORIG_DURATION" -v limit="$PROFILE_MAX_DURATION" 'BEGIN {
   orig+=0;
-  target=60.0;
+  limit+=0;
   stretch=1.0;
   tempo=1.0;
   if (orig > 0.0) {
-    stretch=target/orig;
+    stretch=limit/orig;
     if (stretch == 0) stretch=1.0;
     tempo=(stretch != 0) ? 1.0/stretch : 1.0;
   }
   printf "%.6f %.6f", stretch, tempo;
 }')
 EOF
+        echo "⚠️ Профиль $PROFILE_VALUE ограничил длительность ${original_duration}s → ${TARGET_DURATION}s"
       fi
     fi
 
@@ -836,6 +955,41 @@ EOF
       if [ -n "$MUSIC_VARIANT_TRACK" ]; then
         AUDIO_PROFILE="${AUDIO_PROFILE}+music"
       fi
+    fi
+
+    local MIRROR_DESC="none" MIRROR_FILTER="" MIRROR_ACTIVE=0
+    if [ "$ENABLE_MIRROR" -eq 1 ]; then
+      MIRROR_ACTIVE=1
+      if [ "$(rand_int 0 1)" -eq 0 ]; then
+        MIRROR_FILTER="hflip"
+      else
+        MIRROR_FILTER="vflip"
+      fi
+      MIRROR_DESC="$MIRROR_FILTER"
+    fi
+
+    local LUT_DESC="none" LUT_FILTER="" LUT_ACTIVE=0
+    if [ "$ENABLE_LUT" -eq 1 ]; then
+      LUT_ACTIVE=1
+      if [ ${#LUT_FILES[@]} -gt 0 ]; then
+        local lut_choice
+        lut_choice=$(rand_choice LUT_FILES)
+        LUT_DESC="$(basename "$lut_choice")"
+        LUT_DESC="${LUT_DESC//,/ _}"
+        LUT_FILTER="lut3d=file='$(escape_single_quotes "$lut_choice")':interp=tetrahedral"
+      else
+        LUT_DESC="curves_vintage"
+        LUT_FILTER="curves=preset=vintage"
+      fi
+    fi
+
+    local INTRO_ACTIVE=0 INTRO_SOURCE="" INTRO_DURATION="" INTRO_DESC="none"
+    if [ "$ENABLE_INTRO" -eq 1 ] && [ ${#INTRO_CLIPS[@]} -gt 0 ]; then
+      INTRO_ACTIVE=1
+      INTRO_SOURCE=$(rand_choice INTRO_CLIPS)
+      INTRO_DURATION=$(rand_float 1.0 2.0 2)
+      INTRO_DESC="$(basename "$INTRO_SOURCE")"
+      INTRO_DESC="${INTRO_DESC//,/ _}"
     fi
 
     combo_key="${FPS}|${BR}|${TARGET_DURATION}"
@@ -890,14 +1044,41 @@ EOF
     read FILE_STEM FILE_EXT <<<"$(generate_media_name "$CREATION_TIME")"
     OUT="${OUTPUT_DIR}/${FILE_STEM}.${FILE_EXT}"
   done
+  local FINAL_OUT="$OUT"
+  local ENCODE_TARGET="$FINAL_OUT"
+  local INTRO_OUTPUT_PATH=""
+  local CONCAT_LIST_FILE=""
+  if [ "$INTRO_ACTIVE" -eq 1 ] && [ -n "$INTRO_SOURCE" ]; then
+    ENCODE_TARGET=$(mktemp "${OUTPUT_DIR}/.intro_main_XXXXXX.${FILE_EXT}")
+    INTRO_OUTPUT_PATH=$(mktemp "${OUTPUT_DIR}/.intro_clip_XXXXXX.${FILE_EXT}")
+  fi
   TITLE="$FILE_STEM"
   DESCRIPTION="$(rand_description)"
-  local QT_MAKE="" QT_MODEL=""
+  local QT_MAKE="" QT_MODEL="" QT_SOFTWARE=""
   if [ "$QT_META" -eq 1 ]; then
-    local qt_choice
-    qt_choice=$(pick_qt_combo "$PROFILE_VALUE")
-    QT_MAKE="${qt_choice%%|*}"
-    QT_MODEL="${qt_choice#*|}"
+    case "$PROFILE_VALUE" in
+      tiktok)
+        QT_MAKE="Apple"
+        QT_MODEL="iPhone 13 Pro"
+        ;;
+      instagram)
+        QT_MAKE="Samsung"
+        QT_MODEL="Galaxy S21"
+        ;;
+      telegram)
+        QT_MAKE="Google"
+        QT_MODEL="Pixel 6"
+        ;;
+      *)
+        ;;
+    esac
+    if [ -z "$QT_MAKE" ] || [ -z "$QT_MODEL" ]; then
+      local qt_choice
+      qt_choice=$(pick_qt_combo "$PROFILE_VALUE")
+      QT_MAKE="${qt_choice%%|*}"
+      QT_MODEL="${qt_choice#*|}"
+    fi
+    QT_SOFTWARE=$(printf "VN 2.%02d" "$(rand_int 0 99)")
   fi
 
   # UID
@@ -926,16 +1107,22 @@ EOF
     VF="${VF},crop=${CROP_WIDTH}:${CROP_HEIGHT}:${CROP_X}:${CROP_Y}"
     VF="${VF},pad=${TARGET_W}:${TARGET_H}:${PAD_X}:${PAD_Y}:black"
   fi
+  if [ "$MIRROR_ACTIVE" -eq 1 ]; then
+    VF="${VF},${MIRROR_FILTER}"
+  fi
+  if [ "$LUT_ACTIVE" -eq 1 ] && [ -n "$LUT_FILTER" ]; then
+    VF="${VF},${LUT_FILTER}"
+  fi
   VF="${VF},drawtext=text='${UID_TAG}':fontcolor=white@0.08:fontsize=16:x=10:y=H-30"
 
   FFMPEG_CMD=(ffmpeg -y -hide_banner -loglevel warning -i "$SRC")
   if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
     FFMPEG_CMD+=(-i "$MUSIC_VARIANT_TRACK" -map 0:v:0 -map 1:a:0 -shortest)
   fi
-  FFMPEG_CMD+=(-c:v libx264 -preset slow -profile:v high -level 4.0 -crf "$CRF"
+  FFMPEG_CMD+=(-c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$VIDEO_LEVEL" -crf "$CRF"
     -r "$FPS" -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k"
     -vf "$VF"
-    -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -af "$AFILTER"
+    -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$AFILTER"
     -movflags +faststart
     -metadata encoder="$ENCODER_TAG"
     -metadata software="$SOFTWARE_TAG"
@@ -943,15 +1130,34 @@ EOF
     -metadata title="$TITLE"
     -metadata description="$DESCRIPTION"
     -metadata comment="$UID_TAG"
-    "$OUT")
+    "$ENCODE_TARGET")
 
   if [ "$DEBUG" -eq 1 ]; then
-    echo "DEBUG copy=$copy_index seed=$SEED fps=$FPS br=${BR}k crf=$CRF maxrate=${MAXRATE}k bufsize=${BUFSIZE}k target_duration=$TARGET_DURATION stretch=$STRETCH_FACTOR audio=$AUDIO_PROFILE af='$AFILTER' music_track=${MUSIC_VARIANT_TRACK:-none} noise=$NOISE crop=${CROP_W}x${CROP_H}@${CROP_X},${CROP_Y} pad=${PAD_X},${PAD_Y} quality=$QUALITY"
+    echo "DEBUG copy=$copy_index seed=$SEED fps=$FPS br=${BR}k crf=$CRF maxrate=${MAXRATE}k bufsize=${BUFSIZE}k target_duration=$TARGET_DURATION stretch=$STRETCH_FACTOR audio=$AUDIO_PROFILE af='$AFILTER' music_track=${MUSIC_VARIANT_TRACK:-none} noise=$NOISE crop=${CROP_W}x${CROP_H}@${CROP_X},${CROP_Y} pad=${PAD_X},${PAD_Y} quality=$QUALITY mirror=${MIRROR_DESC} lut=${LUT_DESC} intro=${INTRO_DESC}"
   fi
 
-  echo "▶️ [$copy_index/$COUNT] $SRC → $OUT | fps=$FPS br=${BR}k noise=$NOISE crop=${CROP_W}x${CROP_H} duration=${TARGET_DURATION}s audio=${AUDIO_PROFILE}"
+  echo "▶️ [$copy_index/$COUNT] $SRC → $OUT | fps=$FPS br=${BR}k noise=$NOISE crop=${CROP_W}x${CROP_H} duration=${TARGET_DURATION}s audio=${AUDIO_PROFILE} mirror=${MIRROR_DESC} lut=${LUT_DESC} intro=${INTRO_DESC}"
 
   "${FFMPEG_CMD[@]}"
+
+  if [ "$INTRO_ACTIVE" -eq 1 ] && [ -n "$INTRO_SOURCE" ] && [ -n "$INTRO_OUTPUT_PATH" ]; then
+    ffmpeg -y -hide_banner -loglevel warning -t "$INTRO_DURATION" -i "$INTRO_SOURCE" \
+      -vf "scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1" \
+      -r "$FPS" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$VIDEO_LEVEL" -crf "$CRF" \
+      -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 \
+      -af "aresample=${AUDIO_SR},apad,atrim=0:${INTRO_DURATION}" -movflags +faststart "$INTRO_OUTPUT_PATH"
+    CONCAT_LIST_FILE=$(mktemp "${OUTPUT_DIR}/.intro_concat_XXXXXX.txt")
+    {
+      printf "file '%s'\n" "$INTRO_OUTPUT_PATH"
+      printf "file '%s'\n" "$ENCODE_TARGET"
+    } > "$CONCAT_LIST_FILE"
+    ffmpeg -y -hide_banner -loglevel warning -f concat -safe 0 -i "$CONCAT_LIST_FILE" -c copy -movflags +faststart "$FINAL_OUT"
+    rm -f "$CONCAT_LIST_FILE" "$INTRO_OUTPUT_PATH"
+    rm -f "$ENCODE_TARGET"
+    OUT="$FINAL_OUT"
+  else
+    OUT="$ENCODE_TARGET"
+  fi
 
   EXIF_CMD=(
     exiftool
@@ -965,8 +1171,13 @@ EOF
     -QuickTime:CreateDate="$CREATION_TIME_EXIF"
     -QuickTime:ModifyDate="$CREATION_TIME_EXIF"
   )
-  if [ "$QT_META" -eq 1 ] && [ -n "$QT_MAKE" ] && [ -n "$QT_MODEL" ]; then
-    EXIF_CMD+=(-QuickTime:Make="$QT_MAKE" -QuickTime:Model="$QT_MODEL")
+  if [ "$QT_META" -eq 1 ]; then
+    if [ -n "$QT_MAKE" ] && [ -n "$QT_MODEL" ]; then
+      EXIF_CMD+=(-QuickTime:Make="$QT_MAKE" -QuickTime:Model="$QT_MODEL")
+    fi
+    if [ -n "$QT_SOFTWARE" ]; then
+      EXIF_CMD+=(-com.apple.quicktime.software="$QT_SOFTWARE")
+    fi
   fi
   EXIF_CMD+=("$OUT")
   "${EXIF_CMD[@]}" >/dev/null
@@ -974,6 +1185,19 @@ EOF
   FAKE_TS=$(iso_to_touch_ts "$CREATION_TIME")
   touch -t "$FAKE_TS" "$OUT"
   FILE_NAME="$(basename "$OUT")"
+  local PREVIEW_NAME=""
+  local PREVIEW_PATH="${OUTPUT_DIR}/${FILE_STEM}_preview.png"
+  if ffmpeg -y -hide_banner -loglevel error -i "$OUT" -ss 00:00:01 -vframes 1 "$PREVIEW_PATH"; then
+    if [ -s "$PREVIEW_PATH" ]; then
+      PREVIEW_NAME="$(basename "$PREVIEW_PATH")"
+    else
+      echo "⚠️ Превью для $FILE_NAME пустое"
+      rm -f "$PREVIEW_PATH"
+    fi
+  else
+    echo "⚠️ Не удалось создать превью для $FILE_NAME"
+    rm -f "$PREVIEW_PATH" 2>/dev/null || true
+  fi
   BITRATE_RAW=$(ffprobe -v error -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 "$OUT")
   BITRATE=$(awk -v b="$BITRATE_RAW" 'BEGIN{if(b==""||b=="N/A") printf "0"; else printf "%.0f", b/1000}')
   DURATION_RAW=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$OUT")
@@ -996,6 +1220,11 @@ EOF
   RUN_QUALITIES+=("$QUALITY")
   RUN_QT_MAKES+=("$QT_MAKE")
   RUN_QT_MODELS+=("$QT_MODEL")
+  RUN_QT_SOFTWARES+=("$QT_SOFTWARE")
+  RUN_CREATIVE_MIRROR+=("$MIRROR_DESC")
+  RUN_CREATIVE_INTRO+=("$INTRO_DESC")
+  RUN_CREATIVE_LUT+=("$LUT_DESC")
+  RUN_PREVIEWS+=("$PREVIEW_NAME")
   echo "✅ done: $OUT"
 }
 
@@ -1067,7 +1296,7 @@ if [ "$REGEN_OCCURRED" -eq 1 ]; then
 fi
 
 for idx in "${!RUN_FILES[@]}"; do
-  echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]},${RUN_QT_MAKES[$idx]},${RUN_QT_MODELS[$idx]},${RUN_SSIM[$idx]},${RUN_PHASH[$idx]},${RUN_QPASS[$idx]},${RUN_QUALITIES[$idx]}" >> "$MANIFEST_PATH"
+  echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]},${RUN_QT_MAKES[$idx]},${RUN_QT_MODELS[$idx]},${RUN_QT_SOFTWARES[$idx]},${RUN_SSIM[$idx]},${RUN_PHASH[$idx]},${RUN_QPASS[$idx]},${RUN_QUALITIES[$idx]},${RUN_CREATIVE_MIRROR[$idx]},${RUN_CREATIVE_INTRO[$idx]},${RUN_CREATIVE_LUT[$idx]},${RUN_PREVIEWS[$idx]}" >> "$MANIFEST_PATH"
 done
 
 if [ "$AUTO_CLEAN" -eq 1 ]; then

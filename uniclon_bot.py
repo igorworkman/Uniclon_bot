@@ -169,7 +169,7 @@ def _derive_trust_label(score: float, profile_label: Optional[str]) -> Tuple[str
     return label, emoji
 
 
-async def perform_self_audit(
+async def _perform_self_audit_impl(
     source: Path,
     generated_files: Sequence[Path],
 ) -> Optional[AuditSummary]:
@@ -418,8 +418,9 @@ async def perform_self_audit(
     )
 
 
+# REGION AI: handlers imports
+from utils import cleanup_user_outputs
 from handlers import (
-    cleanup_user_outputs,
     get_user_output_paths,
     router,
     set_task_queue,

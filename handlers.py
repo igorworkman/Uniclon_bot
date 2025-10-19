@@ -23,10 +23,14 @@ from config import (
     CHECKS_DIR,
     FORCE_ZIP_ARCHIVE,
 )
-from utils import parse_copies_from_caption, parse_filename_and_copies
+from utils import (
+    parse_copies_from_caption,
+    parse_filename_and_copies,
+    perform_self_audit,
+    cleanup_user_outputs,
+)
 from downloader import download_telegram_file
 from executor import run_script_with_logs, list_new_mp4s, probe_video_duration
-from uniclon_bot import perform_self_audit
 # END REGION AI
 from locales import get_text
 
@@ -140,7 +144,7 @@ def get_user_output_paths(user_id: int) -> Set[Path]:
     return set(existing)
 
 
-def cleanup_user_outputs(
+def _cleanup_user_outputs_impl(
     user_id: int,
     *,
     keep_newer_than: Optional[float] = None,

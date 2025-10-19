@@ -809,7 +809,7 @@ compute_phash_value() {
     [ -n "$value" ] || value="NA"
   else
     if [ "$PHASH_TOOL_NOTIFIED" -eq 0 ]; then
-      echo "ℹ️ phash утилита не найдена, значения будут NA"
+      >&2 printf '%s\n' "ℹ️ phash утилита не найдена, значения будут NA"
       PHASH_TOOL_NOTIFIED=1
     fi
   fi

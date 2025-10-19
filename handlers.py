@@ -46,6 +46,7 @@ _VALID_PROFILES = {
 class FSM(StatesGroup):
     awaiting_copies = State()
     awaiting_profile = State()
+    awaiting_preview = State()
 
 
 def _profile_keyboard() -> InlineKeyboardMarkup:
@@ -53,6 +54,14 @@ def _profile_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=_VALID_PROFILES["tiktok"], callback_data="profile:tiktok"),
         InlineKeyboardButton(text=_VALID_PROFILES["instagram"], callback_data="profile:instagram"),
         InlineKeyboardButton(text=_VALID_PROFILES["youtube"], callback_data="profile:youtube"),
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
+
+
+def _preview_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(text="Да", callback_data="preview:yes"),
+        InlineKeyboardButton(text="Нет", callback_data="preview:no"),
     ]
     return InlineKeyboardMarkup(inline_keyboard=[buttons])
 
@@ -320,6 +329,7 @@ async def _process_video_submission(
     lang: str,
     *,
     profile_override: Optional[str] = None,
+    save_preview: bool = True,
 ) -> None:
     ack = await message.reply(get_text(lang, "saving_video", copies=copies))
 
@@ -354,6 +364,7 @@ async def _process_video_submission(
         copies,
         lang,
         profile_override=profile_override,
+        save_preview=save_preview,
     )
 
 
@@ -372,7 +383,9 @@ async def handle_video(message: Message, bot, state: FSMContext) -> None:
         return
 
     await state.clear()
-    await _process_video_submission(message, bot, copies, lang)
+    await state.update_data(message=message, copies=copies)
+    await message.answer("Выберите профиль платформы:", reply_markup=_profile_keyboard())
+    await state.set_state(FSM.awaiting_profile)
 
 
 @router.message(FSM.awaiting_copies)
@@ -432,7 +445,7 @@ async def handle_profile_choice(callback: CallbackQuery, state: FSMContext) -> N
         await callback.answer("Сессия устарела", show_alert=True)
         return
 
-    await state.clear()
+    await state.update_data(profile=profile)
     if callback.message:
         try:
             await callback.message.edit_reply_markup()
@@ -440,6 +453,54 @@ async def handle_profile_choice(callback: CallbackQuery, state: FSMContext) -> N
             pass
 
     await callback.answer(f"{_VALID_PROFILES.get(profile, profile)} выбрано")
+    prompt_target = callback.message or original_message
+    if prompt_target:
+        await prompt_target.answer(
+            "Сохранять PNG-обложки из видео?", reply_markup=_preview_keyboard()
+        )
+    await state.set_state(FSM.awaiting_preview)
+
+
+@router.callback_query(FSM.awaiting_preview)
+async def handle_preview_choice(callback: CallbackQuery, state: FSMContext) -> None:
+    data = callback.data or ""
+    if not data.startswith("preview:"):
+        await callback.answer("Некорректный выбор", show_alert=True)
+        return
+
+    choice = data.split(":", 1)[1]
+    if choice not in {"yes", "no"}:
+        await callback.answer("Некорректный выбор", show_alert=True)
+        return
+
+    stored = await state.get_data()
+    original_message: Optional[Message] = stored.get("message")
+    copies = stored.get("copies")
+    profile = stored.get("profile")
+
+    if (
+        not original_message
+        or copies is None
+        or profile not in {"tiktok", "instagram", "youtube"}
+        or not callback.from_user
+        or not original_message.from_user
+        or callback.from_user.id != original_message.from_user.id
+    ):
+        await state.clear()
+        await callback.answer("Сессия устарела", show_alert=True)
+        return
+
+    await state.clear()
+    if callback.message:
+        try:
+            await callback.message.edit_reply_markup()
+        except Exception:
+            pass
+
+    save_preview = choice == "yes"
+    await callback.answer(
+        "PNG-обложки будут сохранены" if save_preview else "PNG-обложки сохранены не будут"
+    )
 
     lang = _get_user_lang(original_message)
     bot = callback.bot
@@ -449,6 +510,7 @@ async def handle_profile_choice(callback: CallbackQuery, state: FSMContext) -> N
         copies,
         lang,
         profile_override=profile,
+        save_preview=save_preview,
     )
 
 
@@ -534,6 +596,7 @@ async def _enqueue_processing(
     lang: str,
     *,
     profile_override: Optional[str] = None,
+    save_preview: bool = True,
 ) -> None:
     queue = _get_task_queue()
     user_id = message.from_user.id if message.from_user else 0
@@ -545,14 +608,29 @@ async def _enqueue_processing(
         logger.info("Auto-clean removed %s stale files for user=%s", removed_auto, user_id)
 
     async def task() -> None:
-        await _run_and_send(message, ack, input_path, copies, profile, quality)
+        await _run_and_send(
+            message,
+            ack,
+            input_path,
+            copies,
+            profile,
+            quality,
+            save_preview,
+        )
 
     if queue is None:
         await task()
         return
 
     try:
-        await queue.enqueue(user_id, task, input_path.name, profile=profile or None)
+        await queue.enqueue(
+            user_id,
+            task,
+            input_path.name,
+            profile=profile or None,
+            copies=copies,
+            save_preview=save_preview,
+        )
     except RuntimeError:
         await task()
         return
@@ -568,6 +646,7 @@ async def _run_and_send(
     copies: int,
     profile: str,
     quality: str,
+    save_preview: bool,
 ) -> None:
     before = {p.resolve() for p in OUTPUT_DIR.glob('*.mp4')}
     start_ts = time.time()
@@ -630,6 +709,27 @@ async def _run_and_send(
         return
 
     new_files = sorted(new_files)[:copies]
+
+    if not save_preview:
+        removed_previews = 0
+        user_id = message.from_user.id if message.from_user else 0
+        for file_path in new_files:
+            preview_path = file_path.with_name(f"{file_path.stem}_preview.png")
+            if preview_path.exists():
+                try:
+                    preview_path.unlink()
+                    removed_previews += 1
+                except OSError as exc:
+                    logger.warning(
+                        "Failed to remove preview %s for %s: %s",
+                        preview_path,
+                        file_path,
+                        exc,
+                    )
+        if removed_previews:
+            logger.info(
+                "Removed %s preview files for user=%s", removed_previews, user_id
+            )
 
     if message.from_user:
         register_user_outputs(message.from_user.id, new_files)

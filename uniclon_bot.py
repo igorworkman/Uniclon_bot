@@ -38,6 +38,8 @@ class TaskInfo:
     created_at: float
     started_at: Optional[float] = None
     profile: Optional[str] = None
+    copies: Optional[int] = None
+    save_preview: Optional[bool] = None
 
 
 class UserTaskQueue:
@@ -58,6 +60,8 @@ class UserTaskQueue:
         label: str,
         *,
         profile: Optional[str] = None,
+        copies: Optional[int] = None,
+        save_preview: Optional[bool] = None,
     ) -> None:
         if self._closed:
             raise RuntimeError("Task queue is shutting down")
@@ -67,7 +71,15 @@ class UserTaskQueue:
             self._task_counter += 1
             task_id = self._task_counter
             self._tasks.setdefault(user_id, []).append(
-                TaskInfo(task_id, label, "pending", time.time(), profile=profile)
+                TaskInfo(
+                    task_id=task_id,
+                    label=label,
+                    status="pending",
+                    created_at=time.time(),
+                    profile=profile,
+                    copies=copies,
+                    save_preview=save_preview,
+                )
             )
             await queue.put((task_id, task_factory))
             while len(workers) < self._per_user_limit:

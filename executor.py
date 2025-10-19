@@ -29,10 +29,20 @@ async def run_script_with_logs(
     if normalized_profile == "default":
         normalized_profile = ""
 
-    valid_profiles = {"tiktok", "instagram", "telegram", "youtube"}
+    # NOTE: The underlying shell script currently only supports these profiles.
+    # Once support for YouTube is added to `process_protective_v1.6.sh`, update
+    # this set and remove the special-case handling below.
+    valid_profiles = {"tiktok", "instagram", "telegram"}
     profile_args: List[str] = []
     if normalized_profile in valid_profiles:
         profile_args = ["--profile", normalized_profile]
+    elif normalized_profile == "youtube":
+        logger.info(
+            "Profile 'youtube' selected for %s, but shell script lacks support; "
+            "invoking without --profile",
+            input_file.name,
+        )
+        normalized_profile = ""
     elif normalized_profile:
         logger.warning(
             "Unknown profile '%s' for %s; invoking script without --profile",

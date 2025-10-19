@@ -1,7 +1,8 @@
 
 import asyncio
 import logging
-from typing import Awaitable, Callable, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 
@@ -20,22 +21,39 @@ from handlers import router, set_task_queue
 # END REGION AI
 
 
+@dataclass
+class TaskInfo:
+    task_id: int
+    label: str
+    status: str
+
+
 class UserTaskQueue:
     def __init__(self, per_user_limit: int = 1) -> None:
         self._per_user_limit = max(1, per_user_limit)
-        self._queues: Dict[int, asyncio.Queue[Optional[Callable[[], Awaitable[None]]]]] = {}
+        self._queues: Dict[int, asyncio.Queue[Optional[Tuple[int, Callable[[], Awaitable[None]]]]]] = {}
         self._workers: Dict[int, List[asyncio.Task[None]]] = {}
+        self._tasks: Dict[int, List[TaskInfo]] = {}
         self._lock = asyncio.Lock()
         self._closed = False
         self._idle_timeout = 5.0
+        self._task_counter = 0
 
-    async def enqueue(self, user_id: int, task_factory: Callable[[], Awaitable[None]]) -> None:
+    async def enqueue(
+        self,
+        user_id: int,
+        task_factory: Callable[[], Awaitable[None]],
+        label: str,
+    ) -> None:
         if self._closed:
             raise RuntimeError("Task queue is shutting down")
         async with self._lock:
             queue = self._queues.setdefault(user_id, asyncio.Queue())
             workers = self._workers.setdefault(user_id, [])
-            await queue.put(task_factory)
+            self._task_counter += 1
+            task_id = self._task_counter
+            self._tasks.setdefault(user_id, []).append(TaskInfo(task_id, label, "pending"))
+            await queue.put((task_id, task_factory))
             while len(workers) < self._per_user_limit:
                 workers.append(asyncio.create_task(self._worker(user_id, queue)))
 
@@ -45,29 +63,47 @@ class UserTaskQueue:
             snapshot = [
                 (uid, self._queues[uid], list(self._workers.get(uid, []))) for uid in list(self._queues)
             ]
-        for _, queue, workers in snapshot:
+        for uid, queue, workers in snapshot:
             for _ in workers:
                 await queue.put(None)
+            self._tasks.pop(uid, None)
         tasks = [task for _, _, workers in snapshot for task in workers]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _worker(self, user_id: int, queue: asyncio.Queue[Optional[Callable[[], Awaitable[None]]]]) -> None:
+    async def _worker(
+        self,
+        user_id: int,
+        queue: asyncio.Queue[Optional[Tuple[int, Callable[[], Awaitable[None]]]]],
+    ) -> None:
         try:
             while True:
                 try:
-                    task_factory = await asyncio.wait_for(queue.get(), timeout=self._idle_timeout)
+                    payload = await asyncio.wait_for(queue.get(), timeout=self._idle_timeout)
                 except asyncio.TimeoutError:
                     break
-                if task_factory is None:
+                if payload is None:
                     queue.task_done()
                     break
+                task_id, task_factory = payload
+                async with self._lock:
+                    for info in self._tasks.get(user_id, []):
+                        if info.task_id == task_id:
+                            info.status = "active"
+                            break
                 try:
                     await task_factory()
                 except Exception:  # noqa: BLE001
                     logging.exception("Queued task for user %s failed", user_id)
                 finally:
                     queue.task_done()
+                    async with self._lock:
+                        tasks = self._tasks.get(user_id, [])
+                        remaining = [info for info in tasks if info.task_id != task_id]
+                        if remaining:
+                            self._tasks[user_id] = remaining
+                        else:
+                            self._tasks.pop(user_id, None)
         finally:
             async with self._lock:
                 workers = self._workers.get(user_id, [])
@@ -78,6 +114,11 @@ class UserTaskQueue:
                 if not workers:
                     self._workers.pop(user_id, None)
                     self._queues.pop(user_id, None)
+                    self._tasks.pop(user_id, None)
+
+    async def get_user_tasks(self, user_id: int) -> List[TaskInfo]:
+        async with self._lock:
+            return list(self._tasks.get(user_id, []))
 
 
 def make_bot() -> Bot:

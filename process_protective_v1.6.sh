@@ -208,8 +208,6 @@ MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation
 
 MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model,ssim,psnr,phash,quality_pass,quality"
 
-IMG_COUNTER_BASE=0
-IMG_COUNTER_NEXT=0
 PHASH_TOOL_NOTIFIED=0
 PHASH_CMD=""
 
@@ -402,13 +400,6 @@ escape_single_quotes() {
   printf "%s" "$1" | sed "s/'/\\\\'/g"
 }
 
-ensure_img_counters() {
-  if [ "$IMG_COUNTER_BASE" -eq 0 ]; then
-    IMG_COUNTER_BASE=$(rand_int 6200 7999)
-    IMG_COUNTER_NEXT="$IMG_COUNTER_BASE"
-  fi
-}
-
 iso_to_epoch() {
   local iso="$1"
   if date_supports_d_flag; then
@@ -464,41 +455,42 @@ generate_iso_timestamp() {
   fi
 }
 
-iso_to_components() {
-  local iso="$1"
-  local date_part="${iso%%T*}"
-  local time_part="${iso#*T}"
-  time_part="${time_part%Z}"
-  local y="${date_part%%-*}"
-  local rest="${date_part#*-}"
-  local m="${rest%%-*}"
-  local d="${rest#*-}"
-  local hh="${time_part%%:*}"
-  rest="${time_part#*:}"
-  local mm="${rest%%:*}"
-  local ss="${rest#*:}"
-  printf "%s %s %s %s %s %s\n" "$y" "$m" "$d" "$hh" "$mm" "$ss"
+date_supports_v_flag() {
+  date -v-1d +%Y >/dev/null 2>&1
 }
 
-generate_media_name() {
-  local iso="$1"
-  read y m d hh mm ss < <(iso_to_components "$iso")
-  local ts_for_name=$(printf "%s%s%s_%s%s%s" "$y" "$m" "$d" "$hh" "$mm" "$ss")
-  local roll=$(rand_int 0 99)
-  if [ "$roll" -lt 25 ]; then
-    ensure_img_counters
-    local img_id="$IMG_COUNTER_NEXT"
-    IMG_COUNTER_NEXT=$((IMG_COUNTER_NEXT + 1))
-    printf "IMG_%04d MOV\n" "$img_id"
+generate_rnd_date() {
+  local days=$((RANDOM % 10 + 2))
+  local hours=$((RANDOM % 6 + 1))
+  local minutes=$((RANDOM % 59 + 1))
+  # macOS-style reference: RND_DATE=$(date -v-$((RANDOM % 10 + 2))d -v-$((RANDOM % 6 + 1))H -v-$((RANDOM % 59 + 1))M +"%Y%m%d_%H%M%S")
+  if date_supports_v_flag; then
+    RND_DATE=$(date -v-"${days}"d -v-"${hours}"H -v-"${minutes}"M +"%Y%m%d_%H%M%S")
+    return
+  fi
+  if date_supports_d_flag; then
+    RND_DATE=$(date -u -d "-${days} days -${hours} hours -${minutes} minutes" +"%Y%m%d_%H%M%S")
   else
-    printf "VID_%s mp4\n" "$ts_for_name"
+    RND_DATE=$(date -u -v -"${days}"d -v -"${hours}"H -v -"${minutes}"M +"%Y%m%d_%H%M%S")
   fi
 }
 
-iso_to_touch_ts() {
-  local iso="$1"
-  read y m d hh mm ss < <(iso_to_components "$iso")
-  printf "%s%s%s%s%s.%s\n" "$y" "$m" "$d" "$hh" "$mm" "$ss"
+prepare_output_name() {
+  while :; do
+    generate_rnd_date
+    if [ "$PROFILE_VALUE" = "instagram" ]; then
+      local rand_id=$(rand_int 100000 999999)
+      OUT_NAME=$(printf "IMG_%06d.MOV" "$rand_id")
+    else
+      OUT_NAME="VID_${RND_DATE}.mp4"
+    fi
+    OUT="${OUTPUT_DIR}/${OUT_NAME}"
+    [ -e "$OUT" ] || break
+  done
+  FILE_STEM="${OUT_NAME%.*}"
+  FILE_EXT="${OUT_NAME##*.}"
+  local touch_ts="${RND_DATE/_/}"
+  OUT_TOUCH_TS="${touch_ts:0:12}.${touch_ts:12:2}"
 }
 
 rand_description() {
@@ -1206,15 +1198,7 @@ EOF
   CREATION_TIME=$(generate_iso_timestamp)
   CREATION_TIME=$(jitter_iso_timestamp "$CREATION_TIME")
   CREATION_TIME_EXIF="$CREATION_TIME"
-  read FILE_STEM FILE_EXT <<<"$(generate_media_name "$CREATION_TIME")"
-  OUT="${OUTPUT_DIR}/${FILE_STEM}.${FILE_EXT}"
-  while [ -e "$OUT" ]; do
-    CREATION_TIME=$(generate_iso_timestamp)
-    CREATION_TIME=$(jitter_iso_timestamp "$CREATION_TIME")
-    CREATION_TIME_EXIF="$CREATION_TIME"
-    read FILE_STEM FILE_EXT <<<"$(generate_media_name "$CREATION_TIME")"
-    OUT="${OUTPUT_DIR}/${FILE_STEM}.${FILE_EXT}"
-  done
+  prepare_output_name
   local FINAL_OUT="$OUT"
   local ENCODE_TARGET="$FINAL_OUT"
   local INTRO_OUTPUT_PATH=""
@@ -1353,8 +1337,7 @@ EOF
   EXIF_CMD+=("$OUT")
   "${EXIF_CMD[@]}" >/dev/null
 
-  FAKE_TS=$(iso_to_touch_ts "$CREATION_TIME")
-  touch -t "$FAKE_TS" "$OUT"
+  touch -t "$OUT_TOUCH_TS" "${OUTPUT_DIR}/${OUT_NAME}"
   FILE_NAME="$(basename "$OUT")"
   local PREVIEW_NAME=""
   local PREVIEW_PATH="${OUTPUT_DIR}/${FILE_STEM}_preview.png"

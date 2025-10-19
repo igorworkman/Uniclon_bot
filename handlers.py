@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+import zipfile
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Set, Tuple, TYPE_CHECKING
 from aiogram import F, Router
@@ -28,6 +29,8 @@ _task_queue: Optional["UserTaskQueue"] = None
 _user_profiles: Dict[int, str] = {}
 _user_quality: Dict[int, str] = {}
 _user_outputs: Dict[int, Set[Path]] = {}
+
+_TELEGRAM_DOCUMENT_LIMIT = 2 * 1024 * 1024 * 1024  # 2 GB
 
 _VALID_PROFILES = {
     "tiktok": "TikTok",
@@ -493,13 +496,67 @@ async def _run_and_send(
     await message.answer("Готово! Отправляю уникализированные копии…")
 
     sent = 0
-    for p in new_files:
+    archive_path: Optional[Path] = None
+    archive_sent = False
+
+    if len(new_files) > 10:
+        total_size = 0
+        total_known = True
+        for file_path in new_files:
+            try:
+                total_size += file_path.stat().st_size
+            except OSError as exc:
+                total_known = False
+                logger.warning("Failed to read size of %s for archive estimation: %s", file_path, exc)
+            if total_size > _TELEGRAM_DOCUMENT_LIMIT:
+                break
+
+        if total_size <= _TELEGRAM_DOCUMENT_LIMIT:
+            archive_name = f"uniclon_{int(time.time())}_{message.message_id or 'zip'}"
+            archive_path = OUTPUT_DIR / f"{archive_name}.zip"
+            try:
+                with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                    for file_path in new_files:
+                        try:
+                            archive.write(file_path, arcname=file_path.name)
+                        except OSError as exc:
+                            logger.exception("Failed to add %s to archive: %s", file_path, exc)
+                            raise
+            except Exception:
+                logger.exception("Failed to build archive %s", archive_path)
+            else:
+                try:
+                    await message.answer_document(
+                        document=FSInputFile(archive_path),
+                        caption="📦 Ваши уникализированные видео в архиве (10+ файлов)",
+                    )
+                except Exception:
+                    logger.exception("Failed to send archive %s", archive_path)
+                else:
+                    archive_sent = True
+                    sent = len(new_files)
+
+        if not archive_sent and total_size > _TELEGRAM_DOCUMENT_LIMIT and total_known:
+            logger.info(
+                "Total size %s of %s files exceeds Telegram limit; falling back to per-file sending",
+                total_size,
+                len(new_files),
+            )
+
+    if not archive_sent:
+        for p in new_files:
+            try:
+                await message.answer_video(video=FSInputFile(p), caption=p.name)
+            except Exception:
+                logger.exception("Failed to send video %s; fallback to document", p)
+                await message.answer_document(document=FSInputFile(p), caption=p.name)
+            sent += 1
+
+    if archive_path and archive_path.exists():
         try:
-            await message.answer_video(video=FSInputFile(p), caption=p.name)
-        except Exception:
-            logger.exception("Failed to send video %s; fallback to document", p)
-            await message.answer_document(document=FSInputFile(p), caption=p.name)
-        sent += 1
+            archive_path.unlink()
+        except OSError as exc:
+            logger.warning("Failed to remove temporary archive %s: %s", archive_path, exc)
 
     await ack.edit_text(
         get_text(lang, "files_sent_summary", sent=sent, total=len(new_files))

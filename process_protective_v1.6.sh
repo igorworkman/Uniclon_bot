@@ -8,6 +8,11 @@ BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK_DIR="${BASE_DIR}/checks"
 LOW_UNIQUENESS_FLAG="${CHECK_DIR}/low_uniqueness.flag"
 
+# REGION AI: default output directories
+OUTPUT_DIR="${OUTPUT_DIR:-Новая папка}"
+PREVIEW_DIR="${PREVIEW_DIR:-${OUTPUT_DIR}/previews}"
+# END REGION AI
+
 mkdir -p "$CHECK_DIR"
 mkdir -p "$OUTPUT_DIR" "$PREVIEW_DIR"
 rm -f "$LOW_UNIQUENESS_FLAG"
@@ -87,10 +92,10 @@ if [ "$STRICT_CLEAN" -eq 1 ]; then
   QT_META=0
 fi
 
-OUTPUT_DIR="Новая папка"
+# REGION AI: output manifest configuration
 MANIFEST="manifest.csv"
 MANIFEST_PATH="${OUTPUT_DIR}/${MANIFEST}"
-PREVIEW_DIR="${OUTPUT_DIR}/previews"
+# END REGION AI
 TARGET_W=1080
 TARGET_H=1920
 AUDIO_BR="128k"

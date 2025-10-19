@@ -53,6 +53,8 @@ class AuditSummary:
     trust_emoji: str
     profile_label: Optional[str]
     bitrate_variation_pct: float
+    low_uniqueness_fallback: bool
+    low_uniqueness_message: Optional[str]
 
 
 async def run_shell(command: str, *, cwd: Optional[Path] = None) -> Tuple[int, str]:
@@ -227,6 +229,22 @@ async def perform_self_audit(
     report_path = CHECKS_DIR / "uniclon_report.csv"
     quality_path = CHECKS_DIR / "quality_summary.csv"
     phash_path = CHECKS_DIR / "phash_summary.csv"
+    fallback_flag = CHECKS_DIR / "low_uniqueness.flag"
+
+    fallback_triggered = False
+    fallback_message = "⚠️ Low uniqueness fallback triggered."
+    if fallback_flag.exists():
+        fallback_triggered = True
+        try:
+            raw = fallback_flag.read_text(encoding="utf-8").strip()
+            if raw:
+                fallback_message = raw
+        except OSError as exc:
+            logger.debug("Failed to read fallback flag: %s", exc)
+        try:
+            fallback_flag.unlink()
+        except OSError as exc:
+            logger.debug("Failed to remove fallback flag: %s", exc)
 
     if not report_path.exists():
         logger.warning("Audit report %s not found", report_path)
@@ -319,6 +337,8 @@ async def perform_self_audit(
         upper = status.upper()
         if "WARNING" in upper and status not in status_warnings:
             status_warnings.append(status)
+    if fallback_triggered and fallback_message not in status_warnings:
+        status_warnings.append(fallback_message)
 
     encoder_combos = {
         (enc.strip().lower(), soft.strip().lower())
@@ -393,6 +413,8 @@ async def perform_self_audit(
         trust_emoji=trust_emoji,
         profile_label=profile_label,
         bitrate_variation_pct=bitrate_variation,
+        low_uniqueness_fallback=fallback_triggered,
+        low_uniqueness_message=fallback_message if fallback_triggered else None,
     )
 
 

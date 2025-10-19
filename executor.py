@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 # REGION AI: imports
-from config import SCRIPT_PATH, OUTPUT_DIR
+from config import SCRIPT_PATH, OUTPUT_DIR, NO_DEVICE_INFO
 # END REGION AI
 
 
@@ -49,12 +49,15 @@ async def run_script_with_logs(
         normalized_quality = "std"
         quality_args = ["--quality", normalized_quality]
 
+    device_args: List[str] = ["--no-device-info"] if NO_DEVICE_INFO else []
+
     proc = await asyncio.create_subprocess_exec(
         str(SCRIPT_PATH),
         input_file.name,
         str(int(copies)),
         *profile_args,
         *quality_args,
+        *device_args,
         cwd=str(cwd),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,

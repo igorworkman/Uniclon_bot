@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.log
+# Runtime output directories
+/Новая папка/
+/previews/
+/checks/
+# Generated media artifacts
+/*.mp4
+/*.png
+/uniclon_output.zip
+/uniclon_*.zip

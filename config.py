@@ -26,6 +26,16 @@ if not _output_dir_path.is_absolute():
 OUTPUT_DIR = _output_dir_path
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+CHECKS_DIR = BASE_DIR / "checks"
+CHECKS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 if not BOT_TOKEN:
     raise SystemExit("[ERROR] TELEGRAM_BOT_TOKEN is not set. Put it into .env")
@@ -34,4 +44,7 @@ MAX_COPIES = 20
 LOG_TAIL_CHARS = 3500
 CLEAN_UP_INPUT = False
 BOT_API_BASE = os.getenv("BOT_API_BASE", "").strip()
+
+NO_DEVICE_INFO = _env_flag("UNICLON_NO_DEVICE_INFO", False)
+FORCE_ZIP_ARCHIVE = _env_flag("UNICLON_FORCE_ZIP", False)
 # END REGION AI

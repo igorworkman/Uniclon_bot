@@ -106,6 +106,30 @@ async def handle_quality(message: Message) -> None:
     await message.answer(f"✅ Качество установлено: {label}")
 
 
+@router.message(Command("status"))
+async def handle_status(message: Message) -> None:
+    if not message.from_user:
+        return
+
+    queue = _get_task_queue()
+    if queue is None:
+        await message.answer("💤 У вас нет активных задач")
+        return
+
+    tasks = await queue.get_user_tasks(message.from_user.id)
+    if not tasks:
+        await message.answer("💤 У вас нет активных задач")
+        return
+
+    status_labels = {"pending": "⏳ В ожидании", "active": "🔄 Обрабатывается"}
+    lines = ["📊 Ваши задачи:"]
+    for idx, task in enumerate(tasks, 1):
+        status = status_labels.get(task.status, task.status)
+        lines.append(f"{idx}. {task.label} — {status}")
+
+    await message.answer("\n".join(lines))
+
+
 async def _ensure_valid_copies(message: Message, copies, hint_key: str):
     user_id = message.from_user.id if message.from_user else "unknown"
     lang = _get_user_lang(message)
@@ -284,7 +308,7 @@ async def _enqueue_processing(
         return
 
     try:
-        await queue.enqueue(user_id, task)
+        await queue.enqueue(user_id, task, input_path.name)
     except RuntimeError:
         await task()
         return

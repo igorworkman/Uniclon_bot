@@ -203,9 +203,15 @@ cleanup_temp_artifacts() {
   fi
 }
 
+
 MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model,qt_software,ssim,phash_delta,quality_pass,quality,creative_mirror,creative_intro,creative_lut,preview"
+
+MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model,ssim,psnr,phash,quality_pass,quality"
+
 IMG_COUNTER_BASE=0
 IMG_COUNTER_NEXT=0
+PHASH_TOOL_NOTIFIED=0
+PHASH_CMD=""
 
 if [ ! -f "$MANIFEST_PATH" ]; then
   echo "$MANIFEST_HEADER" > "$MANIFEST_PATH"
@@ -262,24 +268,61 @@ else
     mv "$TMP_MANIFEST" "$MANIFEST_PATH"
     echo "ℹ️ manifest обновлён: добавлены колонки qt_make, qt_model и qt_software"
   fi
-  if ! head -n1 "$MANIFEST_PATH" | grep -q ",ssim"; then
+  header_line=$(head -n1 "$MANIFEST_PATH")
+  if printf '%s' "$header_line" | grep -q "phash_delta"; then
     TMP_MANIFEST=$(mktemp)
     {
-      IFS= read -r header_line
-      echo "${header_line},ssim,phash_delta,quality_pass"
+      IFS= read -r old_header
+      echo "${old_header//ssim,phash_delta,quality_pass,quality/ssim,psnr,phash,quality_pass,quality}"
       while IFS= read -r data_line; do
         [ -z "$data_line" ] && continue
-        echo "${data_line},,,"
+        printf '%s\n' "$data_line" | awk -F',' 'BEGIN{OFS=","}{
+          if (NF < 20) {print $0; next}
+          out=""
+          for(i=1;i<=16;i++){
+            if(out=="") out=$i; else out=out OFS $i;
+          }
+          ssim=$17; phash=$18; qpass=$19; quality=$20;
+          out=out OFS ssim OFS "" OFS phash OFS qpass OFS quality;
+          print out;
+        }'
       done
     } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
     mv "$TMP_MANIFEST" "$MANIFEST_PATH"
-    echo "ℹ️ manifest обновлён: добавлены колонки ssim, phash_delta и quality_pass"
+    echo "ℹ️ manifest обновлён: колонки ssim, psnr и phash приведены к новому формату"
   fi
-  if ! head -n1 "$MANIFEST_PATH" | grep -q "quality_pass,quality"; then
+  header_line=$(head -n1 "$MANIFEST_PATH")
+  if ! printf '%s' "$header_line" | grep -q ",psnr,"; then
     TMP_MANIFEST=$(mktemp)
     {
-      IFS= read -r header_line
-      echo "${header_line},quality"
+      IFS= read -r current_header
+      echo "${current_header},ssim,psnr,phash,quality_pass"
+      while IFS= read -r data_line; do
+        [ -z "$data_line" ] && continue
+        echo "${data_line},,,,"
+      done
+    } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
+    mv "$TMP_MANIFEST" "$MANIFEST_PATH"
+    echo "ℹ️ manifest обновлён: добавлены колонки ssim, psnr, phash и quality_pass"
+  elif ! printf '%s' "$header_line" | grep -q ",phash,"; then
+    TMP_MANIFEST=$(mktemp)
+    {
+      IFS= read -r current_header
+      echo "${current_header},phash"
+      while IFS= read -r data_line; do
+        [ -z "$data_line" ] && continue
+        echo "${data_line},"
+      done
+    } < "$MANIFEST_PATH" > "$TMP_MANIFEST"
+    mv "$TMP_MANIFEST" "$MANIFEST_PATH"
+    echo "ℹ️ manifest обновлён: добавлена колонка phash"
+  fi
+  header_line=$(head -n1 "$MANIFEST_PATH")
+  if ! printf '%s' "$header_line" | grep -q ",quality$"; then
+    TMP_MANIFEST=$(mktemp)
+    {
+      IFS= read -r current_header
+      echo "${current_header},quality"
       while IFS= read -r data_line; do
         [ -z "$data_line" ] && continue
         echo "${data_line},"
@@ -669,6 +712,7 @@ declare -a RUN_QT_MAKES=()
 declare -a RUN_QT_MODELS=()
 declare -a RUN_QT_SOFTWARES=()
 declare -a RUN_SSIM=()
+declare -a RUN_PSNR=()
 declare -a RUN_PHASH=()
 declare -a RUN_QPASS=()
 declare -a RUN_CREATIVE_MIRROR=()
@@ -796,6 +840,7 @@ remove_last_generated() {
     RUN_QT_MODELS=("${RUN_QT_MODELS[@]:0:$idx}")
     RUN_QT_SOFTWARES=("${RUN_QT_SOFTWARES[@]:0:$idx}")
     RUN_SSIM=("${RUN_SSIM[@]:0:$idx}")
+    RUN_PSNR=("${RUN_PSNR[@]:0:$idx}")
     RUN_PHASH=("${RUN_PHASH[@]:0:$idx}")
     RUN_QPASS=("${RUN_QPASS[@]:0:$idx}")
     RUN_CREATIVE_MIRROR=("${RUN_CREATIVE_MIRROR[@]:0:$idx}")
@@ -843,6 +888,7 @@ remove_indices_for_regen() {
     RUN_QT_MODELS=("${RUN_QT_MODELS[@]:0:$idx}" "${RUN_QT_MODELS[@]:$((idx + 1))}")
     RUN_QT_SOFTWARES=("${RUN_QT_SOFTWARES[@]:0:$idx}" "${RUN_QT_SOFTWARES[@]:$((idx + 1))}")
     RUN_SSIM=("${RUN_SSIM[@]:0:$idx}" "${RUN_SSIM[@]:$((idx + 1))}")
+    RUN_PSNR=("${RUN_PSNR[@]:0:$idx}" "${RUN_PSNR[@]:$((idx + 1))}")
     RUN_PHASH=("${RUN_PHASH[@]:0:$idx}" "${RUN_PHASH[@]:$((idx + 1))}")
     RUN_QPASS=("${RUN_QPASS[@]:0:$idx}" "${RUN_QPASS[@]:$((idx + 1))}")
     RUN_CREATIVE_MIRROR=("${RUN_CREATIVE_MIRROR[@]:0:$idx}" "${RUN_CREATIVE_MIRROR[@]:$((idx + 1))}")
@@ -853,38 +899,163 @@ remove_indices_for_regen() {
   LAST_COMBOS=("${RUN_COMBOS[@]}")
 }
 
+detect_phash_tool() {
+  if [ -n "$PHASH_CMD" ]; then
+    return 0
+  fi
+  if command -v phash-tool >/dev/null 2>&1; then
+    PHASH_CMD="phash-tool"
+    return 0
+  fi
+  if command -v ffmpeg-hash >/dev/null 2>&1; then
+    PHASH_CMD="ffmpeg-hash"
+    return 0
+  fi
+  return 1
+}
+
+compute_phash_value() {
+  local file_path="$1" value="NA"
+  if detect_phash_tool; then
+    case "$PHASH_CMD" in
+      phash-tool)
+        value=$(phash-tool "$file_path" 2>/dev/null || true)
+        value=$(printf '%s' "$value" | awk 'NF{print $NF; exit}')
+        ;;
+      ffmpeg-hash)
+        value=$(ffmpeg-hash "$file_path" 2>/dev/null || true)
+        value=$(printf '%s' "$value" | awk 'NF{print $NF; exit}')
+        ;;
+    esac
+    [ -n "$value" ] || value="NA"
+  else
+    if [ "$PHASH_TOOL_NOTIFIED" -eq 0 ]; then
+      echo "ℹ️ phash утилита не найдена, значения будут NA"
+      PHASH_TOOL_NOTIFIED=1
+    fi
+  fi
+  printf '%s' "$value"
+}
+
+compute_metrics_for_copy() {
+  local source_file="$1" compare_file="$2"
+  local ssim_log psnr_log ssim_val psnr_val phash_val
+  ssim_log=$(ffmpeg -v error -i "$source_file" -i "$compare_file" -lavfi "ssim" -f null - 2>&1 || true)
+  ssim_val=$(printf '%s\n' "$ssim_log" | awk -F'All:' '/All:/{gsub(/^[ \t]+/,"",$2); split($2,a," "); print a[1]; exit}')
+  [ -n "$ssim_val" ] || ssim_val="0.000"
+  psnr_log=$(ffmpeg -v error -i "$source_file" -i "$compare_file" -lavfi "psnr" -f null - 2>&1 || true)
+  psnr_val=$(printf '%s\n' "$psnr_log" | awk -F'average:' '/average:/{gsub(/^[ \t]+/,"",$2); split($2,a," "); print a[1]; exit}')
+  [ -n "$psnr_val" ] || psnr_val="0.00"
+  case "$psnr_val" in
+    inf|Inf|INF|nan|NaN|NA)
+      psnr_val="99.99"
+      ;;
+  esac
+  phash_val=$(compute_phash_value "$compare_file")
+  printf '%s|%s|%s' "$ssim_val" "$psnr_val" "$phash_val"
+}
+
 quality_check() {
   QUALITY_ISSUES=()
   QUALITY_COPY_IDS=()
-  RUN_SSIM=()
-  RUN_PHASH=()
   RUN_QPASS=()
   local idx
   for idx in "${!RUN_FILES[@]}"; do
     local copy_path="${OUTPUT_DIR}/${RUN_FILES[$idx]}"
-    local ssim_val
-    ssim_val=$(ffmpeg -v error -i "$SRC" -i "$copy_path" -lavfi "ssim" -f null - 2>&1 | awk -F'All:' '/All:/{gsub(/^[ \t]+/,"",$2); split($2,a," "); print a[1]; exit}')
-    [ -n "$ssim_val" ] || ssim_val="0.000"
-    local phash_delta="0.000"
+    local ssim_val="${RUN_SSIM[$idx]:-}"
+    local psnr_val="${RUN_PSNR[$idx]:-}"
+    local phash_val="${RUN_PHASH[$idx]:-NA}"
+    if [ -z "$ssim_val" ] || [ -z "$psnr_val" ] || [ "$psnr_val" = "NA" ]; then
+      local metrics
+      metrics=$(compute_metrics_for_copy "$SRC" "$copy_path")
+      ssim_val=${metrics%%|*}
+      local rest=${metrics#*|}
+      psnr_val=${rest%%|*}
+      phash_val=${rest#*|}
+      RUN_SSIM[$idx]="$ssim_val"
+      RUN_PSNR[$idx]="$psnr_val"
+      RUN_PHASH[$idx]="$phash_val"
+    fi
     local dur_delta
     dur_delta=$(awk -v o="$ORIG_DURATION" -v c="${RUN_DURATIONS[$idx]}" 'BEGIN{o+=0;c+=0;diff=o-c;if(diff<0) diff=-diff;printf "%.3f",diff}')
     local br_delta
     br_delta=$(awk -v t="${RUN_TARGET_BRS[$idx]}" -v b="${RUN_BITRATES[$idx]}" 'BEGIN{t+=0;b+=0;diff=t-b;if(diff<0) diff=-diff;printf "%.0f",diff}')
     local pass=true
     if ! awk -v s="$ssim_val" 'BEGIN{exit (s>=0.95?0:1)}'; then pass=false; fi
+    if ! awk -v p="$psnr_val" 'BEGIN{exit (p>=34?0:1)}'; then pass=false; fi
     if ! awk -v d="$dur_delta" 'BEGIN{exit (d<=0.50?0:1)}'; then pass=false; fi
     if ! awk -v b="$br_delta" 'BEGIN{exit (b<=800?0:1)}'; then pass=false; fi
-    RUN_SSIM+=("$ssim_val")
-    RUN_PHASH+=("$phash_delta")
     if [ "$pass" = true ]; then
       RUN_QPASS+=("true")
     else
       RUN_QPASS+=("false")
       QUALITY_ISSUES+=("$idx")
       QUALITY_COPY_IDS+=("$((idx + 1))")
-      echo "⚠️ Подозрительное качество ${RUN_FILES[$idx]} (ssim=$ssim_val Δdur=$dur_delta Δbr=$br_delta)"
+      echo "⚠️ Подозрительное качество ${RUN_FILES[$idx]} (ssim=$ssim_val psnr=$psnr_val phash=$phash_val Δdur=$dur_delta Δbr=$br_delta)"
     fi
   done
+}
+
+warn_similar_copies() {
+  local total=${#RUN_FILES[@]}
+  [ "$total" -lt 2 ] && return
+  local i j pair_ssim pair_psnr pair_log psnr_log
+  local -a warnings=()
+  for ((i=0;i<total;i++)); do
+    for ((j=i+1;j<total;j++)); do
+      if [ "${RUN_FPS[$i]}" != "${RUN_FPS[$j]}" ]; then
+        continue
+      fi
+      if [ "${RUN_BITRATES[$i]}" != "${RUN_BITRATES[$j]}" ]; then
+        continue
+      fi
+      pair_log=$(ffmpeg -v error -i "${OUTPUT_DIR}/${RUN_FILES[$i]}" -i "${OUTPUT_DIR}/${RUN_FILES[$j]}" -lavfi "ssim" -f null - 2>&1 || true)
+      pair_ssim=$(printf '%s\n' "$pair_log" | awk -F'All:' '/All:/{gsub(/^[ \t]+/,"",$2); split($2,a," "); print a[1]; exit}')
+      [ -n "$pair_ssim" ] || pair_ssim="0.000"
+      psnr_log=$(ffmpeg -v error -i "${OUTPUT_DIR}/${RUN_FILES[$i]}" -i "${OUTPUT_DIR}/${RUN_FILES[$j]}" -lavfi "psnr" -f null - 2>&1 || true)
+      pair_psnr=$(printf '%s\n' "$psnr_log" | awk -F'average:' '/average:/{gsub(/^[ \t]+/,"",$2); split($2,a," "); print a[1]; exit}')
+      [ -n "$pair_psnr" ] || pair_psnr="0.00"
+      case "$pair_psnr" in
+        inf|Inf|INF|nan|NaN|NA)
+          pair_psnr="99.99"
+          ;;
+      esac
+      if awk -v s="$pair_ssim" -v p="$pair_psnr" 'BEGIN{exit (s>=0.985 && p>=45?0:1)}'; then
+        warnings+=("v$((i + 1)) и v$((j + 1)) (SSIM=$pair_ssim PSNR=$pair_psnr)")
+      fi
+    done
+  done
+  if [ "${#warnings[@]}" -gt 0 ]; then
+    local message="⚠️ Копии "
+    local idx
+    for idx in "${!warnings[@]}"; do
+      if [ "$idx" -gt 0 ]; then
+        message+="; "
+      fi
+      message+="${warnings[$idx]}"
+    done
+    message+=" слишком похожи. Перегенерация рекомендована."
+    echo "$message"
+  fi
+}
+
+report_template_statistics() {
+  [ -f "$MANIFEST_PATH" ] || return
+  local stats
+  stats=$(awk -F',' 'NR>1 && NF>=4 {key=$3"|"$2"|"$4; count[key]++} END{for(k in count) if(count[k]>1) printf "%s %d\n",k,count[k];}' "$MANIFEST_PATH")
+  if [ -z "$stats" ]; then
+    echo "ℹ️ Совпадений шаблонов не обнаружено"
+    return
+  fi
+  echo "ℹ️ Статистика совпадений manifest:"
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    local count="${line##* }"
+    local combo="${line% $count}"
+    local IFS='|'
+    read -r fps_val br_val dur_val <<<"$combo"
+    echo "ℹ️ Повтор: fps=$fps_val bitrate=$br_val duration=$dur_val — ${count} копий"
+  done <<<"$stats"
 }
 
 generate_copy() {
@@ -1220,11 +1391,21 @@ EOF
   RUN_QUALITIES+=("$QUALITY")
   RUN_QT_MAKES+=("$QT_MAKE")
   RUN_QT_MODELS+=("$QT_MODEL")
+
   RUN_QT_SOFTWARES+=("$QT_SOFTWARE")
   RUN_CREATIVE_MIRROR+=("$MIRROR_DESC")
   RUN_CREATIVE_INTRO+=("$INTRO_DESC")
   RUN_CREATIVE_LUT+=("$LUT_DESC")
   RUN_PREVIEWS+=("$PREVIEW_NAME")
+
+  local metrics
+  metrics=$(compute_metrics_for_copy "$SRC" "$OUT")
+  local rest
+  RUN_SSIM+=("${metrics%%|*}")
+  rest=${metrics#*|}
+  RUN_PSNR+=("${rest%%|*}")
+  RUN_PHASH+=("${rest#*|}")
+
   echo "✅ done: $OUT"
 }
 
@@ -1290,14 +1471,22 @@ if [ "$quality_pass_all" != true ]; then
   quality_check
 fi
 
+warn_similar_copies
+
 regen_flag=false
 if [ "$REGEN_OCCURRED" -eq 1 ]; then
   regen_flag=true
 fi
 
 for idx in "${!RUN_FILES[@]}"; do
+
   echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]},${RUN_QT_MAKES[$idx]},${RUN_QT_MODELS[$idx]},${RUN_QT_SOFTWARES[$idx]},${RUN_SSIM[$idx]},${RUN_PHASH[$idx]},${RUN_QPASS[$idx]},${RUN_QUALITIES[$idx]},${RUN_CREATIVE_MIRROR[$idx]},${RUN_CREATIVE_INTRO[$idx]},${RUN_CREATIVE_LUT[$idx]},${RUN_PREVIEWS[$idx]}" >> "$MANIFEST_PATH"
+
+  echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]},${RUN_QT_MAKES[$idx]},${RUN_QT_MODELS[$idx]},${RUN_SSIM[$idx]},${RUN_PSNR[$idx]},${RUN_PHASH[$idx]},${RUN_QPASS[$idx]},${RUN_QUALITIES[$idx]}" >> "$MANIFEST_PATH"
+
 done
+
+report_template_statistics
 
 if [ "$AUTO_CLEAN" -eq 1 ]; then
   cleanup_temp_artifacts

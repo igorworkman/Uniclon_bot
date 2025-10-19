@@ -4,6 +4,7 @@ import csv
 import logging
 import shlex
 import time
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean
@@ -35,13 +36,23 @@ CHECKS_DIR.mkdir(parents=True, exist_ok=True)
 @dataclass
 class AuditSummary:
     copies_created: int
-    bitrate_variation_pct: float
+    avg_bitrate_kbps: float
+    avg_bitrate_mbps: float
     mean_ssim: float
+    mean_psnr: float
     mean_phash_diff: float
     trust_score: float
     manifest_path: Path
     report_path: Path
     source_name: str
+    status_warnings: List[str]
+    encoder_diversified: bool
+    timestamps_randomized: bool
+    phash_ok: bool
+    trust_label: str
+    trust_emoji: str
+    profile_label: Optional[str]
+    bitrate_variation_pct: float
 
 
 async def run_shell(command: str, *, cwd: Optional[Path] = None) -> Tuple[int, str]:
@@ -89,22 +100,71 @@ def _extract_float(values: Iterable[str]) -> List[float]:
     return extracted
 
 
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    candidate = value.strip()
+    if not candidate:
+        return None
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+
+
 def _calculate_trust_score(
     mean_ssim: float,
     mean_phash: float,
+    mean_psnr: float,
     bitrate_variation: float,
     *,
     has_ssim: bool,
     has_phash: bool,
+    has_psnr: bool,
 ) -> float:
     score = 10.0
-    if has_ssim and mean_ssim < 0.98:
-        score -= min(4.5, (0.98 - mean_ssim) * 45)
-    if has_phash and mean_phash < 18:
-        score -= min(3.0, (18 - mean_phash) * 0.2)
-    if bitrate_variation > 12:
-        score -= min(2.5, (bitrate_variation - 12) * 0.1)
+    if has_ssim and mean_ssim < 0.96:
+        score -= min(4.0, (0.96 - mean_ssim) * 50)
+    if has_psnr and mean_psnr < 37.0:
+        score -= min(2.5, (37.0 - mean_psnr) * 0.25)
+    if has_phash and mean_phash < 10.0:
+        score -= min(3.0, (10.0 - mean_phash) * 0.3)
+    if bitrate_variation < 4.0:
+        score -= min(1.5, (4.0 - bitrate_variation) * 0.2)
+    elif bitrate_variation > 18.0:
+        score -= min(1.5, (bitrate_variation - 18.0) * 0.1)
     return max(0.0, round(min(score, 10.0), 1))
+
+
+def _derive_trust_label(score: float, profile_label: Optional[str]) -> Tuple[str, str]:
+    if score >= 8.5:
+        base = "Safe"
+        emoji = "✅"
+    elif score >= 6.5:
+        base = "Review"
+        emoji = "⚠️"
+    else:
+        base = "High risk"
+        emoji = "❌"
+
+    if profile_label:
+        if base == "Safe":
+            label = f"Safe for {profile_label}"
+        elif base == "Review":
+            label = f"Review before posting to {profile_label}"
+        else:
+            label = f"High risk on {profile_label}"
+    else:
+        if base == "Safe":
+            label = "Ready for upload"
+        elif base == "Review":
+            label = "Review manually before upload"
+        else:
+            label = "Needs rework before publishing"
+
+    return label, emoji
 
 
 async def perform_self_audit(
@@ -129,17 +189,24 @@ async def perform_self_audit(
         else:
             logger.warning("Audit helper %s not found", script)
 
+    phash_log_path = CHECKS_DIR / "phash_raw.log"
+    try:
+        phash_log_path.write_text("", encoding="utf-8")
+    except OSError as exc:
+        logger.debug("Failed to reset pHash log: %s", exc)
+
     video_path = source.resolve()
-    pattern_files = {p.resolve() for p in OUTPUT_DIR.glob("*_final_v*.mp4")}
-    seen = {p.resolve() for p in generated_files}
-    to_process = sorted(pattern_files | seen)
+    to_process = [p.resolve() for p in generated_files if p.suffix.lower() == ".mp4"]
 
     phash_script = base_dir / "phash_check.py"
     if phash_script.exists():
         _ensure_executable(phash_script)
+        log_target = shlex.quote(str(phash_log_path))
         for candidate in to_process:
-            cmd = "python3 phash_check.py {src} {dst}".format(
-                src=shlex.quote(str(video_path)), dst=shlex.quote(str(candidate))
+            cmd = "python3 phash_check.py {src} {dst} >> {log} 2>&1".format(
+                src=shlex.quote(str(video_path)),
+                dst=shlex.quote(str(candidate)),
+                log=log_target,
             )
             rc, _ = await run_shell(cmd, cwd=base_dir)
             if rc != 0:
@@ -175,28 +242,40 @@ async def perform_self_audit(
             if name:
                 metrics_map[name] = row
 
-    target_names = {p.name for p in generated_files}
+    target_names = {p.name for p in generated_files if p.suffix.lower() == ".mp4"}
     if not target_names:
         target_names = set(metrics_map)
 
-    mean_ssim = 0.0
     ssim_values: List[float] = []
+    psnr_values: List[float] = []
     phash_values: List[float] = []
-    bitrates: List[float] = []
+    bitrate_values: List[float] = []
+    statuses: List[str] = []
+    encoder_pairs: List[Tuple[str, str]] = []
+    creation_values: List[str] = []
 
     for name in target_names:
         row = metrics_map.get(name)
         if not row:
             continue
-        ssim_values.extend(
-            _extract_float([row.get("SSIM"), row.get("ssim")])
-        )
-        phash_values.extend(
-            _extract_float([row.get("pHash"), row.get("phash"), row.get("phash_diff")])
-        )
-        bitrates.extend(
-            _extract_float([row.get("bitrate"), row.get("bitrate_kbps")])
-        )
+        ssim_data = _extract_float([row.get("SSIM"), row.get("ssim")])
+        if ssim_data:
+            ssim_values.append(ssim_data[0])
+        psnr_data = _extract_float([row.get("PSNR"), row.get("psnr")])
+        if psnr_data:
+            psnr_values.append(psnr_data[0])
+        phash_data = _extract_float([row.get("pHash"), row.get("phash"), row.get("phash_diff")])
+        if phash_data:
+            phash_values.append(phash_data[0])
+        bitrate_data = _extract_float([row.get("bitrate_kbps"), row.get("bitrate")])
+        if bitrate_data:
+            value = bitrate_data[0]
+            if value > 100000:
+                value /= 1000.0
+            bitrate_values.append(value)
+        statuses.append((row.get("status") or "").strip())
+        encoder_pairs.append((row.get("encoder") or "", row.get("software") or ""))
+        creation_values.append(row.get("creation_time") or "")
 
     if not ssim_values and quality_path.exists():
         with quality_path.open("r", encoding="utf-8", newline="") as fh:
@@ -204,9 +283,12 @@ async def perform_self_audit(
             for row in reader:
                 name = (row.get("file") or row.get("filename") or "").strip()
                 if name and name in target_names:
-                    ssim_values.extend(
-                        _extract_float([row.get("SSIM"), row.get("ssim")])
-                    )
+                    ssim_data = _extract_float([row.get("SSIM"), row.get("ssim")])
+                    if ssim_data:
+                        ssim_values.append(ssim_data[0])
+                    psnr_data = _extract_float([row.get("PSNR"), row.get("psnr")])
+                    if psnr_data:
+                        psnr_values.append(psnr_data[0])
 
     if not phash_values and phash_path.exists():
         with phash_path.open("r", encoding="utf-8", newline="") as fh:
@@ -214,41 +296,103 @@ async def perform_self_audit(
             for row in reader:
                 name = (row.get("file") or row.get("filename") or "").strip()
                 if name and name in target_names:
-                    phash_values.extend(
-                        _extract_float([row.get("phash_diff"), row.get("phash")])
-                    )
+                    phash_data = _extract_float([row.get("phash_diff"), row.get("phash")])
+                    if phash_data:
+                        phash_values.append(phash_data[0])
 
-    if ssim_values:
-        mean_ssim = round(mean(ssim_values), 3)
-
+    mean_ssim = round(mean(ssim_values), 3) if ssim_values else 0.0
+    mean_psnr = round(mean(psnr_values), 1) if psnr_values else 0.0
     mean_phash = round(mean(phash_values), 1) if phash_values else 0.0
 
+    avg_bitrate_kbps = 0.0
+    if bitrate_values:
+        avg_bitrate_kbps = sum(bitrate_values) / len(bitrate_values)
+    avg_bitrate_mbps = round(avg_bitrate_kbps / 1000.0, 1) if avg_bitrate_kbps else 0.0
+
     bitrate_variation = 0.0
-    if bitrates:
-        avg_bitrate = sum(bitrates) / len(bitrates)
-        if avg_bitrate > 0:
-            deviation = sum(abs(b - avg_bitrate) for b in bitrates) / len(bitrates)
-            bitrate_variation = round((deviation / avg_bitrate) * 100, 1)
-        else:
-            bitrate_variation = 0.0
+    if bitrate_values and avg_bitrate_kbps > 0:
+        deviation = sum(abs(b - avg_bitrate_kbps) for b in bitrate_values) / len(bitrate_values)
+        bitrate_variation = round((deviation / avg_bitrate_kbps) * 100, 1)
+
+    status_warnings: List[str] = []
+    for status in statuses:
+        upper = status.upper()
+        if "WARNING" in upper and status not in status_warnings:
+            status_warnings.append(status)
+
+    encoder_combos = {
+        (enc.strip().lower(), soft.strip().lower())
+        for enc, soft in encoder_pairs
+        if enc or soft
+    }
+    encoder_diversified = len(encoder_combos) > 1
+
+    creation_datetimes = [dt for dt in (_parse_iso_datetime(value) for value in creation_values) if dt]
+    if len(creation_datetimes) <= 1:
+        timestamps_randomized = bool(creation_datetimes)
+    else:
+        unique_times = {dt.isoformat() for dt in creation_datetimes}
+        time_span = (max(creation_datetimes) - min(creation_datetimes)).total_seconds()
+        timestamps_randomized = len(unique_times) > 1 or time_span >= 60
+
+    phash_ok = mean_phash >= 10.0
+
+    profile_label: Optional[str] = None
+    profile_map = {
+        "tiktok": "TikTok",
+        "instagram": "Instagram",
+        "youtube": "YouTube Shorts",
+    }
+    if manifest_path.exists():
+        try:
+            with manifest_path.open("r", encoding="utf-8", newline="") as fh:
+                reader = csv.DictReader(fh)
+                for row in reader:
+                    file_name = (row.get("filename") or row.get("file") or "").strip()
+                    if target_names and file_name and file_name not in target_names:
+                        continue
+                    raw_profile = (row.get("profile") or "").strip()
+                    if raw_profile:
+                        profile_label = profile_map.get(raw_profile.lower(), raw_profile)
+                        break
+        except Exception as exc:
+            logger.debug("Failed to parse profile info: %s", exc)
 
     trust_score = _calculate_trust_score(
         mean_ssim,
         mean_phash,
+        mean_psnr,
         bitrate_variation,
         has_ssim=bool(ssim_values),
         has_phash=bool(phash_values),
+        has_psnr=bool(psnr_values),
     )
 
+    trust_label, trust_emoji = _derive_trust_label(trust_score, profile_label)
+
+    copies_created = len(target_names) if target_names else len(generated_files)
+    if copies_created == 0:
+        copies_created = len(metrics_map)
+
     return AuditSummary(
-        copies_created=len(generated_files),
-        bitrate_variation_pct=bitrate_variation,
+        copies_created=copies_created,
+        avg_bitrate_kbps=round(avg_bitrate_kbps, 1) if avg_bitrate_kbps else 0.0,
+        avg_bitrate_mbps=avg_bitrate_mbps,
         mean_ssim=mean_ssim,
+        mean_psnr=mean_psnr,
         mean_phash_diff=mean_phash,
         trust_score=trust_score,
         manifest_path=manifest_path,
         report_path=report_path,
         source_name=source.name,
+        status_warnings=status_warnings,
+        encoder_diversified=encoder_diversified,
+        timestamps_randomized=timestamps_randomized,
+        phash_ok=phash_ok,
+        trust_label=trust_label,
+        trust_emoji=trust_emoji,
+        profile_label=profile_label,
+        bitrate_variation_pct=bitrate_variation,
     )
 
 

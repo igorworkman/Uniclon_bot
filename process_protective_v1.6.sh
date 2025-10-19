@@ -501,6 +501,11 @@ PY
 }
 
 prepare_output_name() {
+  local source_name="${1:-${SOURCE_BASENAME:-}}"
+  if [ -z "$source_name" ]; then
+    echo "❌ Не задано имя исходного файла для генерации выходного имени" >&2
+    exit 1
+  fi
   while :; do
     local days hours minutes seconds stamp salt hash_val seed_hash
     days=$(rand_int 3 10)
@@ -512,7 +517,7 @@ prepare_output_name() {
       stamp=$(date -u +"%Y%m%d_%H%M%S")
     fi
     salt=$(date +%s%N 2>/dev/null || date +%s)
-    hash_val=$(deterministic_md5 "${name}-${CURRENT_COPY_INDEX}-${salt}-${stamp}-${SEED_HEX}")
+    hash_val=$(deterministic_md5 "${source_name}-${CURRENT_COPY_INDEX}-${salt}-${stamp}-${SEED_HEX}")
     seed_hash=${hash_val:0:5}
     OUT_NAME="VID_${stamp}_${seed_hash}.mp4"
     OUT="${OUTPUT_DIR}/${OUT_NAME}"
@@ -703,7 +708,7 @@ pick_music_variant_track() {
 }
 
 base="$(basename "$SRC")"
-name="${base%.*}"
+SOURCE_BASENAME="${base%.*}"
 
 ORIG_DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$SRC")
 if [ -z "$ORIG_DURATION" ] || [ "$ORIG_DURATION" = "N/A" ]; then
@@ -1242,7 +1247,7 @@ EOF
   CREATION_TIME=$(jitter_iso_timestamp "$CREATION_TIME")
   CREATION_TIME_EXIF="$CREATION_TIME"
   CURRENT_COPY_INDEX="$copy_index"
-  prepare_output_name
+  prepare_output_name "$SOURCE_BASENAME"
   local FINAL_OUT="$OUT"
   local ENCODE_TARGET="$FINAL_OUT"
   local INTRO_OUTPUT_PATH=""

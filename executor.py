@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 # REGION AI: imports
 from config import SCRIPT_PATH, OUTPUT_DIR
@@ -29,7 +29,7 @@ async def run_script_with_logs(
     if normalized_profile == "default":
         normalized_profile = ""
 
-    valid_profiles = {"tiktok", "instagram", "telegram"}
+    valid_profiles = {"tiktok", "instagram", "youtube"}
     profile_args: List[str] = []
     if normalized_profile in valid_profiles:
         profile_args = ["--profile", normalized_profile]
@@ -111,3 +111,37 @@ async def list_new_mp4s(since_ts: float, name_hint: str = "") -> List[Path]:
             continue
     files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
     return files
+
+
+async def probe_video_duration(path: Path) -> Optional[float]:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        logger.warning("ffprobe not available to measure duration")
+        return None
+
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        logger.warning(
+            "ffprobe failed for %s: %s", path, stderr.decode(errors="replace").strip()
+        )
+        return None
+
+    try:
+        return float(stdout.decode().strip())
+    except (TypeError, ValueError):
+        return None

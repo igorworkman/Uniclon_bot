@@ -17,7 +17,7 @@ from aiogram.types.input_file import FSInputFile
 from config import BASE_DIR, OUTPUT_DIR, MAX_COPIES, LOG_TAIL_CHARS, CLEAN_UP_INPUT
 from utils import parse_copies_from_caption, parse_filename_and_copies
 from downloader import download_telegram_file
-from executor import run_script_with_logs, list_new_mp4s
+from executor import run_script_with_logs, list_new_mp4s, probe_video_duration
 from uniclon_bot import perform_self_audit
 # END REGION AI
 from locales import get_text
@@ -39,7 +39,6 @@ _TELEGRAM_DOCUMENT_LIMIT = 2 * 1024 * 1024 * 1024  # 2 GB
 _VALID_PROFILES = {
     "tiktok": "TikTok",
     "instagram": "Instagram",
-    "telegram": "Telegram",
     "youtube": "YouTube Shorts",
 }
 
@@ -201,14 +200,14 @@ async def handle_profile(message: Message) -> None:
     text = (message.text or "").split(maxsplit=1)
     if len(text) < 2:
         await message.answer(
-            "⚠️ Профиль не поддерживается. Доступны: tiktok, instagram, telegram, youtube"
+            "⚠️ Профиль не поддерживается. Доступны: tiktok, instagram, youtube"
         )
         return
 
     value = text[1].strip().lower()
     if value not in _VALID_PROFILES:
         await message.answer(
-            "⚠️ Профиль не поддерживается. Доступны: tiktok, instagram, telegram, youtube"
+            "⚠️ Профиль не поддерживается. Доступны: tiktok, instagram, youtube"
         )
         return
 
@@ -653,6 +652,15 @@ async def _run_and_send(
     start_ts = time.time()
     lang = _get_user_lang(message)
 
+    if profile and profile.lower() == "tiktok":
+        try:
+            duration_val = await probe_video_duration(input_path)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to probe duration for %s", input_path)
+            duration_val = None
+        if duration_val and duration_val > 60.0:
+            await message.answer("Видео превышает 60 с, будет укорочено.")
+
     await message.answer("Начата обработка видео…")
 
     try:
@@ -814,11 +822,11 @@ async def _run_and_send(
         report_lines = [
             f"🧾 Uniclon Audit Report ({audit_summary.source_name})",
             f"🎥 Copies created: {audit_summary.copies_created}",
-            f"📈 Bitrate variation: ±{audit_summary.bitrate_variation_pct:.1f}%",
-            f"🎞️ SSIM: {audit_summary.mean_ssim:.3f}",
-            f"🧩 pHash diff: {audit_summary.mean_phash_diff:.1f}",
-            f"✅ Trust Score: {audit_summary.trust_score}/10",
-            "📂 Reports: manifest.csv, uniclon_report.csv",
+            f"📈 Avg bitrate variation: ±{audit_summary.bitrate_variation_pct:.1f}%",
+            f"🎞️ Avg SSIM: {audit_summary.mean_ssim:.3f}",
+            f"🧩 Avg pHash diff: {audit_summary.mean_phash_diff:.1f}",
+            f"✅ Trust\u2011Level: {audit_summary.trust_score}/10",
+            "📂 Reports: manifest.csv + uniclon_report.csv",
         ]
         await message.answer("\n".join(report_lines))
 

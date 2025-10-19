@@ -15,7 +15,7 @@ python3 - "$MANIFEST" "$QUALITY" "$META" "$PHASH" "$REPORT" <<'PY'
 import csv
 import pathlib
 import sys
-from typing import Dict
+from typing import Dict, Optional
 
 manifest_path = pathlib.Path(sys.argv[1])
 quality_path = pathlib.Path(sys.argv[2])
@@ -48,15 +48,34 @@ all_names = set(manifest) | set(quality) | set(meta) | set(phash)
 
 headers = [
     "file",
-    "ssim",
-    "psnr",
-    "phash_diff",
-    "bitrate_kbps",
+    "SSIM",
+    "PSNR",
+    "pHash",
+    "bitrate",
     "encoder",
     "software",
     "creation_time",
     "status",
 ]
+
+
+def _parse_float(value: str) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _select_bitrate(row: Dict[str, str]) -> Optional[float]:
+    for key in ("bitrate", "bitrate_kbps"):
+        candidate = row.get(key)
+        parsed = _parse_float(candidate) if candidate else None
+        if parsed is not None:
+            if parsed > 100000 and key == "bitrate":
+                return parsed / 1000.0
+            return parsed
+    return None
+
 
 with report_path.open("w", encoding="utf-8", newline="") as fh:
     writer = csv.writer(fh)
@@ -68,29 +87,19 @@ with report_path.open("w", encoding="utf-8", newline="") as fh:
         meta_row = meta.get(name, {})
         p_row = phash.get(name, {})
 
-        def _parse_float(value):
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                return None
-
-        bitrate_raw = _parse_float(m_row.get("bitrate"))
-        if bitrate_raw is None:
-            bitrate_raw = _parse_float(m_row.get("bitrate_kbps"))
-        bitrate_kbps = None
-        if bitrate_raw is not None:
-            bitrate_kbps = bitrate_raw / 1000 if bitrate_raw > 100 else bitrate_raw
-
         ssim = _parse_float(q_row.get("SSIM") or q_row.get("ssim") or m_row.get("ssim"))
         psnr = _parse_float(q_row.get("PSNR") or q_row.get("psnr") or m_row.get("psnr"))
-        phash_diff = _parse_float(p_row.get("phash_diff") or p_row.get("phash"))
+        phash_diff = _parse_float(p_row.get("pHash") or p_row.get("phash") or p_row.get("phash_diff"))
+        bitrate = _select_bitrate(m_row)
 
         encoder = (meta_row.get("encoder") or m_row.get("encoder") or "").strip()
         software = (meta_row.get("software") or m_row.get("software") or "").strip()
         creation_time = (meta_row.get("creation_time") or m_row.get("creation_time") or "").strip()
 
         status = "OK"
-        if ssim is not None and ssim < 0.94:
+        if ssim is None and psnr is None and phash_diff is None:
+            status = "NO_METRICS"
+        elif ssim is not None and ssim < 0.94:
             status = "LOW_SSIM"
         elif psnr is not None and psnr < 36:
             status = "LOW_PSNR"
@@ -102,7 +111,7 @@ with report_path.open("w", encoding="utf-8", newline="") as fh:
             f"{ssim:.3f}" if ssim is not None else "",
             f"{psnr:.2f}" if psnr is not None else "",
             f"{phash_diff:.1f}" if phash_diff is not None else "",
-            f"{bitrate_kbps:.1f}" if bitrate_kbps is not None else "",
+            f"{bitrate:.1f}" if bitrate is not None else "",
             encoder,
             software,
             creation_time,

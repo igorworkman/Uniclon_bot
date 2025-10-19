@@ -4,6 +4,8 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 DEBUG=0
 MUSIC_VARIANT=0
 PROFILE=""
@@ -96,11 +98,11 @@ case "$PROFILE" in
     TARGET_W=1080
     TARGET_H=1920
     BR_MIN=3500
-    BR_MAX=3500
-    FPS_BASE=(30)
+    BR_MAX=4200
+    FPS_BASE=(30 60)
     FPS_RARE=()
     AUDIO_SR=44100
-    PROFILE_FORCE_FPS=30
+    PROFILE_FORCE_FPS=""
     PROFILE_MAX_DURATION=60
     VIDEO_PROFILE="high"
     VIDEO_LEVEL="4.0"
@@ -109,23 +111,24 @@ case "$PROFILE" in
     TARGET_W=1080
     TARGET_H=1350
     BR_MIN=3000
-    BR_MAX=3000
+    BR_MAX=3600
     FPS_BASE=(30)
     FPS_RARE=()
     AUDIO_SR=48000
+    PROFILE_MAX_DURATION=60
     VIDEO_PROFILE="high"
     VIDEO_LEVEL="4.1"
     ;;
-  telegram)
-    TARGET_W=1280
-    TARGET_H=720
-    BR_MIN=2500
-    BR_MAX=2500
-    FPS_BASE=(25)
+  youtube)
+    TARGET_W=1920
+    TARGET_H=1080
+    BR_MIN=5000
+    BR_MAX=6500
+    FPS_BASE=(24 30 60)
     FPS_RARE=()
     AUDIO_SR=48000
-    VIDEO_PROFILE="main"
-    VIDEO_LEVEL="3.1"
+    VIDEO_PROFILE="high"
+    VIDEO_LEVEL="4.2"
     ;;
   "" )
     ;;
@@ -459,28 +462,41 @@ date_supports_v_flag() {
   date -v-1d +%Y >/dev/null 2>&1
 }
 
-generate_rnd_date() {
-  local days=$((RANDOM % 10 + 2))
-  local hours=$((RANDOM % 6 + 1))
-  local minutes=$((RANDOM % 59 + 1))
-  # macOS-style reference: RND_DATE=$(date -v-$((RANDOM % 10 + 2))d -v-$((RANDOM % 6 + 1))H -v-$((RANDOM % 59 + 1))M +"%Y%m%d_%H%M%S")
-  if date_supports_v_flag; then
-    RND_DATE=$(date -v-"${days}"d -v-"${hours}"H -v-"${minutes}"M +"%Y%m%d_%H%M%S")
-    return
-  fi
-  if date_supports_d_flag; then
-    RND_DATE=$(date -u -d "-${days} days -${hours} hours -${minutes} minutes" +"%Y%m%d_%H%M%S")
-  else
-    RND_DATE=$(date -u -v -"${days}"d -v -"${hours}"H -v -"${minutes}"M +"%Y%m%d_%H%M%S")
-  fi
-}
-
 prepare_output_name() {
   while :; do
-    generate_rnd_date
-    if [ "$PROFILE_VALUE" = "instagram" ]; then
-      local rand_id=$(rand_int 100000 999999)
-      OUT_NAME=$(printf "IMG_%06d.MOV" "$rand_id")
+    local days hours minutes profile_upper
+    days=$(rand_int 2 11)
+    hours=$(rand_int 1 6)
+    minutes=$(rand_int 1 59)
+    profile_upper=$(printf '%s' "$PROFILE_VALUE" | tr '[:lower:]' '[:upper:]')
+
+    if date_supports_v_flag; then
+      RND_DATE=$(date -v-"${days}"d -v-"${hours}"H -v-"${minutes}"M +"%Y%m%d_%H%M%S")
+      OUT_TOUCH_TS=$(date -v-"${days}"d -v-"${hours}"H -v-"${minutes}"M +"%Y%m%d%H%M.%S")
+    elif date_supports_d_flag; then
+      local spec="-${days} days -${hours} hours -${minutes} minutes"
+      RND_DATE=$(date -u -d "$spec" +"%Y%m%d_%H%M%S")
+      OUT_TOUCH_TS=$(date -u -d "$spec" +"%Y%m%d%H%M.%S")
+    else
+      IFS=$'\n' read -r RND_DATE OUT_TOUCH_TS <<EOF
+$(PY_DAYS=$days PY_HOURS=$hours PY_MINUTES=$minutes python3 - <<'PY'
+import datetime
+import os
+
+days = int(os.environ['PY_DAYS'])
+hours = int(os.environ['PY_HOURS'])
+minutes = int(os.environ['PY_MINUTES'])
+dt = datetime.datetime.utcnow() - datetime.timedelta(days=days, hours=hours, minutes=minutes)
+print(dt.strftime('%Y%m%d_%H%M%S'))
+print(dt.strftime('%Y%m%d%H%M.%S'))
+PY
+)
+EOF
+    fi
+
+    if [ "$profile_upper" = "INSTAGRAM" ] || [[ "$profile_upper" == IMG* ]]; then
+      local rand_suffix=$((6000 + RANDOM % 1000))
+      OUT_NAME="IMG_${rand_suffix}.MOV"
     else
       OUT_NAME="VID_${RND_DATE}.mp4"
     fi
@@ -489,8 +505,6 @@ prepare_output_name() {
   done
   FILE_STEM="${OUT_NAME%.*}"
   FILE_EXT="${OUT_NAME##*.}"
-  local touch_ts="${RND_DATE/_/}"
-  OUT_TOUCH_TS="${touch_ts:0:12}.${touch_ts:12:2}"
 }
 
 rand_description() {
@@ -1337,7 +1351,9 @@ EOF
   EXIF_CMD+=("$OUT")
   "${EXIF_CMD[@]}" >/dev/null
 
-  touch -t "$OUT_TOUCH_TS" "${OUTPUT_DIR}/${OUT_NAME}"
+  if [ -n "$OUT_TOUCH_TS" ]; then
+    touch -t "$OUT_TOUCH_TS" "${OUTPUT_DIR}/${OUT_NAME}"
+  fi
   FILE_NAME="$(basename "$OUT")"
   local PREVIEW_NAME=""
   local PREVIEW_PATH="${OUTPUT_DIR}/${FILE_STEM}_preview.png"
@@ -1470,6 +1486,34 @@ for idx in "${!RUN_FILES[@]}"; do
 done
 
 report_template_statistics
+
+run_self_audit_pipeline() {
+  local script_path
+  for script_path in "${BASE_DIR}/collect_meta.sh" "${BASE_DIR}/quality_check.sh"; do
+    if [ -f "$script_path" ]; then
+      chmod +x "$script_path" 2>/dev/null || true
+      (cd "$BASE_DIR" && "./$(basename "$script_path")") || echo "⚠️ ${script_path##*/} завершился с ошибкой"
+    fi
+  done
+
+  local phash_script="${BASE_DIR}/phash_check.py"
+  if [ -f "$phash_script" ]; then
+    local generated
+    for generated in "${RUN_FILES[@]}"; do
+      local target_path="${OUTPUT_DIR}/${generated}"
+      [ -f "$target_path" ] || continue
+      python3 "$phash_script" "$SRC" "$target_path" >/dev/null 2>&1 || echo "⚠️ pHash check failed for $generated"
+    done
+  fi
+
+  local audit_script="${BASE_DIR}/uniclon_audit.sh"
+  if [ -f "$audit_script" ]; then
+    chmod +x "$audit_script" 2>/dev/null || true
+    (cd "$BASE_DIR" && "./$(basename "$audit_script")") || echo "⚠️ uniclon_audit.sh завершился с ошибкой"
+  fi
+}
+
+run_self_audit_pipeline
 
 if [ "$AUTO_CLEAN" -eq 1 ]; then
   cleanup_temp_artifacts

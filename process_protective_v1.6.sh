@@ -5,6 +5,9 @@ set -euo pipefail
 IFS=$'\n\t'
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CHECK_DIR="${BASE_DIR}/checks"
+
+mkdir -p "$CHECK_DIR"
 
 DEBUG=0
 MUSIC_VARIANT=0
@@ -358,6 +361,7 @@ deterministic_md5() {
 
 RNG_HEX=""
 RNG_POS=0
+CURRENT_COPY_INDEX=0
 
 init_rng() {
   RNG_HEX="$1"
@@ -462,49 +466,74 @@ date_supports_v_flag() {
   date -v-1d +%Y >/dev/null 2>&1
 }
 
-prepare_output_name() {
-  while :; do
-    local days hours minutes profile_upper
-    days=$(rand_int 2 11)
-    hours=$(rand_int 1 6)
-    minutes=$(rand_int 1 59)
-    profile_upper=$(printf '%s' "$PROFILE_VALUE" | tr '[:lower:]' '[:upper:]')
+format_past_timestamp() {
+  local fmt="$1"
+  local days="$2"
+  local hours="$3"
+  local minutes="$4"
+  local seconds="$5"
 
-    if date_supports_v_flag; then
-      RND_DATE=$(date -v-"${days}"d -v-"${hours}"H -v-"${minutes}"M +"%Y%m%d_%H%M%S")
-      OUT_TOUCH_TS=$(date -v-"${days}"d -v-"${hours}"H -v-"${minutes}"M +"%Y%m%d%H%M.%S")
-    elif date_supports_d_flag; then
-      local spec="-${days} days -${hours} hours -${minutes} minutes"
-      RND_DATE=$(date -u -d "$spec" +"%Y%m%d_%H%M%S")
-      OUT_TOUCH_TS=$(date -u -d "$spec" +"%Y%m%d%H%M.%S")
-    else
-      IFS=$'\n' read -r RND_DATE OUT_TOUCH_TS <<EOF
-$(PY_DAYS=$days PY_HOURS=$hours PY_MINUTES=$minutes python3 - <<'PY'
+  if date_supports_v_flag; then
+    date -v-"${days}"d -v-"${hours}"H -v-"${minutes}"M -v-"${seconds}"S +"$fmt"
+    return
+  fi
+
+  if date_supports_d_flag; then
+    local spec="-${days} days -${hours} hours -${minutes} minutes -${seconds} seconds"
+    date -u -d "$spec" +"$fmt"
+    return
+  fi
+
+  PY_FMT="$fmt" PY_DAYS="$days" PY_HOURS="$hours" PY_MINUTES="$minutes" PY_SECONDS="$seconds" python3 - <<'PY'
 import datetime
 import os
 
+fmt = os.environ['PY_FMT']
 days = int(os.environ['PY_DAYS'])
 hours = int(os.environ['PY_HOURS'])
 minutes = int(os.environ['PY_MINUTES'])
-dt = datetime.datetime.utcnow() - datetime.timedelta(days=days, hours=hours, minutes=minutes)
-print(dt.strftime('%Y%m%d_%H%M%S'))
-print(dt.strftime('%Y%m%d%H%M.%S'))
-PY
+seconds = int(os.environ['PY_SECONDS'])
+dt = datetime.datetime.utcnow() - datetime.timedelta(
+    days=days, hours=hours, minutes=minutes, seconds=seconds
 )
-EOF
-    fi
+print(dt.strftime(fmt))
+PY
+}
 
-    if [ "$profile_upper" = "INSTAGRAM" ] || [[ "$profile_upper" == IMG* ]]; then
-      local rand_suffix=$((6000 + RANDOM % 1000))
-      OUT_NAME="IMG_${rand_suffix}.MOV"
-    else
-      OUT_NAME="VID_${RND_DATE}.mp4"
+prepare_output_name() {
+  while :; do
+    local days hours minutes seconds stamp salt hash_val seed_hash
+    days=$(rand_int 3 10)
+    hours=$(rand_int 0 23)
+    minutes=$(rand_int 0 59)
+    seconds=$(rand_int 0 59)
+    stamp=$(format_past_timestamp "%Y%m%d_%H%M%S" "$days" "$hours" "$minutes" "$seconds")
+    if [ -z "$stamp" ]; then
+      stamp=$(date -u +"%Y%m%d_%H%M%S")
     fi
+    salt=$(date +%s%N 2>/dev/null || date +%s)
+    hash_val=$(deterministic_md5 "${name}-${CURRENT_COPY_INDEX}-${salt}-${stamp}-${SEED_HEX}")
+    seed_hash=${hash_val:0:5}
+    OUT_NAME="VID_${stamp}_${seed_hash}.mp4"
     OUT="${OUTPUT_DIR}/${OUT_NAME}"
     [ -e "$OUT" ] || break
   done
   FILE_STEM="${OUT_NAME%.*}"
   FILE_EXT="${OUT_NAME##*.}"
+}
+
+touch_randomize_mtime() {
+  local target="$1"
+  [ -f "$target" ] || return
+  local days hours minutes seconds touch_stamp
+  days=$(rand_int 2 9)
+  hours=$(rand_int 0 23)
+  minutes=$(rand_int 0 59)
+  seconds=$(rand_int 0 59)
+  touch_stamp=$(format_past_timestamp "%Y%m%d%H%M.%S" "$days" "$hours" "$minutes" "$seconds")
+  if [ -n "$touch_stamp" ]; then
+    touch -t "$touch_stamp" "$target" 2>/dev/null || true
+  fi
 }
 
 rand_description() {
@@ -1212,6 +1241,7 @@ EOF
   CREATION_TIME=$(generate_iso_timestamp)
   CREATION_TIME=$(jitter_iso_timestamp "$CREATION_TIME")
   CREATION_TIME_EXIF="$CREATION_TIME"
+  CURRENT_COPY_INDEX="$copy_index"
   prepare_output_name
   local FINAL_OUT="$OUT"
   local ENCODE_TARGET="$FINAL_OUT"
@@ -1351,9 +1381,7 @@ EOF
   EXIF_CMD+=("$OUT")
   "${EXIF_CMD[@]}" >/dev/null
 
-  if [ -n "$OUT_TOUCH_TS" ]; then
-    touch -t "$OUT_TOUCH_TS" "${OUTPUT_DIR}/${OUT_NAME}"
-  fi
+  touch_randomize_mtime "$OUT"
   FILE_NAME="$(basename "$OUT")"
   local PREVIEW_NAME=""
   local PREVIEW_PATH="${OUTPUT_DIR}/${FILE_STEM}_preview.png"
@@ -1488,28 +1516,36 @@ done
 report_template_statistics
 
 run_self_audit_pipeline() {
-  local script_path
-  for script_path in "${BASE_DIR}/collect_meta.sh" "${BASE_DIR}/quality_check.sh"; do
-    if [ -f "$script_path" ]; then
-      chmod +x "$script_path" 2>/dev/null || true
-      (cd "$BASE_DIR" && "./$(basename "$script_path")") || echo "⚠️ ${script_path##*/} завершился с ошибкой"
+  local scripts=("collect_meta.sh" "quality_check.sh")
+  local script
+  for script in "${scripts[@]}"; do
+    if [ -f "${BASE_DIR}/${script}" ]; then
+      chmod +x "${BASE_DIR}/${script}" 2>/dev/null || true
+      (cd "$BASE_DIR" && ./"$script") || echo "⚠️ ${script} завершился с ошибкой"
+    else
+      echo "⚠️ ${script} не найден"
     fi
   done
 
+  local phash_log="${CHECK_DIR}/phash_raw.log"
+  : > "$phash_log"
+
   local phash_script="${BASE_DIR}/phash_check.py"
   if [ -f "$phash_script" ]; then
-    local generated
-    for generated in "${RUN_FILES[@]}"; do
-      local target_path="${OUTPUT_DIR}/${generated}"
-      [ -f "$target_path" ] || continue
-      python3 "$phash_script" "$SRC" "$target_path" >/dev/null 2>&1 || echo "⚠️ pHash check failed for $generated"
-    done
+    while IFS= read -r -d '' video_file; do
+      python3 "$phash_script" "$SRC" "$video_file" >>"$phash_log" 2>&1 || \
+        echo "⚠️ pHash check failed for ${video_file##*/}" >>"$phash_log"
+    done < <(find "$OUTPUT_DIR" -maxdepth 1 -type f -name '*.mp4' -print0)
+  else
+    echo "⚠️ phash_check.py не найден"
   fi
 
   local audit_script="${BASE_DIR}/uniclon_audit.sh"
   if [ -f "$audit_script" ]; then
     chmod +x "$audit_script" 2>/dev/null || true
-    (cd "$BASE_DIR" && "./$(basename "$audit_script")") || echo "⚠️ uniclon_audit.sh завершился с ошибкой"
+    (cd "$BASE_DIR" && ./"${audit_script##*/}") || echo "⚠️ uniclon_audit.sh завершился с ошибкой"
+  else
+    echo "⚠️ uniclon_audit.sh не найден"
   fi
 }
 

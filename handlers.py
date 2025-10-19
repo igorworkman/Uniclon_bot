@@ -3,7 +3,7 @@ import os
 import time
 import zipfile
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Set, Tuple, TYPE_CHECKING
+from typing import Dict, Iterable, List, Optional, Set, Tuple, TYPE_CHECKING
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
@@ -819,30 +819,52 @@ async def _run_and_send(
         logger.exception("Self-audit pipeline failed for %s", input_path.name)
 
     if audit_summary:
+        bitrate_text = (
+            f"{audit_summary.avg_bitrate_mbps:.1f} Mbps"
+            if audit_summary.avg_bitrate_mbps
+            else "n/a"
+        )
+        phash_icon = "✅" if audit_summary.phash_ok else "⚠️"
+        diversified = "Yes" if audit_summary.encoder_diversified else "No"
+        timestamps_label = "Yes" if audit_summary.timestamps_randomized else "No"
+
+        warning_text = ""
+        if audit_summary.status_warnings:
+            humanized: List[str] = []
+            for raw in audit_summary.status_warnings:
+                cleaned = raw.replace("WARNING_", "").replace(";", ", ")
+                humanized.append(cleaned.replace("_", " ").title())
+            warning_text = f"⚠️ Status warnings: {', '.join(humanized)}"
+
         report_lines = [
             f"🧾 Uniclon Audit Report ({audit_summary.source_name})",
-            f"🎥 Copies created: {audit_summary.copies_created}",
-            f"📈 Avg bitrate variation: ±{audit_summary.bitrate_variation_pct:.1f}%",
-            f"🎞️ Avg SSIM: {audit_summary.mean_ssim:.3f}",
-            f"🧩 Avg pHash diff: {audit_summary.mean_phash_diff:.1f}",
-            f"✅ Trust\u2011Level: {audit_summary.trust_score}/10",
-            "📂 Reports: manifest.csv + uniclon_report.csv",
+            f"🎥 Copies: {audit_summary.copies_created}",
+            f"📈 Avg bitrate: {bitrate_text}",
+            f"🎞️ SSIM: {audit_summary.mean_ssim:.3f} | PSNR: {audit_summary.mean_psnr:.1f} dB",
+            f"🧩 Avg pHash diff: {audit_summary.mean_phash_diff:.1f} {phash_icon}",
+            f"🧠 Encoder/software diversified: {diversified}",
+            f"🕒 Timestamps randomized: {timestamps_label}",
         ]
+        if warning_text:
+            report_lines.append(warning_text)
+        report_lines.extend(
+            [
+                "",
+                f"{audit_summary.trust_emoji} TRUST SCORE: {audit_summary.trust_score:.1f} / 10 — {audit_summary.trust_label}",
+                "📎 Отчёт: uniclon_report.csv",
+            ]
+        )
+
         await message.answer("\n".join(report_lines))
 
-        attachments = [
-            (audit_summary.manifest_path, "manifest.csv"),
-            (audit_summary.report_path, "uniclon_report.csv"),
-        ]
-        for path, caption in attachments:
-            if not path.exists():
-                continue
+        if audit_summary.report_path.exists():
             try:
                 await message.answer_document(
-                    document=FSInputFile(path), caption=caption
+                    document=FSInputFile(audit_summary.report_path),
+                    caption="uniclon_report.csv",
                 )
             except Exception:
-                logger.exception("Failed to send audit file %s", path)
+                logger.exception("Failed to send audit file %s", audit_summary.report_path)
 
     if CLEAN_UP_INPUT:
         try:

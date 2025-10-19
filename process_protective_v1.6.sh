@@ -627,6 +627,7 @@ quality_check() {
     local ssim_log
     if ! ssim_log=$(ffmpeg -v error -i "$SRC" -i "$copy_path" \
       -filter_complex "[0:v][1:v]scale2ref=flags=bicubic[ref][copy];[ref][copy]ssim" \
+      -map "[ssim]" \
       -f null - 2>&1); then
       echo "⚠️ Не удалось вычислить SSIM для ${RUN_FILES[$idx]} (ffmpeg завершился с ошибкой)" >&2
       ssim_val="0.000"

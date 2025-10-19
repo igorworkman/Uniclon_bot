@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 async def run_script_with_logs(
-    input_file: Path, copies: int, cwd: Path, profile: str
+    input_file: Path, copies: int, cwd: Path, profile: str, quality: str
 ) -> Tuple[int, str]:
     """Запускает bash-скрипт и возвращает (returncode, объединённые логи)."""
     if not SCRIPT_PATH.exists():
@@ -41,11 +41,20 @@ async def run_script_with_logs(
         )
         normalized_profile = ""
 
+    normalized_quality = (quality or "").strip().lower()
+    quality_args: List[str] = []
+    if normalized_quality in {"high", "std"}:
+        quality_args = ["--quality", normalized_quality]
+    else:
+        normalized_quality = "std"
+        quality_args = ["--quality", normalized_quality]
+
     proc = await asyncio.create_subprocess_exec(
         str(SCRIPT_PATH),
         input_file.name,
         str(int(copies)),
         *profile_args,
+        *quality_args,
         cwd=str(cwd),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -63,7 +72,7 @@ async def run_script_with_logs(
                 "[%s|copies=%s|profile=%s] %s",
                 input_file.name,
                 copies,
-                normalized_profile or "-",
+                f"{normalized_profile or '-'}|q={normalized_quality}",
                 message,
             )
         else:
@@ -71,7 +80,7 @@ async def run_script_with_logs(
                 "[%s|copies=%s|profile=%s]",
                 input_file.name,
                 copies,
-                normalized_profile or "-",
+                f"{normalized_profile or '-'}|q={normalized_quality}",
             )
 
     rc = await proc.wait()

@@ -858,7 +858,22 @@ declare -a RUN_CREATIVE_LUT=()
 declare -a RUN_PREVIEWS=()
 declare -a QUALITY_ISSUES=()
 declare -a QUALITY_COPY_IDS=()
-declare -A USED_SOFT_ENC=()
+declare -a USED_SOFT_ENC_KEYS=()
+
+combo_key_seen() {
+  local key="$1"
+  local existing
+  for existing in "${USED_SOFT_ENC_KEYS[@]}"; do
+    if [ "$existing" = "$key" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+mark_combo_key() {
+  USED_SOFT_ENC_KEYS+=("$1")
+}
 
 pick_software_encoder() {
   local profile_key="${1:-default}" seed="$2" attempt=0 digest=""
@@ -877,8 +892,8 @@ pick_software_encoder() {
     SOFTWARE_TAG="${names[$idx]} ${majors[$idx]}.${minor}"
     ENCODER_TAG=$(printf "Lavf62.%d.100" "$enc_minor")
     local combo_key="${SOFTWARE_TAG}|${ENCODER_TAG}"
-    if [ -z "${USED_SOFT_ENC[$combo_key]:-}" ]; then
-      USED_SOFT_ENC[$combo_key]=1
+    if ! combo_key_seen "$combo_key"; then
+      mark_combo_key "$combo_key"
       break
     fi
     attempt=$((attempt + 1))

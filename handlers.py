@@ -18,6 +18,7 @@ from config import BASE_DIR, OUTPUT_DIR, MAX_COPIES, LOG_TAIL_CHARS, CLEAN_UP_IN
 from utils import parse_copies_from_caption, parse_filename_and_copies
 from downloader import download_telegram_file
 from executor import run_script_with_logs, list_new_mp4s
+from uniclon_bot import perform_self_audit
 # END REGION AI
 from locales import get_text
 
@@ -802,6 +803,38 @@ async def _run_and_send(
     await ack.edit_text(
         get_text(lang, "files_sent_summary", sent=sent, total=len(new_files))
     )
+
+    audit_summary = None
+    try:
+        audit_summary = await perform_self_audit(input_path, new_files)
+    except Exception:
+        logger.exception("Self-audit pipeline failed for %s", input_path.name)
+
+    if audit_summary:
+        report_lines = [
+            f"🧾 Uniclon Audit Report ({audit_summary.source_name})",
+            f"🎥 Copies created: {audit_summary.copies_created}",
+            f"📈 Bitrate variation: ±{audit_summary.bitrate_variation_pct:.1f}%",
+            f"🎞️ SSIM: {audit_summary.mean_ssim:.3f}",
+            f"🧩 pHash diff: {audit_summary.mean_phash_diff:.1f}",
+            f"✅ Trust Score: {audit_summary.trust_score}/10",
+            "📂 Reports: manifest.csv, uniclon_report.csv",
+        ]
+        await message.answer("\n".join(report_lines))
+
+        attachments = [
+            (audit_summary.manifest_path, "manifest.csv"),
+            (audit_summary.report_path, "uniclon_report.csv"),
+        ]
+        for path, caption in attachments:
+            if not path.exists():
+                continue
+            try:
+                await message.answer_document(
+                    document=FSInputFile(path), caption=caption
+                )
+            except Exception:
+                logger.exception("Failed to send audit file %s", path)
 
     if CLEAN_UP_INPUT:
         try:

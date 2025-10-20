@@ -879,33 +879,56 @@ declare -a RUN_CREATIVE_LUT=()
 declare -a RUN_PREVIEWS=()
 declare -a QUALITY_ISSUES=()
 declare -a QUALITY_COPY_IDS=()
-declare -a USED_SOFT_ENC_KEYS=()
+USED_SOFT_ENC_KEYS_LIST=""
 
 combo_key_seen() {
-  local key="$1"
-  local existing
-  for existing in "${USED_SOFT_ENC_KEYS[@]}"; do
+  local key="$1" existing
+  if [ -z "${USED_SOFT_ENC_KEYS_LIST:-}" ]; then
+    return 1
+  fi
+  while IFS= read -r existing; do
+    [ -z "$existing" ] && continue
     if [ "$existing" = "$key" ]; then
       return 0
     fi
-  done
+  done <<EOF
+${USED_SOFT_ENC_KEYS_LIST}
+EOF
   return 1
 }
 
 mark_combo_key() {
-  USED_SOFT_ENC_KEYS+=("$1")
+  local key="$1"
+  : "${USED_SOFT_ENC_KEYS_LIST:=}"
+  if combo_key_seen "$key"; then
+    return
+  fi
+  if [ -z "$USED_SOFT_ENC_KEYS_LIST" ]; then
+    USED_SOFT_ENC_KEYS_LIST="$key"
+  else
+    USED_SOFT_ENC_KEYS_LIST="${USED_SOFT_ENC_KEYS_LIST}"$'\n'"$key"
+  fi
 }
 
 unmark_combo_key() {
-  local key="$1"
-  local -a filtered=()
-  local existing
-  for existing in "${USED_SOFT_ENC_KEYS[@]}"; do
+  local key="$1" existing new_list=""
+  if [ -z "${USED_SOFT_ENC_KEYS_LIST:-}" ]; then
+    echo "⚠️ Нет сохранённых soft encoder ключей для удаления ($key)"
+    return
+  fi
+  while IFS= read -r existing; do
+    [ -z "$existing" ] && continue
     if [ "$existing" != "$key" ]; then
-      filtered+=("$existing")
+      if [ -z "$new_list" ]; then
+        new_list="$existing"
+      else
+        new_list="${new_list}"$'\n'"$existing"
+      fi
     fi
-  done
-  USED_SOFT_ENC_KEYS=("${filtered[@]}")
+  done <<EOF
+${USED_SOFT_ENC_KEYS_LIST}
+EOF
+  USED_SOFT_ENC_KEYS_LIST="$new_list"
 }
 
 pick_software_encoder() {

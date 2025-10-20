@@ -963,11 +963,7 @@ BEGIN {
     AUDIO_PROFILE="${AUDIO_PROFILE}+tempo"
   fi
   tempo_target=$(awk -v t="${tempo_target:-}" 'BEGIN{
-    if (t == "" || t+0 <= 0) {
-      printf "%.6g", 1.0;
-    } else {
-      printf "%.6g", t+0;
-    }
+    if (t == "" || t+0 <= 0) { printf "%.6g", 1.0 } else { printf "%.6g", t+0 }
   }')
   filters+=("atempo=${tempo_target}")
   AFILTER_CORE=$(IFS=,; echo "${filters[*]}")
@@ -1988,13 +1984,9 @@ EOF
   if [ "$CROP_TOTAL_H" -gt 0 ]; then PAD_Y=$(rand_int 0 "$CROP_TOTAL_H"); else PAD_Y=0; fi
 
   STRETCH_FACTOR=$(awk -v v="${STRETCH_FACTOR:-}" 'BEGIN{
-    if (v == "" || v+0 <= 0) {
-      printf "%.6g", 1.0;
-    } else {
-      printf "%.6g", v+0;
-    }
+    if (v == "" || v+0 <= 0) { printf "%.6g", 1.0 } else { printf "%.6g", v+0 }
   }')
-  VF="setpts=PTS*${STRETCH_FACTOR},scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1"  # fix: корректный синтаксис setpts
+  VF="setpts=${STRETCH_FACTOR}*PTS,scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1"  # fix: корректный синтаксис setpts
   VF="${VF},eq=brightness=0.005:saturation=1.01"
   if [ "$NOISE" -eq 1 ]; then VF="${VF},noise=alls=1:allf=t"; fi
   if [ "$CROP_TOTAL_W" -gt 0 ] || [ "$CROP_TOTAL_H" -gt 0 ]; then

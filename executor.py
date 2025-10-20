@@ -5,12 +5,20 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # REGION AI: imports
+from adaptive_tuner import get_tuned_params, record_render_result
 from config import SCRIPT_PATH, OUTPUT_DIR, NO_DEVICE_INFO, PLATFORM_PRESETS
 from report_builder import build_uniqueness_report
 # END REGION AI
 
 
 logger = logging.getLogger(__name__)
+
+# REGION AI: adaptive tuning bootstrap
+_ADAPTIVE_ENV, _ADAPTIVE_META = get_tuned_params()
+os.environ.update(_ADAPTIVE_ENV)
+_avg_text = "-" if _ADAPTIVE_META.get("uniq_avg") is None else f"{_ADAPTIVE_META['uniq_avg']:.1f}"
+logger.info("🎚 Adaptive tuner applied: mode=%s | UniqScore_avg=%s", _ADAPTIVE_META.get("mode", "neutral"), _avg_text)
+# END REGION AI
 
 # REGION AI: script path logging
 logger.info("Using processing script: %s", SCRIPT_PATH)
@@ -200,7 +208,11 @@ async def run_script_with_logs(
         logger.exception("Failed to build uniqueness report")
     else:
         if report_result:
-            _, summary_line, level_emoji = report_result
+            report_payload, summary_line, level_emoji = report_result
+            try:
+                record_render_result(report_payload)
+            except Exception:
+                logger.debug("Adaptive tuner history update failed", exc_info=True)
             lines.append(summary_line + "\n")
             try:
                 from handlers import broadcast_uniqscore_indicator

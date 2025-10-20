@@ -113,70 +113,60 @@ fi
 MANIFEST="manifest.csv"
 MANIFEST_PATH="${OUTPUT_DIR}/${MANIFEST}"
 # END REGION AI
+# REGION AI: vertical platform presets
 TARGET_W=1080
 TARGET_H=1920
-AUDIO_BR="128k"
-BR_MIN=2800
-BR_MAX=5000
-FPS_BASE=(24 25 30 50 59.94 60)
-FPS_RARE=(19.984 59.615)
+PROFILE_BR_MIN=2800
+PROFILE_BR_MAX=5000
+BR_MIN=$PROFILE_BR_MIN
+BR_MAX=$PROFILE_BR_MAX
+FPS_BASE=(30)
+FPS_RARE=()
+AUDIO_SR_OPTIONS=(44100)
 AUDIO_SR=44100
 PROFILE_FORCE_FPS=""
 PROFILE_MAX_DURATION=0
 VIDEO_PROFILE="high"
 VIDEO_LEVEL="4.0"
+PROFILE_LABEL="Default"
 
 case "$PROFILE" in
   tiktok)
+    PROFILE_LABEL="TikTok"
     TARGET_W=1080
     TARGET_H=1920
-    BR_MIN=3500
-    BR_MAX=4200
+    PROFILE_BR_MIN=2800
+    PROFILE_BR_MAX=5000
     FPS_BASE=(30 60)
-    FPS_RARE=(59.615)
-    AUDIO_SR=44100
-    PROFILE_FORCE_FPS=""
+    FPS_RARE=()
+    AUDIO_SR_OPTIONS=(44100)
     PROFILE_MAX_DURATION=60
     VIDEO_PROFILE="high"
     VIDEO_LEVEL="4.0"
     ;;
   instagram)
-    TARGET_W=1080
-    TARGET_H=1350
-    BR_MIN=3000
-    BR_MAX=3600
-    FPS_BASE=(30)
-    FPS_RARE=()
-    AUDIO_SR=48000
-    PROFILE_MAX_DURATION=60
-    VIDEO_PROFILE="high"
-# REGION AI: instagram codec level override
-    VIDEO_LEVEL="4.0"
-# END REGION AI
-    ;;
-# REGION AI: telegram distribution profile
-  telegram)
+    PROFILE_LABEL="Instagram"
     TARGET_W=1080
     TARGET_H=1920
-    BR_MIN=3200
-    BR_MAX=4000
-    FPS_BASE=(25 30)
-    FPS_RARE=(50)
-    AUDIO_SR=44100
-    PROFILE_FORCE_FPS=""
-    PROFILE_MAX_DURATION=120
+    PROFILE_BR_MIN=2500
+    PROFILE_BR_MAX=4500
+    FPS_BASE=(24 25 30)
+    FPS_RARE=()
+    AUDIO_SR_OPTIONS=(44100)
+    PROFILE_MAX_DURATION=60
     VIDEO_PROFILE="high"
     VIDEO_LEVEL="4.0"
     ;;
-# END REGION AI
   youtube)
-    TARGET_W=1920
-    TARGET_H=1080
-    BR_MIN=5000
-    BR_MAX=6500
+    PROFILE_LABEL="YouTube Shorts"
+    TARGET_W=1080
+    TARGET_H=1920
+    PROFILE_BR_MIN=3000
+    PROFILE_BR_MAX=5500
     FPS_BASE=(24 30 60)
     FPS_RARE=()
-    AUDIO_SR=48000
+    AUDIO_SR_OPTIONS=(44100 48000)
+    PROFILE_MAX_DURATION=60
     VIDEO_PROFILE="high"
     VIDEO_LEVEL="4.2"
     ;;
@@ -187,6 +177,11 @@ case "$PROFILE" in
     exit 1
     ;;
 esac
+
+BR_MIN=$PROFILE_BR_MIN
+BR_MAX=$PROFILE_BR_MAX
+AUDIO_SR=${AUDIO_SR_OPTIONS[0]}
+# END REGION AI
 PROFILE_VALUE="${PROFILE:-default}"
 NOISE_PROB_PERCENT=30
 CROP_MAX_PX=6
@@ -199,14 +194,19 @@ LUT_FILES=()
 case "$QUALITY" in
   high)
     CRF=18
-    BR_MIN=4500
-    BR_MAX=5500
+    # REGION AI: high quality bitrate bias
+    span=$((PROFILE_BR_MAX - PROFILE_BR_MIN))
+    if [ "$span" -lt 0 ]; then span=0; fi
+    BR_MIN=$((PROFILE_BR_MIN + span / 2))
+    if [ "$BR_MIN" -lt "$PROFILE_BR_MIN" ]; then BR_MIN=$PROFILE_BR_MIN; fi
+    BR_MAX=$PROFILE_BR_MAX
+    # END REGION AI
     ;;
   std|*)
-QUALITY="std"
-CRF=22
-    BR_MIN=3000
-    BR_MAX=4000
+    QUALITY="std"
+    CRF=22
+    BR_MIN=$PROFILE_BR_MIN
+    BR_MAX=$PROFILE_BR_MAX
     ;;
 esac
 
@@ -800,12 +800,12 @@ pick_qt_combo() {
         "Sony|Xperia 5 III|XQ-BQ72"
       )
       ;;
-    telegram)
+    youtube)
       combos=(
-        "Apple|iPhone 12 mini|iPhone13,1"
+        "Apple|iPhone 13 Pro|iPhone14,2"
+        "Apple|iPhone 14|iPhone15,2"
         "Samsung|Galaxy S22|SM-S901B"
         "Google|Pixel 7|GVU6C"
-        "OnePlus|9 Pro|LE2123"
       )
       ;;
     *)
@@ -1200,7 +1200,7 @@ pick_software_encoder() {
     local family="CapCut"
     case "$profile_key" in
       instagram) if [ "$prefer" -ge 45 ]; then family="VN"; fi ;;
-      telegram) if [ "$prefer" -ge 50 ]; then family="VN"; fi ;;
+      youtube) if [ "$prefer" -ge 55 ]; then family="VN"; fi ;;
       *) if [ "$prefer" -ge 60 ]; then family="VN"; fi ;;
     esac
 
@@ -1766,6 +1766,10 @@ EOF
       fi
     fi
 
+    # REGION AI: platform audio sample rate selection
+    if [ ${#AUDIO_SR_OPTIONS[@]} -gt 0 ]; then
+      AUDIO_SR=$(rand_choice AUDIO_SR_OPTIONS)
+    fi
     pick_audio_chain
 
     local jitter_filters=()
@@ -1923,8 +1927,8 @@ EOF
       instagram)
         qt_choice="Apple|iPhone 12 Pro|iPhone13,3"
         ;;
-      telegram)
-        qt_choice="Apple|iPhone 12 mini|iPhone13,1"
+      youtube)
+        qt_choice="Apple|iPhone 14|iPhone15,2"
         ;;
       *)
         ;;
@@ -2033,10 +2037,10 @@ EOF
     "$ENCODE_TARGET")
 
   if [ "$DEBUG" -eq 1 ]; then
-    echo "DEBUG copy=$copy_index seed=$SEED fps=$FPS br=${BR}k crf=$CRF maxrate=${MAXRATE}k bufsize=${BUFSIZE}k clip_start=${CLIP_START}s target_duration=$TARGET_DURATION stretch=$STRETCH_FACTOR audio=$AUDIO_PROFILE af='$AFILTER' music_track=${MUSIC_VARIANT_TRACK:-none} noise=$NOISE crop=${CROP_W}x${CROP_H}@${CROP_X},${CROP_Y} pad=${PAD_X},${PAD_Y} quality=$QUALITY mirror=${MIRROR_DESC} lut=${LUT_DESC} intro=${INTRO_DESC}"
+    echo "DEBUG copy=$copy_index seed=$SEED fps=$FPS br=${BR}k crf=$CRF maxrate=${MAXRATE}k bufsize=${BUFSIZE}k clip_start=${CLIP_START}s target_duration=$TARGET_DURATION stretch=$STRETCH_FACTOR audio=$AUDIO_PROFILE af='$AFILTER' music_track=${MUSIC_VARIANT_TRACK:-none} noise=$NOISE crop=${CROP_W}x${CROP_H}@${CROP_X},${CROP_Y} pad=${PAD_X},${PAD_Y} quality=$QUALITY profile=${PROFILE_VALUE} mirror=${MIRROR_DESC} lut=${LUT_DESC} intro=${INTRO_DESC}"
   fi
 
-  echo "▶️ [$copy_index/$COUNT] $SRC → $OUT | fps=$FPS br=${BR}k noise=$NOISE crop=${CROP_W}x${CROP_H} duration=${TARGET_DURATION}s audio=${AUDIO_PROFILE} mirror=${MIRROR_DESC} lut=${LUT_DESC} intro=${INTRO_DESC}"
+  echo "▶️ [$copy_index/$COUNT] $SRC → $OUT | fps=$FPS br=${BR}k noise=$NOISE crop=${CROP_W}x${CROP_H} duration=${TARGET_DURATION}s audio=${AUDIO_PROFILE} profile=${PROFILE_VALUE} mirror=${MIRROR_DESC} lut=${LUT_DESC} intro=${INTRO_DESC}"
 
   local ffmpeg_cmd_preview
   ffmpeg_cmd_preview=$(printf '%q ' "${FFMPEG_CMD[@]}")

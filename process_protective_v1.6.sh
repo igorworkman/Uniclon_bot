@@ -875,6 +875,18 @@ mark_combo_key() {
   USED_SOFT_ENC_KEYS+=("$1")
 }
 
+unmark_combo_key() {
+  local key="$1"
+  local -a filtered=()
+  local existing
+  for existing in "${USED_SOFT_ENC_KEYS[@]}"; do
+    if [ "$existing" != "$key" ]; then
+      filtered+=("$existing")
+    fi
+  done
+  USED_SOFT_ENC_KEYS=("${filtered[@]}")
+}
+
 pick_software_encoder() {
   local profile_key="${1:-default}" seed="$2" attempt=0 digest=""
   local -a names majors
@@ -968,7 +980,7 @@ remove_last_generated() {
     local idx=$(( ${#RUN_FILES[@]} - 1 ))
     [ "$idx" -lt 0 ] && break
     local combo_key="${RUN_SOFTWARES[$idx]}|${RUN_ENCODERS[$idx]}"
-    unset "USED_SOFT_ENC[$combo_key]"
+    unmark_combo_key "$combo_key"
     local file_path="${OUTPUT_DIR}/${RUN_FILES[$idx]}"
     local preview_file="${RUN_PREVIEWS[$idx]:-}"
     rm -f "$file_path" 2>/dev/null || true
@@ -1018,7 +1030,7 @@ remove_indices_for_regen() {
       continue
     fi
     local combo_key="${RUN_SOFTWARES[$idx]}|${RUN_ENCODERS[$idx]}"
-    unset "USED_SOFT_ENC[$combo_key]"
+    unmark_combo_key "$combo_key"
     rm -f "${OUTPUT_DIR}/${RUN_FILES[$idx]}" 2>/dev/null || true
     if [ -n "${RUN_PREVIEWS[$idx]:-}" ]; then
       rm -f "${OUTPUT_DIR}/${RUN_PREVIEWS[$idx]}" 2>/dev/null || true

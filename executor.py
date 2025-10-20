@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Tuple
 from adaptive_tuner import get_tuned_params, record_render_result
 from config import SCRIPT_PATH, OUTPUT_DIR, NO_DEVICE_INFO, PLATFORM_PRESETS
 from report_builder import build_uniqueness_report
+from render_queue import acquire_render_slot
 # END REGION AI
 
 
@@ -25,7 +26,23 @@ logger.info("Using processing script: %s", SCRIPT_PATH)
 # END REGION AI
 
 
+# REGION AI: smart render queue wrapper
 async def run_script_with_logs(
+    input_file: Path, copies: int, cwd: Path, profile: str, quality: str
+) -> Tuple[int, str]:
+    try:
+        priority = max(1, int(os.getenv("UNICLON_RENDER_PRIORITY", "1")))
+    except ValueError:
+        priority = 1
+    release = await acquire_render_slot(input_file.name, copies, priority)
+    try:
+        return await _run_script_core(input_file, copies, cwd, profile, quality)
+    finally:
+        release()
+# END REGION AI
+
+
+async def _run_script_core(
     input_file: Path, copies: int, cwd: Path, profile: str, quality: str
 ) -> Tuple[int, str]:
     """Запускает bash-скрипт и возвращает (returncode, объединённые логи)."""

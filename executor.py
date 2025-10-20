@@ -173,13 +173,14 @@ async def run_script_with_logs(
         logger.error("❌ %s копии с ошибкой: %s", len(failure_names), ", ".join(failure_names))
     tail = "".join(lines[-10:])
     if rc != 0:
+# REGION AI: tolerant script exit
         if last_target:
             base_name = Path(last_target).name
             if base_name not in failure_names:
                 failure_names.append(base_name)
                 logger.error("❌ %s копии с ошибкой: %s", len(failure_names), ", ".join(failure_names))
-        logger.error(
-            "Script %s exited with code %s for %s (copies=%s). Last line: %s. Tail logs:\n%s",
+        logger.warning(
+            "Script %s finished with code %s for %s (copies=%s). Last line: %s. Tail logs:\n%s",
             SCRIPT_PATH,
             rc,
             input_file.name,
@@ -187,9 +188,8 @@ async def run_script_with_logs(
             last_nonempty or "",
             tail,
         )
-        raise RuntimeError(
-            f"Script {SCRIPT_PATH.name} exited with code {rc}. Tail logs:\n{tail}"
-        )
+        return rc, "".join(lines)
+# END REGION AI
 
     return rc, "".join(lines)
 

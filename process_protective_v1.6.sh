@@ -1547,6 +1547,27 @@ quality_check() {
   done
 }
 
+# REGION AI: safe quality fallback driver
+_try_regen_quality() {
+  if [ -z "${RUN_COMBOS+x}" ] || [ ${#RUN_COMBOS[@]:-0} -eq 0 ]; then
+    echo "warn: Low uniqueness fallback requested but RUN_COMBOS is empty; skipping regen."
+    return 0
+  fi
+  if [ ${#QUALITY_ISSUES[@]:-0} -eq 0 ] || [ ${#QUALITY_COPY_IDS[@]:-0} -eq 0 ]; then
+    return 0
+  fi
+  echo "⚠️ Перегенерация по качеству: ${#QUALITY_ISSUES[@]} копий"
+  REGEN_OCCURRED=1
+  remove_indices_for_regen "${QUALITY_ISSUES[@]}"
+  REGEN_ITER=$((REGEN_ITER + 1))
+  local cid
+  for cid in "${QUALITY_COPY_IDS[@]}"; do
+    generate_copy "$cid" "$REGEN_ITER"
+  done
+  return 0
+}
+# END REGION AI
+
 warn_similar_copies() {
   local total=${#RUN_FILES[@]}
   [ "$total" -lt 2 ] && return
@@ -2360,13 +2381,7 @@ while :; do
     break
   fi
   quality_round=$((quality_round + 1))
-  REGEN_OCCURRED=1
-  echo "⚠️ Перегенерация по качеству: ${#QUALITY_ISSUES[@]} копий"
-  remove_indices_for_regen "${QUALITY_ISSUES[@]}"
-  REGEN_ITER=$((REGEN_ITER + 1))
-  for copy_id in "${QUALITY_COPY_IDS[@]}"; do
-    generate_copy "$copy_id" "$REGEN_ITER"
-  done
+  _try_regen_quality
 done
 
 if [ "$quality_pass_all" != true ]; then

@@ -1496,18 +1496,29 @@ PY
 
 compute_metrics_for_copy() {
   local source_file="$1" compare_file="$2"
-  local ssim_log psnr_log ssim_val psnr_val phash_val
-  ssim_log=$(ffmpeg -v error -i "$source_file" -i "$compare_file" -lavfi "ssim" -f null - 2>&1 || true)
-  ssim_val=$(printf '%s\n' "$ssim_log" | awk -F'All:' '/All:/{gsub(/^[ \t]+/,"",$2); split($2,a," "); print a[1]; exit}')
+  local ssim_val psnr_val phash_val metrics_log metrics_output compare_name
+  compare_name="${compare_file##*/}"
+  metrics_log="${CHECK_DIR}/metrics_${compare_name%.*}.log"
+# REGION AI: ffmpeg quality metrics analysis
+  metrics_output=$({
+    ffmpeg -hide_banner -loglevel error \
+      -i "$source_file" -i "$compare_file" \
+      -lavfi "[0:v]scale=1080:1920:flags=bicubic,format=yuv420p[ref];[1:v]format=yuv420p[cmp];[ref][cmp]ssim;[ref][cmp]psnr" \
+      -f null - 2>&1 || true
+  } | tee "$metrics_log")
+  ssim_val=$({ printf '%s\n' "$metrics_output" | grep -o 'All:[0-9.]*' | tail -1 | cut -d: -f2; } || true)
+  psnr_val=$({ printf '%s\n' "$metrics_output" | grep -o 'average:[0-9.]*' | tail -1 | cut -d: -f2; } || true)
+# END REGION AI
   [ -n "$ssim_val" ] || ssim_val="0.000"
-  psnr_log=$(ffmpeg -v error -i "$source_file" -i "$compare_file" -lavfi "psnr" -f null - 2>&1 || true)
-  psnr_val=$(printf '%s\n' "$psnr_log" | awk -F'average:' '/average:/{gsub(/^[ \t]+/,"",$2); split($2,a," "); print a[1]; exit}')
   [ -n "$psnr_val" ] || psnr_val="0.00"
   case "$psnr_val" in
     inf|Inf|INF|nan|NaN|NA)
       psnr_val="99.99"
       ;;
   esac
+  if [ -n "${LOG:-}" ]; then
+    echo "ℹ️ SSIM=${ssim_val} | PSNR=${psnr_val} dB" >>"$LOG"
+  fi
   phash_val=$(compute_phash_diff "$source_file" "$compare_file")
   printf '%s|%s|%s' "$ssim_val" "$psnr_val" "$phash_val"
 }
@@ -1622,7 +1633,7 @@ low_uniqueness_fallback() {
     return 1
   fi
 
-  local idx low_ssim=0 low_phash=0
+  local idx low_ssim=0 low_phash=0 high_similarity=0
   local -a candidates=()
   local -a seen_indices=()
 
@@ -1632,6 +1643,7 @@ low_uniqueness_fallback() {
     local flag=0
     local ssim_bad=0
     local phash_bad=0
+    local clone_bad=0
     if awk -v s="$ssim_val" 'BEGIN{s+=0; exit (s<0.91?0:1)}'; then
       low_ssim=$((low_ssim + 1))
       flag=1
@@ -1642,24 +1654,31 @@ low_uniqueness_fallback() {
         low_phash=$((low_phash + 1))
         flag=1
         phash_bad=1
+      elif awk -v s="$ssim_val" -v p="$phash_val" 'BEGIN{s+=0; p+=0; exit (s>=0.995 && p<6 ? 0 : 1)}'; then
+        high_similarity=$((high_similarity + 1))
+        flag=1
+        clone_bad=1
       fi
     fi
     if [ "$flag" -eq 1 ]; then
       local score
-      score=$(awk -v s="$ssim_val" -v p="$phash_val" -v sb="$ssim_bad" -v pb="$phash_bad" 'BEGIN {
+      score=$(awk -v s="$ssim_val" -v p="$phash_val" -v sb="$ssim_bad" -v pb="$phash_bad" -v cb="$clone_bad" 'BEGIN {
         s+=0; p+=0;
         bad_s = (sb>0 && s<0.91)?(0.91-s)*120:0;
         bad_p = (pb>0 && p<5)?(5-p)*12:0;
-        printf "%07.3f", bad_s + bad_p;
+        near_dup = (cb>0 && s>=0.995 && p<6)?((s-0.995)*1000 + (6-p)*15):0;
+        printf "%07.3f", bad_s + bad_p + near_dup;
       }')
       candidates+=("${score}|${idx}")
     fi
   done
 
   local trigger=1
-  if ! awk -v low="$low_ssim" -v total="$total" 'BEGIN{exit (low*2>total?0:1)}'; then
-    if ! awk -v low="$low_phash" -v total="$total" 'BEGIN{exit (low*2>total?0:1)}'; then
-      trigger=0
+  if [ "$high_similarity" -eq 0 ]; then
+    if ! awk -v low="$low_ssim" -v total="$total" 'BEGIN{exit (low*2>total?0:1)}'; then
+      if ! awk -v low="$low_phash" -v total="$total" 'BEGIN{exit (low*2>total?0:1)}'; then
+        trigger=0
+      fi
     fi
   fi
 

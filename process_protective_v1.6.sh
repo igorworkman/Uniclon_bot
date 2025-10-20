@@ -4,6 +4,18 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+# REGION AI: runtime logging helper
+log() {
+  local level="$1"
+  shift || true
+  printf '%s: %s\n' "$level" "$*"
+}
+# END REGION AI
+# REGION AI: runtime state arrays
+declare -a RUN_COMBOS RUN_FILES RUN_BITRATES RUN_FPS RUN_DURATIONS RUN_SIZES RUN_ENCODERS RUN_SOFTWARES RUN_CREATION_TIMES RUN_SEEDS RUN_TARGET_DURS RUN_TARGET_BRS RUN_PROFILES RUN_QT_MAKES RUN_QT_MODELS RUN_QT_SOFTWARES RUN_SSIM RUN_PSNR RUN_PHASH RUN_QPASS RUN_QUALITIES RUN_CREATIVE_MIRROR RUN_CREATIVE_INTRO RUN_CREATIVE_LUT RUN_PREVIEWS
+RUN_COMBOS=()
+# END REGION AI
+
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK_DIR="${BASE_DIR}/checks"
 LOW_UNIQUENESS_FLAG="${CHECK_DIR}/low_uniqueness.flag"
@@ -1432,7 +1444,14 @@ remove_indices_for_regen() {
     RUN_PREVIEWS=("${RUN_PREVIEWS[@]:0:$idx}" "${RUN_PREVIEWS[@]:$((idx + 1))}")
     RUN_VARIANT_KEYS=("${RUN_VARIANT_KEYS[@]:0:$idx}" "${RUN_VARIANT_KEYS[@]:$((idx + 1))}")
   done <<<"$sorted"
-  LAST_COMBOS=("${RUN_COMBOS[@]}")
+  LAST_COMBOS=()
+  if [ "${#RUN_COMBOS[@]:-0}" -gt 0 ]; then
+    for combo in "${RUN_COMBOS[@]}"; do
+      LAST_COMBOS+=("$combo")
+    done
+  else
+    log "warn" "Low uniqueness fallback requested but RUN_COMBOS is empty; skipping regen."
+  fi
 }
 
 compute_phash_diff() {
@@ -2025,11 +2044,16 @@ EOF
       ;;
   esac
 
+  local CODEC_LEVEL="4.0"
+  if [ "$FPS" -ge 60 ]; then
+    CODEC_LEVEL="4.2"
+  fi
+
   FFMPEG_CMD=(ffmpeg -y -hide_banner -loglevel warning -analyzeduration 5000000 -probesize 5000000 -ss "$CLIP_START" -i "$SRC")
   if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
     FFMPEG_CMD+=(-analyzeduration 5000000 -probesize 5000000 -ss "$CLIP_START" -i "$MUSIC_VARIANT_TRACK" -map 0:v:0 -map 1:a:0 -shortest)
   fi
-  FFMPEG_CMD+=(-t "$CLIP_DURATION" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$VIDEO_LEVEL" -crf "$CRF"
+  FFMPEG_CMD+=(-t "$CLIP_DURATION" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$CODEC_LEVEL" -crf "$CRF"
     -r "$FPS" -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k"
     -vf "$VF"
     -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$AFILTER"
@@ -2098,7 +2122,7 @@ EOF
   if [ "$QT_META" -eq 1 ]; then
     if [ "$DEVICE_INFO" -eq 1 ]; then
       if [ -n "$QT_MAKE" ]; then
-        EXIF_CMD+=(-Make="$QT_MAKE")
+        EXIF_CMD+=(-Make="$QT_MAKE" -QuickTime:Make="$QT_MAKE")
       fi
       local model_payload=""
       if [ -n "$DEVICE_MODEL_CODE" ]; then
@@ -2109,12 +2133,12 @@ EOF
       if [ -n "$model_payload" ]; then
         EXIF_CMD+=(-Model="$model_payload")
       fi
-      if [ -n "$QT_MAKE" ] && [ -n "$QT_MODEL" ]; then
-        EXIF_CMD+=(-QuickTime:Make="$QT_MAKE" -QuickTime:Model="$QT_MODEL" -QuickTime:com.apple.quicktime.make="$QT_MAKE" -QuickTime:com.apple.quicktime.model="$QT_MODEL")
+      if [ -n "$QT_MODEL" ]; then
+        EXIF_CMD+=(-QuickTime:Model="$QT_MODEL")
       fi
     fi
     if [ -n "$QT_SOFTWARE" ]; then
-      EXIF_CMD+=(-QuickTime:com.apple.quicktime.software="$QT_SOFTWARE")
+      EXIF_CMD+=(-Software="$QT_SOFTWARE")
     fi
   fi
   EXIF_CMD+=("$OUT")

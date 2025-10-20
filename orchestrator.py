@@ -1,6 +1,6 @@
 # fix: Render Orchestrator v1
 # REGION AI: orchestrator core
-import asyncio, json, logging, queue, time
+import asyncio, json, logging, queue, time, heapq
 from itertools import count
 from pathlib import Path
 import psutil
@@ -14,14 +14,37 @@ _state["bench"] = bench; metrics = _state.setdefault("metrics", {})
 for key, default in (("UniqScore_avg", 0.0), ("SSIM_avg", 0.0), ("phash_avg", 0.0)):
     metrics.setdefault(key, default)
 _save = lambda: STATE_FILE.write_text(json.dumps(_state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _drop_from_queue(ticket_id):
+    """Remove enqueued item by ticket id if present."""
+    removed = False
+    heap = _render_q.queue
+    for idx, item in enumerate(list(heap)):
+        if item[2]["id"] == ticket_id:
+            heap.pop(idx)
+            heapq.heapify(heap)
+            removed = True
+            break
+    return removed
 _save(); logger.info("🧠 Benchmark: CPU %.1f GHz | %s cores", (bench["cpu"] or 0.0) / 1000, bench["cores"])
 async def add_task(video, copies, priority=1):
     global _active_id
     tid = next(_counter); payload = {"id": tid, "video": video, "copies": copies}
     _render_q.put((priority, tid, payload)); logger.info("🧩 Task added: %s | priority=%s", video, priority)
-    async with _cond:
-        await _cond.wait_for(lambda: _render_q.queue and _render_q.queue[0][2]["id"] == tid and _active_id is None)
-        _render_q.get(); _active_id = tid
+    try:
+        async with _cond:
+            await _cond.wait_for(lambda: _render_q.queue and _render_q.queue[0][2]["id"] == tid and _active_id is None)
+            _render_q.get(); _active_id = tid
+    except asyncio.CancelledError:
+        async with _cond:
+            was_active = _active_id == tid
+            queue_removed = _drop_from_queue(tid)
+            if was_active:
+                _active_id = None
+            if queue_removed or was_active:
+                _cond.notify_all()
+        raise
     load = psutil.cpu_percent(interval=None) or 0.0
     while load > 85:
         time.sleep(5); load = psutil.cpu_percent(interval=None) or 0.0

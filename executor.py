@@ -99,6 +99,10 @@ async def run_script_with_logs(
     success_files: List[str] = []
     failure_names: List[str] = []
     # END REGION AI
+    env = os.environ.copy()
+    env["OUTPUT_DIR"] = str(OUTPUT_DIR)
+    env["PREVIEW_DIR"] = str(OUTPUT_DIR / "previews")
+
     proc = await asyncio.create_subprocess_exec(
         str(SCRIPT_PATH),
         input_file.name,
@@ -110,7 +114,7 @@ async def run_script_with_logs(
         cwd=str(cwd),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
-        env=os.environ.copy(),
+        env=env,
     )
 
     lines: List[str] = []

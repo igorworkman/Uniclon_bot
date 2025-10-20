@@ -759,10 +759,7 @@ async def _run_and_send(
 
     preview_files: List[Path] = []
     if save_preview:
-        env_preview = os.getenv("PREVIEW_DIR", "").strip()
         preview_roots: List[Path] = [preview_dir, CHECKS_DIR / "previews"]
-        if env_preview:
-            preview_roots.insert(0, Path(env_preview).expanduser())
         seen_previews: Set[Path] = set()
         for file_path in new_files:
             stem = file_path.stem

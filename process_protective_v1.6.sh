@@ -481,13 +481,19 @@ normalize_ss_value() {
   sanitized=${sanitized# }
   sanitized=${sanitized% }
 
+# REGION AI: tokenize ss candidate safely
   if [ -n "$sanitized" ]; then
-    set -- $sanitized
-    token_count=$#
+    local old_ifs="$IFS"
+    local tokens=()
+    IFS=' '
+    read -r -a tokens <<<"$sanitized"
+    IFS="$old_ifs"
+    token_count=${#tokens[@]}
     if [ $token_count -gt 0 ]; then
-      candidate="$1"
+      candidate="${tokens[0]}"
     fi
   fi
+# END REGION AI
 
   local context_prefix=""
   if [ -n "$context" ]; then
@@ -515,6 +521,83 @@ normalize_ss_value() {
 
   printf '%s' "$final"
 }
+
+# REGION AI: duration normalization helper
+normalize_duration_value() {
+  local raw="$1"
+  local fallback="$2"
+  local label="$3"
+  local context="$4"
+  local sanitized candidate final token_count=0
+  local fallback_value fallback_candidate="" fallback_seconds="" candidate_seconds=""
+
+  sanitized=$(printf '%s' "$raw" | tr -s '[:space:]' ' ')
+  sanitized=${sanitized# }
+  sanitized=${sanitized% }
+
+  if [ -n "$sanitized" ]; then
+    local old_ifs="$IFS"
+    local tokens=()
+    IFS=' '
+    read -r -a tokens <<<"$sanitized"
+    IFS="$old_ifs"
+    token_count=${#tokens[@]}
+    if [ $token_count -gt 0 ]; then
+      candidate="${tokens[0]}"
+    fi
+  fi
+
+  fallback_value=$(printf '%s' "$fallback" | tr -s '[:space:]' ' ')
+  fallback_value=${fallback_value# }
+  fallback_value=${fallback_value% }
+  if [ -n "$fallback_value" ]; then
+    local old_fallback_ifs="$IFS"
+    IFS=' '
+    read -r fallback_candidate _ <<<"$fallback_value"
+    IFS="$old_fallback_ifs"
+  fi
+  if ffmpeg_time_to_seconds "$fallback_candidate" >/dev/null 2>&1; then
+    fallback_seconds=$(ffmpeg_time_to_seconds "$fallback_candidate" 2>/dev/null || echo "")
+    if [ -z "$fallback_seconds" ] || ! awk -v v="$fallback_seconds" 'BEGIN{exit (v>0?0:1)}'; then
+      fallback_candidate="0.300"
+    fi
+  else
+    fallback_candidate="0.300"
+  fi
+
+  local context_prefix=""
+  if [ -n "$context" ]; then
+    context_prefix="[$context] "
+  fi
+
+  if [ -z "$candidate" ]; then
+    echo "⚠️ ${context_prefix}Пустое значение ${label} для -t, используется ${fallback_candidate}" >&2
+    final="$fallback_candidate"
+  else
+    if [ $token_count -gt 1 ]; then
+      echo "⚠️ ${context_prefix}Обнаружено несколько значений ${label} для -t: '${sanitized}'. Используется '${candidate}'" >&2
+    fi
+    if ffmpeg_time_to_seconds "$candidate" >/dev/null 2>&1; then
+      candidate_seconds=$(ffmpeg_time_to_seconds "$candidate" 2>/dev/null || echo "")
+      if [ -n "$candidate_seconds" ] && awk -v v="$candidate_seconds" 'BEGIN{exit (v>0?0:1)}'; then
+        final="$candidate"
+      else
+        echo "⚠️ ${context_prefix}Некорректная длительность ${label} для -t: '${candidate}', используется ${fallback_candidate}" >&2
+        final="$fallback_candidate"
+      fi
+    else
+      echo "⚠️ ${context_prefix}Некорректное значение ${label} для -t: '${candidate}', используется ${fallback_candidate}" >&2
+      final="$fallback_candidate"
+    fi
+  fi
+
+  if ! ffmpeg_time_to_seconds "$final" >/dev/null 2>&1; then
+    final="$fallback_candidate"
+  fi
+
+  printf '%s' "$final"
+}
+# END REGION AI
 
 PREVIEW_SS_NORMALIZED=$(normalize_ss_value "$PREVIEW_SS" "$PREVIEW_SS_FALLBACK" "preview_ss" "init")
 if [ -z "$PREVIEW_SS_NORMALIZED" ]; then
@@ -1480,9 +1563,13 @@ EOF
     fi
 
     local CLIP_START="0.000" CLIP_DURATION="$TARGET_DURATION"
+    local clip_duration_fallback="$TARGET_DURATION"
     compute_clip_window "$TARGET_DURATION"
+# REGION AI: sanitize clip window timings
+    CLIP_DURATION=$(normalize_duration_value "$CLIP_DURATION" "$clip_duration_fallback" "clip_duration" "copy ${copy_index}")
     TARGET_DURATION="$CLIP_DURATION"
     CLIP_START=$(normalize_ss_value "$CLIP_START" "0.000" "clip_start" "copy ${copy_index}")
+# END REGION AI
 
     NOISE=0
     if [ "$(rand_int 1 100)" -le "$NOISE_PROB_PERCENT" ]; then

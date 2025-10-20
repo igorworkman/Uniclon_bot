@@ -732,7 +732,24 @@ async def _run_and_send(
 
     new_files = sorted(new_files)[:copies]
 
-    if not save_preview:
+    preview_files: List[Path] = []
+    if save_preview:
+        env_preview = os.getenv("PREVIEW_DIR", "").strip()
+        preview_roots: List[Path] = [preview_dir, CHECKS_DIR / "previews"]
+        if env_preview:
+            preview_roots.insert(0, Path(env_preview).expanduser())
+        seen_previews: Set[Path] = set()
+        for file_path in new_files:
+            stem = file_path.stem
+            for root in preview_roots:
+                if not root.exists():
+                    continue
+                candidate = root / f"{stem}.png"
+                for extra in (candidate, *root.glob(f"{stem}_final_v*.png")):
+                    if extra.exists() and extra not in seen_previews:
+                        seen_previews.add(extra)
+                        preview_files.append(extra)
+    else:
         removed_previews = 0
         user_id = message.from_user.id if message.from_user else 0
         for file_path in new_files:
@@ -761,6 +778,7 @@ async def _run_and_send(
     sent = 0
     archive_path: Optional[Path] = None
     archive_sent = False
+    preview_archive_path: Optional[Path] = None
 
     should_zip = len(new_files) > 10 or FORCE_ZIP_ARCHIVE
     if should_zip:
@@ -834,22 +852,31 @@ async def _run_and_send(
                 logger.exception("Failed to send video %s; fallback to document", p)
                 await message.answer_document(document=FSInputFile(p), caption=p.name)
             sent += 1
-            if save_preview:
-                preview_path = preview_dir / f"{p.stem}.png"
-                if preview_path.exists():
-                    try:
-                        await message.answer_photo(
-                            photo=FSInputFile(preview_path),
-                            caption=f"Preview: {preview_path.name}",
-                        )
-                    except Exception:
-                        logger.exception("Failed to send preview %s", preview_path)
 
-    if archive_path and archive_path.exists():
-        try:
-            archive_path.unlink()
-        except OSError as exc:
-            logger.warning("Failed to remove temporary archive %s: %s", archive_path, exc)
+    if save_preview and preview_files:
+        if len(preview_files) > 10:
+            archive_name = f"previews_{int(time.time())}_{message.message_id or 'zip'}"
+            preview_archive_path = OUTPUT_DIR / f"{archive_name}.zip"
+            try:
+                with zipfile.ZipFile(preview_archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                    for preview in preview_files:
+                        archive.write(preview, arcname=preview.name)
+                await message.answer_document(document=FSInputFile(preview_archive_path), caption="📎 PNG-превью (архив)")
+            except Exception:
+                logger.exception("Failed to send preview archive %s", preview_archive_path)
+        else:
+            for preview in preview_files:
+                try:
+                    await message.answer_photo(photo=FSInputFile(preview), caption=f"Preview: {preview.name}")
+                except Exception:
+                    logger.exception("Failed to send preview %s", preview)
+
+    for temp_path in (archive_path, preview_archive_path):
+        if temp_path and temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError as exc:
+                logger.warning("Failed to remove temporary archive %s: %s", temp_path, exc)
 
     await ack.edit_text(
         get_text(lang, "files_sent_summary", sent=sent, total=len(new_files))

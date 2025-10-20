@@ -962,6 +962,13 @@ BEGIN {
 ')
     AUDIO_PROFILE="${AUDIO_PROFILE}+tempo"
   fi
+  tempo_target=$(awk -v t="${tempo_target:-}" 'BEGIN{
+    if (t == "" || t+0 <= 0) {
+      printf "%.6g", 1.0;
+    } else {
+      printf "%.6g", t+0;
+    }
+  }')
   filters+=("atempo=${tempo_target}")
   AFILTER_CORE=$(IFS=,; echo "${filters[*]}")
 }
@@ -1788,6 +1795,10 @@ EOF
       AFILTER="$jitter_chain"
     fi
 
+    if [ -z "${AFILTER:-}" ]; then
+      AFILTER="aresample=${AUDIO_SR},atempo=1.0"
+    fi
+
 # REGION AI: enforce variant uniqueness signature
     local crop_signature
     crop_signature=$(printf "%sx%s@%s,%s" "$CROP_W" "$CROP_H" "$CROP_X" "$CROP_Y")
@@ -1976,6 +1987,13 @@ EOF
   if [ "$CROP_TOTAL_W" -gt 0 ]; then PAD_X=$(rand_int 0 "$CROP_TOTAL_W"); else PAD_X=0; fi
   if [ "$CROP_TOTAL_H" -gt 0 ]; then PAD_Y=$(rand_int 0 "$CROP_TOTAL_H"); else PAD_Y=0; fi
 
+  STRETCH_FACTOR=$(awk -v v="${STRETCH_FACTOR:-}" 'BEGIN{
+    if (v == "" || v+0 <= 0) {
+      printf "%.6g", 1.0;
+    } else {
+      printf "%.6g", v+0;
+    }
+  }')
   VF="setpts=${STRETCH_FACTOR}*PTS,scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1"
   VF="${VF},eq=brightness=0.005:saturation=1.01"
   if [ "$NOISE" -eq 1 ]; then VF="${VF},noise=alls=1:allf=t"; fi

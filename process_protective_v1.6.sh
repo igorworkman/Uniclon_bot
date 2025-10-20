@@ -2070,9 +2070,30 @@ EOF
     CODEC_LEVEL="4.2"
   fi
 
-  FFMPEG_CMD=(ffmpeg -y -hide_banner -loglevel warning -analyzeduration 5000000 -probesize 5000000 -ss "$CLIP_START" -i "$SRC")
+  # REGION AI: primary ffmpeg command with stable stream mapping
+  local audio_input_index=0 audio_stream_present=0
+  if ffprobe -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 "$SRC" >/dev/null 2>&1; then
+    audio_stream_present=1
+  fi
+  FFMPEG_CMD=(
+    ffmpeg -y -hide_banner -loglevel warning -ignore_unknown
+    -analyzeduration 200M -probesize 200M
+    -ss "$CLIP_START" -i "$SRC"
+  )
   if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
-    FFMPEG_CMD+=(-analyzeduration 5000000 -probesize 5000000 -ss "$CLIP_START" -i "$MUSIC_VARIANT_TRACK" -map 0:v:0 -map 1:a:0 -shortest)
+    FFMPEG_CMD+=(-analyzeduration 200M -probesize 200M -ss "$CLIP_START" -i "$MUSIC_VARIANT_TRACK")
+    audio_input_index=1
+  elif [ "$audio_stream_present" -eq 0 ]; then
+    FFMPEG_CMD+=(-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100)
+    audio_input_index=1
+  fi
+  FFMPEG_CMD+=(-map 0:v:0)
+  if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
+    FFMPEG_CMD+=(-map "${audio_input_index}:a:0?" -shortest)
+  elif [ "$audio_stream_present" -eq 1 ]; then
+    FFMPEG_CMD+=(-map "0:a:0?")
+  else
+    FFMPEG_CMD+=(-map "${audio_input_index}:a:0" -shortest)
   fi
   FFMPEG_CMD+=(-t "$CLIP_DURATION" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$CODEC_LEVEL" -crf "$CRF"
     -r "$FPS" -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k"
@@ -2090,6 +2111,7 @@ EOF
     -metadata description="$DESCRIPTION"
     -metadata comment="$UID_TAG"
     "$ENCODE_TARGET")
+  # END REGION AI
 
   if [ "$DEBUG" -eq 1 ]; then
     echo "DEBUG copy=$copy_index seed=$SEED fps=$FPS br=${BR}k crf=$CRF maxrate=${MAXRATE}k bufsize=${BUFSIZE}k clip_start=${CLIP_START}s target_duration=$TARGET_DURATION stretch=$STRETCH_FACTOR audio=$AUDIO_PROFILE af='$AFILTER' music_track=${MUSIC_VARIANT_TRACK:-none} noise=$NOISE crop=${CROP_W}x${CROP_H}@${CROP_X},${CROP_Y} pad=${PAD_X},${PAD_Y} quality=$QUALITY profile=${PROFILE_VALUE} mirror=${MIRROR_DESC} lut=${LUT_DESC} intro=${INTRO_DESC}"
@@ -2106,11 +2128,31 @@ EOF
   "${FFMPEG_CMD[@]}"
 
   if [ "$INTRO_ACTIVE" -eq 1 ] && [ -n "$INTRO_SOURCE" ] && [ -n "$INTRO_OUTPUT_PATH" ]; then
-    ffmpeg -y -hide_banner -loglevel warning -t "$INTRO_DURATION" -i "$INTRO_SOURCE" \
-      -vf "scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1" \
-      -r "$FPS" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$VIDEO_LEVEL" -crf "$CRF" \
-      -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 \
+    # REGION AI: intro render with resilient audio mapping
+    local intro_audio_present=0
+    if ffprobe -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 "$INTRO_SOURCE" >/dev/null 2>&1; then
+      intro_audio_present=1
+    fi
+    local intro_cmd=(
+      ffmpeg -y -hide_banner -loglevel warning -ignore_unknown
+      -analyzeduration 200M -probesize 200M
+      -t "$INTRO_DURATION" -i "$INTRO_SOURCE"
+    )
+    if [ "$intro_audio_present" -eq 0 ]; then
+      intro_cmd+=(-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -map 0:v:0 -map "1:a:0")
+    else
+      intro_cmd+=(-map 0:v:0 -map "0:a:0?")
+    fi
+
+    intro_cmd+=(
+      -vf "scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1"
+      -r "$FPS" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$VIDEO_LEVEL" -crf "$CRF"
+      -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2
       -af "aresample=${AUDIO_SR},apad,atrim=0:${INTRO_DURATION}" -movflags +faststart "$INTRO_OUTPUT_PATH"
+    )
+
+    "${intro_cmd[@]}"
+    # END REGION AI
     CONCAT_LIST_FILE=$(mktemp "${OUTPUT_DIR}/.intro_concat_XXXXXX.txt")
     {
       printf "file '%s'\n" "$INTRO_OUTPUT_PATH"

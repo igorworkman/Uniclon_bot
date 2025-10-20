@@ -2290,7 +2290,6 @@ while :; do
     max_dup=$(calculate_duplicate_max RUN_FPS RUN_BITRATES RUN_DURATIONS)
     if [ "$max_dup" -lt "$threshold" ]; then
       # REGION AI: variant similarity guard
-      local variant_share
       variant_share=$(variant_max_share RUN_VARIANT_KEYS)
       if awk -v share="$variant_share" 'BEGIN{exit !(share>0.70)}'; then
         if [ "$regen_attempts" -ge "$MAX_REGEN_ATTEMPTS" ]; then
@@ -2300,7 +2299,7 @@ while :; do
         REGEN_OCCURRED=1
         regen_attempts=$((regen_attempts + 1))
         echo "⚠️ Обнаружена высокая схожесть параметров, перегенерация выбранных копий…"
-        local local_regen_count=2
+        local_regen_count=2
         if [ "$local_regen_count" -gt "${#RUN_FILES[@]}" ]; then
           local_regen_count="${#RUN_FILES[@]}"
         fi
@@ -2334,7 +2333,7 @@ while :; do
     done
   done
 
-  local fallback_happened=0
+  fallback_happened=0
   while low_uniqueness_fallback; do
     fallback_happened=1
     fallback_attempts=$((fallback_attempts + 1))

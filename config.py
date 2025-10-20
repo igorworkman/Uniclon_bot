@@ -3,18 +3,49 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+# REGION AI: imports
+import warnings
+# END REGION AI
+
 # REGION AI: centralized configuration
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 load_dotenv(BASE_DIR / ".env")
+
+_allow_external = os.getenv("UNICLON_ALLOW_EXTERNAL_SCRIPT", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+_repo_script = (BASE_DIR / "process_protective_v1.6.sh").resolve()
 
 _script_env = os.getenv("SCRIPT_PATH", "").strip()
 if _script_env:
     _script_path = Path(_script_env).expanduser()
     if not _script_path.is_absolute():
         _script_path = BASE_DIR / _script_path
+    _script_path = _script_path.resolve()
 else:
-    _script_path = BASE_DIR / "process_protective_v1.6.sh"
+    _script_path = _repo_script
+
+if _repo_script.exists() and _script_env:
+    _original_script_path = _script_path
+    try:
+        _script_path.relative_to(BASE_DIR)
+        _inside_repo = True
+    except ValueError:
+        _inside_repo = False
+    if not _inside_repo and not _allow_external:
+        warnings.warn(
+            (
+                "External SCRIPT_PATH '%s' ignored; using repo script '%s'"
+                % (_original_script_path, _repo_script)
+            ),
+            RuntimeWarning,
+        )
+        _script_path = _repo_script
+
 SCRIPT_PATH = _script_path
 
 _output_dir_env = os.getenv("OUTPUT_DIR", "").strip()

@@ -11,6 +11,10 @@ from config import SCRIPT_PATH, OUTPUT_DIR, NO_DEVICE_INFO, PLATFORM_PRESETS
 
 logger = logging.getLogger(__name__)
 
+# REGION AI: script path logging
+logger.info("Using processing script: %s", SCRIPT_PATH)
+# END REGION AI
+
 
 async def run_script_with_logs(
     input_file: Path, copies: int, cwd: Path, profile: str, quality: str

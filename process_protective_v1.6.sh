@@ -1994,7 +1994,7 @@ EOF
       printf "%.6g", v+0;
     }
   }')
-  VF="setpts=${STRETCH_FACTOR}*PTS,scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1"
+  VF="setpts=PTS*${STRETCH_FACTOR},scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1"  # fix: корректный синтаксис setpts
   VF="${VF},eq=brightness=0.005:saturation=1.01"
   if [ "$NOISE" -eq 1 ]; then VF="${VF},noise=alls=1:allf=t"; fi
   if [ "$CROP_TOTAL_W" -gt 0 ] || [ "$CROP_TOTAL_H" -gt 0 ]; then

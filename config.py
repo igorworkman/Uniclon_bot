@@ -48,9 +48,7 @@ if _repo_script.exists() and _script_env:
 
 SCRIPT_PATH = _script_path
 
-_output_dir_env = os.getenv("OUTPUT_DIR", "").strip()
-if not _output_dir_env:
-    _output_dir_env = "Новая папка"
+_output_dir_env = os.getenv("OUTPUT_DIR", "output").strip()
 _output_dir_path = Path(_output_dir_env).expanduser()
 if not _output_dir_path.is_absolute():
     _output_dir_path = BASE_DIR / _output_dir_path

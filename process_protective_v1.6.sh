@@ -9,7 +9,7 @@ CHECK_DIR="${BASE_DIR}/checks"
 LOW_UNIQUENESS_FLAG="${CHECK_DIR}/low_uniqueness.flag"
 
 # REGION AI: default output directories
-OUTPUT_DIR="${OUTPUT_DIR:-Новая папка}"
+OUTPUT_DIR="${OUTPUT_DIR:-output}"
 PREVIEW_DIR="${PREVIEW_DIR:-${OUTPUT_DIR}/previews}"
 # END REGION AI
 
@@ -243,7 +243,7 @@ cleanup_temp_artifacts() {
     done
   done
 
-  for dir in "logs" "$OUTPUT_DIR/logs"; do
+  for dir in "logs" "${OUTPUT_DIR}/logs"; do
     if [ -d "$dir" ]; then
       if rm -rf "$dir" 2>/dev/null; then
         removed=$((removed + 1))
@@ -2011,9 +2011,9 @@ EOF
       ;;
   esac
 
-  FFMPEG_CMD=(ffmpeg -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC")
+  FFMPEG_CMD=(ffmpeg -y -hide_banner -loglevel warning -analyzeduration 5000000 -probesize 5000000 -ss "$CLIP_START" -i "$SRC")
   if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
-    FFMPEG_CMD+=(-ss "$CLIP_START" -i "$MUSIC_VARIANT_TRACK" -map 0:v:0 -map 1:a:0 -shortest)
+    FFMPEG_CMD+=(-analyzeduration 5000000 -probesize 5000000 -ss "$CLIP_START" -i "$MUSIC_VARIANT_TRACK" -map 0:v:0 -map 1:a:0 -shortest)
   fi
   FFMPEG_CMD+=(-t "$CLIP_DURATION" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$VIDEO_LEVEL" -crf "$CRF"
     -r "$FPS" -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k"

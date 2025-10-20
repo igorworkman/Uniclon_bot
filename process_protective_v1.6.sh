@@ -88,6 +88,18 @@ while [ "$#" -gt 0 ]; do
 done
 set -- "${POSITIONAL[@]}"
 
+# REGION AI: runtime fallback defaults
+: "${TARGET_DURATION:=0}"
+: "${STRETCH_FACTOR:=1.0}"
+: "${TEMPO_FACTOR:=1.0}"
+: "${CLIP_START:=0}"
+: "${CLIP_DURATION:=0}"
+: "${SEED_HEX:=}"
+: "${SEED:=}"
+: "${AFILTER_CORE:=}"
+: "${AFILTER:=anull}"
+# END REGION AI
+
 if [ "$STRICT_CLEAN" -eq 1 ]; then
   QT_META=0
 fi

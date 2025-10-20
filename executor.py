@@ -50,9 +50,19 @@ async def run_script_with_logs(
         quality_args = ["--quality", normalized_quality]
 
     device_args: List[str] = ["--no-device-info"] if NO_DEVICE_INFO else []
+    music_variant_flag = os.getenv("UNICLON_ENABLE_MUSIC_VARIANT", "0").strip().lower()
+    music_variant_enabled = music_variant_flag in {"1", "true", "yes", "on"}
+    music_variant_args: List[str] = ["--music-variant"] if music_variant_enabled else []
 
     # REGION AI: task logging state
-    logger.info("🚀 Запуск скрипта: src=%s | copies=%s | profile=%s | q=%s", input_file.name, copies, normalized_profile or "-", normalized_quality)
+    logger.info(
+        "🚀 Запуск скрипта: src=%s | copies=%s | profile=%s | q=%s | music=%s",
+        input_file.name,
+        copies,
+        normalized_profile or "-",
+        normalized_quality,
+        "on" if music_variant_enabled else "off",
+    )
     clip_hint = ""
     last_target: Optional[str] = None
     duration_map: Dict[str, str] = {}
@@ -66,6 +76,7 @@ async def run_script_with_logs(
         *profile_args,
         *quality_args,
         *device_args,
+        *music_variant_args,
         cwd=str(cwd),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,

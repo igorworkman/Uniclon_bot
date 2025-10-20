@@ -786,7 +786,9 @@ async def _run_and_send(
     if message.from_user:
         register_user_outputs(message.from_user.id, new_files)
 
-    await message.answer("Готово! Отправляю уникализированные копии…")
+    await message.answer(
+        "Готово! Отправляю уникализированные копии…\n🛡 Метаданные и контейнер обновлены."
+    )
 
     sent = 0
     archive_path: Optional[Path] = None
@@ -937,6 +939,7 @@ async def _run_and_send(
             f"🧩 Avg pHash diff: {audit_summary.mean_phash_diff:.1f} {phash_icon}",
             f"🧠 Encoder/software diversified: {diversified}",
             f"🕒 Timestamps randomized: {timestamps_label}",
+            f"🛡 Metadata sanitized: {'Yes' if audit_summary.metadata_sanitized else 'No'}",
         ]
         if fallback_line:
             report_lines.insert(1, fallback_line)

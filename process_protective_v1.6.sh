@@ -119,7 +119,7 @@ AUDIO_BR="128k"
 BR_MIN=2800
 BR_MAX=5000
 FPS_BASE=(24 25 30 50 59.94 60)
-FPS_RARE=(23.976 27 29.97 48 53.95 57)
+FPS_RARE=(19.984 59.615)
 AUDIO_SR=44100
 PROFILE_FORCE_FPS=""
 PROFILE_MAX_DURATION=0
@@ -133,7 +133,7 @@ case "$PROFILE" in
     BR_MIN=3500
     BR_MAX=4200
     FPS_BASE=(30 60)
-    FPS_RARE=()
+    FPS_RARE=(59.615)
     AUDIO_SR=44100
     PROFILE_FORCE_FPS=""
     PROFILE_MAX_DURATION=60
@@ -740,10 +740,28 @@ rand_description() {
     "Captured on phone"
     "Shot in portrait"
     "Quick highlight"
+    "Daily highlights"
+    "Personal draft"
+    "Travel vertical"
   )
   local idx=$(( $(rng_next_chunk) % ${#choices[@]} ))
   echo "${choices[$idx]}"
 }
+
+# REGION AI: lightweight randomized titles
+rand_title() {
+  local titles=(
+    "Vertical clip"
+    "Story highlight"
+    "Quick reel"
+    "Travel moment"
+    "Daily snap"
+    "Phone capture"
+  )
+  local idx=$(( $(rng_next_chunk) % ${#titles[@]} ))
+  echo "${titles[$idx]}"
+}
+# END REGION AI
 
 pick_qt_combo() {
   local profile="$1"
@@ -905,7 +923,7 @@ pick_audio_chain() {
   local filters=("aresample=${AUDIO_SR}")
   if [ "$roll" -le "$AUDIO_TWEAK_PROB_PERCENT" ]; then
     AUDIO_PROFILE="asetrate"
-    local factor=$(rand_float 0.985 1.015 6)
+    local factor=$(rand_float 0.995 1.005 6)
     filters=("asetrate=${AUDIO_SR}*${factor}" "aresample=${AUDIO_SR}")
   elif [ "$roll" -ge 85 ]; then
     AUDIO_PROFILE="anull"
@@ -914,7 +932,7 @@ pick_audio_chain() {
   local tempo_target="$TEMPO_FACTOR"
   if [ "$MUSIC_VARIANT" -eq 1 ]; then
     local tempo_sign=$(rand_int 0 1)
-    local tempo_delta=$(rand_float 0.020 0.030 3)
+    local tempo_delta=$(rand_float 0.010 0.030 3)
     tempo_target=$(awk -v base="$TEMPO_FACTOR" -v sign="$tempo_sign" -v delta="$tempo_delta" '
 BEGIN {
   base+=0; delta+=0;
@@ -1045,6 +1063,11 @@ declare -a RUN_CREATIVE_LUT=()
 declare -a RUN_PREVIEWS=()
 declare -a QUALITY_ISSUES=()
 declare -a QUALITY_COPY_IDS=()
+# REGION AI: container metadata placeholders
+MAJOR_BRAND_TAG="mp42"
+MINOR_VERSION_TAG="0"
+COMPAT_BRANDS_TAG="isommp42"
+# END REGION AI
 USED_SOFT_ENC_KEYS_LIST=""
 
 combo_key_seen() {
@@ -1098,23 +1121,52 @@ EOF
 }
 
 pick_software_encoder() {
-  local profile_key="${1:-default}" seed="$2" attempt=0 digest=""
-  local -a names majors
-  case "$profile_key" in
-    tiktok) names=("CapCut" "VN") majors=(12 2) ;;
-    instagram) names=("Premiere Rush" "iMovie") majors=(1 10) ;;
-    telegram) names=("ShotCut" "FFmpeg") majors=(3 5) ;;
-    *) names=("CapCut" "VN" "Premiere Rush" "iMovie" "ShotCut" "FFmpeg") majors=(12 2 1 10 3 5) ;;
-  esac
+  local profile_key="${1:-default}" attempt=0
   while :; do
-    digest=$(deterministic_md5 "${seed}_${profile_key}_soft_${attempt}")
-    local idx=$((16#${digest:0:2} % ${#names[@]}))
-    local minor=$((1 + 16#${digest:2:2} % 9))
-    local enc_minor=$((2 + 16#${digest:4:2} % 58))
-    SOFTWARE_TAG="${names[$idx]} ${majors[$idx]}.${minor}"
+    local prefer=$(rand_int 0 99)
+    local family="CapCut"
+    case "$profile_key" in
+      instagram) if [ "$prefer" -ge 45 ]; then family="VN"; fi ;;
+      telegram) if [ "$prefer" -ge 50 ]; then family="VN"; fi ;;
+      *) if [ "$prefer" -ge 60 ]; then family="VN"; fi ;;
+    esac
+
+    local variant_roll=$(rand_int 0 99)
+    local minor patch
+    if [ "$family" = "CapCut" ]; then
+      minor=$(rand_int 10 28)
+      if [ "$variant_roll" -lt 40 ]; then
+        patch=$(rand_int 0 9)
+        SOFTWARE_TAG=$(printf "CapCut 12.%d.%d" "$minor" "$patch")
+      else
+        SOFTWARE_TAG=$(printf "CapCut 12.%d" "$minor")
+      fi
+    else
+      minor=$(rand_int 5 18)
+      if [ "$variant_roll" -lt 55 ]; then
+        patch=$(rand_int 0 9)
+        SOFTWARE_TAG=$(printf "VN 2.%d.%d" "$minor" "$patch")
+      else
+        SOFTWARE_TAG=$(printf "VN 2.%d" "$minor")
+      fi
+    fi
+
+    local enc_minor=$(rand_int 2 5)
     ENCODER_TAG=$(printf "Lavf62.%d.100" "$enc_minor")
+
+    if [ "$(rand_int 0 1)" -eq 0 ]; then
+      MAJOR_BRAND_TAG="mp42"
+    else
+      MAJOR_BRAND_TAG="isom"
+    fi
+    MINOR_VERSION_TAG=$(rand_int 0 512)
+    local compat_list=("isommp42" "mp42isom" "iso6mp42")
+    local compat_idx
+    compat_idx=$(rand_int 0 $(( ${#compat_list[@]} - 1 )))
+    COMPAT_BRANDS_TAG="${compat_list[$compat_idx]}"
+
     local combo_key="${SOFTWARE_TAG}|${ENCODER_TAG}"
-    if ! combo_key_seen "$combo_key"; then
+    if ! combo_key_seen "$combo_key" || [ "$attempt" -ge 6 ]; then
       mark_combo_key "$combo_key"
       break
     fi
@@ -1537,6 +1589,14 @@ generate_copy() {
     FPS=$(select_fps)
 
     BR=$(rand_int "$BR_MIN" "$BR_MAX")
+    if [ "$BR_MIN" -le 4600 ] && [ "$BR_MAX" -ge 3200 ]; then
+      local mid_min mid_max
+      mid_min=$(( BR_MIN > 3200 ? BR_MIN : 3200 ))
+      mid_max=$(( BR_MAX < 4600 ? BR_MAX : 4600 ))
+      if [ "$mid_min" -le "$mid_max" ] && [ "$(rand_int 1 100)" -le 72 ]; then
+        BR=$(rand_int "$mid_min" "$mid_max")
+      fi
+    fi
 
     compute_duration_profile
 
@@ -1577,6 +1637,25 @@ EOF
     fi
 
     pick_crop_offsets
+    if [ "$TARGET_W" -gt 0 ] && [ "$TARGET_H" -gt 0 ]; then
+      local crop_roll=$(rand_int 0 99)
+      if [ "$crop_roll" -lt 78 ]; then
+        local crop_pct=$(rand_float 0.010 0.020 3)
+        local crop_w_side
+        crop_w_side=$(awk -v w="$TARGET_W" -v pct="$crop_pct" 'BEGIN{v=int(w*pct/2); if(v<1)v=1; print v}')
+        local crop_h_side
+        crop_h_side=$(awk -v h="$TARGET_H" -v pct="$crop_pct" 'BEGIN{v=int(h*pct/2); if(v<1)v=1; print v}')
+        CROP_W="$crop_w_side"
+        CROP_H="$crop_h_side"
+        if [ "$CROP_W" -gt 0 ]; then CROP_X=$(rand_int 0 "$CROP_W"); else CROP_X=0; fi
+        if [ "$CROP_H" -gt 0 ]; then CROP_Y=$(rand_int 0 "$CROP_H"); else CROP_Y=0; fi
+      else
+        CROP_W=0
+        CROP_H=0
+        CROP_X=0
+        CROP_Y=0
+      fi
+    fi
 
     pick_audio_chain
 
@@ -1603,6 +1682,16 @@ EOF
         AUDIO_PROFILE="${AUDIO_PROFILE}+music"
       fi
     fi
+
+    local audio_br_val
+    audio_br_val=$(rand_int 96 160)
+    audio_br_val=$(( (audio_br_val / 4) * 4 ))
+    if [ "$audio_br_val" -lt 96 ]; then
+      audio_br_val=96
+    elif [ "$audio_br_val" -gt 160 ]; then
+      audio_br_val=160
+    fi
+    AUDIO_BR="${audio_br_val}k"
 
     local MIRROR_DESC="none" MIRROR_FILTER="" MIRROR_ACTIVE=0
     if [ "$ENABLE_MIRROR" -eq 1 ]; then
@@ -1692,7 +1781,7 @@ EOF
     ENCODE_TARGET=$(mktemp "${OUTPUT_DIR}/.intro_main_XXXXXX.${FILE_EXT}")
     INTRO_OUTPUT_PATH=$(mktemp "${OUTPUT_DIR}/.intro_clip_XXXXXX.${FILE_EXT}")
   fi
-  TITLE="$FILE_STEM"
+  TITLE="$(rand_title) $(rand_int 10 99)"
   DESCRIPTION="$(rand_description)"
   local QT_MAKE="" QT_MODEL="" QT_SOFTWARE="" DEVICE_MODEL_CODE=""
   if [ "$QT_META" -eq 1 ]; then
@@ -1801,6 +1890,10 @@ EOF
     -vf "$VF"
     -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$AFILTER"
     -movflags +faststart
+    -map_metadata -1
+    -metadata major_brand="$MAJOR_BRAND_TAG"
+    -metadata minor_version="$MINOR_VERSION_TAG"
+    -metadata compatible_brands="$COMPAT_BRANDS_TAG"
     -metadata encoder="$ENCODER_TAG"
     -metadata software="$SOFTWARE_TAG"
     -metadata creation_time="$CREATION_TIME"

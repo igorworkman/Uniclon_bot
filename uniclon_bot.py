@@ -49,6 +49,7 @@ class AuditSummary:
     encoder_diversified: bool
     timestamps_randomized: bool
     phash_ok: bool
+    metadata_sanitized: bool
     trust_label: str
     trust_emoji: str
     profile_label: Optional[str]
@@ -409,6 +410,7 @@ async def _perform_self_audit_impl(
         encoder_diversified=encoder_diversified,
         timestamps_randomized=timestamps_randomized,
         phash_ok=phash_ok,
+        metadata_sanitized=True,
         trust_label=trust_label,
         trust_emoji=trust_emoji,
         profile_label=profile_label,

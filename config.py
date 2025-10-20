@@ -29,6 +29,41 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 CHECKS_DIR = BASE_DIR / "checks"
 CHECKS_DIR.mkdir(parents=True, exist_ok=True)
 
+# REGION AI: platform presets
+PLATFORM_PRESETS = {
+    "tiktok": {
+        "display_name": "TikTok",
+        "resolution": "1080x1920",
+        "fps_range": [30, 60],
+        "bitrate_range": [2800, 5000],
+        "audio_bitrate_range": [96, 160],
+        "audio_rates": [44100],
+        "codec_profile": "high",
+        "codec_level": "4.0",
+    },
+    "instagram": {
+        "display_name": "Instagram",
+        "resolution": "1080x1920",
+        "fps_range": [24, 25, 30],
+        "bitrate_range": [2500, 4500],
+        "audio_bitrate_range": [96, 160],
+        "audio_rates": [44100],
+        "codec_profile": "high",
+        "codec_level": "4.0",
+    },
+    "youtube": {
+        "display_name": "YouTube Shorts",
+        "resolution": "1080x1920",
+        "fps_range": [24, 30, 60],
+        "bitrate_range": [3000, 5500],
+        "audio_bitrate_range": [96, 160],
+        "audio_rates": [44100, 48000],
+        "codec_profile": "high",
+        "codec_level": "4.2",
+    },
+}
+# END REGION AI
+
 
 def _env_flag(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)

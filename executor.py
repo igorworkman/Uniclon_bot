@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # REGION AI: imports
-from config import SCRIPT_PATH, OUTPUT_DIR, NO_DEVICE_INFO
+from config import SCRIPT_PATH, OUTPUT_DIR, NO_DEVICE_INFO, PLATFORM_PRESETS
 # END REGION AI
 
 
@@ -29,12 +29,36 @@ async def run_script_with_logs(
     if normalized_profile == "default":
         normalized_profile = ""
 
-# REGION AI: supported platform profiles
-    valid_profiles = {"tiktok", "instagram", "youtube", "telegram"}
-# END REGION AI
+    # REGION AI: supported platform profiles
+    valid_profiles = set(PLATFORM_PRESETS.keys())
+    preset_details: Optional[Dict[str, object]] = None
+    # END REGION AI
     profile_args: List[str] = []
     if normalized_profile in valid_profiles:
         profile_args = ["--profile", normalized_profile]
+        preset_details = PLATFORM_PRESETS.get(normalized_profile)
+        if preset_details:
+            display_name = str(preset_details.get("display_name", normalized_profile.title()))
+            resolution = preset_details.get("resolution", "?")
+            fps_range = preset_details.get("fps_range", [])
+            bitrate_range = preset_details.get("bitrate_range", [])
+            audio_rates = preset_details.get("audio_rates", [])
+            codec_profile = preset_details.get("codec_profile", "?")
+            codec_level = preset_details.get("codec_level", "?")
+            fps_repr = "-".join(str(v) for v in fps_range) if fps_range else "-"
+            bitrate_repr = "-".join(str(v) for v in bitrate_range) if bitrate_range else "-"
+            audio_repr = ",".join(str(v) for v in audio_rates) if audio_rates else "-"
+            logger.info(
+                "🎯 Профиль: %s (%s) | resolution=%s | fps=%s | bitrate=%s kbps | audio=%s Hz | codec=%s@L%s",
+                display_name,
+                normalized_profile,
+                resolution,
+                fps_repr,
+                bitrate_repr,
+                audio_repr,
+                codec_profile,
+                codec_level,
+            )
     elif normalized_profile:
         logger.warning(
             "Unknown profile '%s' for %s; invoking script without --profile",

@@ -364,7 +364,6 @@ async def _perform_self_audit_impl(
         "tiktok": "TikTok",
         "instagram": "Instagram",
         "youtube": "YouTube Shorts",
-        "telegram": "Telegram Stories",
     }
     # END REGION AI
     if manifest_path.exists():

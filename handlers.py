@@ -53,7 +53,6 @@ _VALID_PROFILES = {
     "tiktok": "TikTok",
     "instagram": "Instagram",
     "youtube": "YouTube Shorts",
-    "telegram": "Telegram Stories",
 }
 # END REGION AI
 
@@ -64,7 +63,7 @@ class FSM(StatesGroup):
     awaiting_preview = State()
 
 
-# REGION AI: dynamic profile keyboard with telegram support
+# REGION AI: dynamic profile keyboard
 def _profile_keyboard() -> InlineKeyboardMarkup:
     first_row = [
         InlineKeyboardButton(
@@ -77,10 +76,7 @@ def _profile_keyboard() -> InlineKeyboardMarkup:
     second_row = [
         InlineKeyboardButton(
             text=_VALID_PROFILES["youtube"], callback_data="profile:youtube"
-        ),
-        InlineKeyboardButton(
-            text=_VALID_PROFILES["telegram"], callback_data="profile:telegram"
-        ),
+        )
     ]
     return InlineKeyboardMarkup(inline_keyboard=[first_row, second_row])
 # END REGION AI

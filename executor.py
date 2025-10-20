@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple
 
 # REGION AI: imports
 from config import SCRIPT_PATH, OUTPUT_DIR, NO_DEVICE_INFO, PLATFORM_PRESETS
+from report_builder import build_uniqueness_report
 # END REGION AI
 
 
@@ -190,6 +191,18 @@ async def run_script_with_logs(
         )
         return rc, "".join(lines)
 # END REGION AI
+
+    # fix: агрегация UniqScore отчёта
+    # REGION AI: uniqueness reporting
+    try:
+        report_result = build_uniqueness_report(success_files, copies)
+    except Exception:
+        logger.exception("Failed to build uniqueness report")
+    else:
+        if report_result:
+            _, trend_line = report_result
+            lines.append(trend_line + "\n")
+    # END REGION AI
 
     return rc, "".join(lines)
 

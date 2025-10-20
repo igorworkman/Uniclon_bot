@@ -1503,7 +1503,7 @@ compute_metrics_for_copy() {
   metrics_output=$({
     ffmpeg -hide_banner -loglevel error \
       -i "$source_file" -i "$compare_file" \
-      -lavfi "[0:v]scale=1080:1920:flags=bicubic,format=yuv420p[ref];[1:v]format=yuv420p[cmp];[ref][cmp]ssim;[ref][cmp]psnr" \
+      -lavfi "[0:v]scale=1080:1920:flags=bicubic,format=yuv420p[ref];[1:v]scale=1080:1920:flags=bicubic,format=yuv420p[cmp];[ref][cmp]ssim;[ref][cmp]psnr" \
       -f null - 2>&1 || true
   } | tee "$metrics_log")
   ssim_val=$({ printf '%s\n' "$metrics_output" | grep -o 'All:[0-9.]*' | tail -1 | cut -d: -f2; } || true)

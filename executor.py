@@ -29,7 +29,9 @@ async def run_script_with_logs(
     if normalized_profile == "default":
         normalized_profile = ""
 
-    valid_profiles = {"tiktok", "instagram", "youtube"}
+# REGION AI: supported platform profiles
+    valid_profiles = {"tiktok", "instagram", "youtube", "telegram"}
+# END REGION AI
     profile_args: List[str] = []
     if normalized_profile in valid_profiles:
         profile_args = ["--profile", normalized_profile]

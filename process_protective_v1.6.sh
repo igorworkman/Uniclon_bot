@@ -98,7 +98,12 @@ set -- "${POSITIONAL[@]}"
 : "${SEED:=}"
 : "${AFILTER_CORE:=}"
 : "${AFILTER:=anull}"
+: "${PREVIEW_SS:=00:00:01.000}"
 # END REGION AI
+
+PREVIEW_SS_FALLBACK="00:00:01.000"
+# Нормализованное значение времени превью вычисляется позже через normalize_ss_value
+PREVIEW_SS_NORMALIZED=""
 
 if [ "$STRICT_CLEAN" -eq 1 ]; then
   QT_META=0
@@ -437,6 +442,84 @@ rand_uint32() {
 escape_single_quotes() {
   printf "%s" "$1" | sed "s/'/\\\\'/g"
 }
+
+ffmpeg_time_to_seconds() {
+  local raw="$1"
+  awk -v t="$raw" '
+    function fail(){ exit 1 }
+    BEGIN{
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
+      if (t == "" || t ~ /^-/) fail()
+      n=split(t, parts, ":")
+      if (n == 1) {
+        if (t !~ /^[0-9]+(\.[0-9]+)?$/) fail()
+        printf "%.6f", t + 0
+        exit 0
+      }
+      if (n < 2 || n > 3) fail()
+      total = 0
+      for (i = 1; i <= n; i++) {
+        if (parts[i] !~ /^[0-9]+(\.[0-9]+)?$/) fail()
+      }
+      if (n == 2) {
+        total = parts[1] * 60 + parts[2]
+      } else {
+        total = parts[1] * 3600 + parts[2] * 60 + parts[3]
+      }
+      printf "%.6f", total + 0
+    }'
+}
+
+normalize_ss_value() {
+  local raw="$1"
+  local fallback="$2"
+  local label="$3"
+  local context="$4"
+  local sanitized candidate final token_count=0
+
+  sanitized=$(printf '%s' "$raw" | tr -s '[:space:]' ' ')
+  sanitized=${sanitized# }
+  sanitized=${sanitized% }
+
+  if [ -n "$sanitized" ]; then
+    set -- $sanitized
+    token_count=$#
+    if [ $token_count -gt 0 ]; then
+      candidate="$1"
+    fi
+  fi
+
+  local context_prefix=""
+  if [ -n "$context" ]; then
+    context_prefix="[$context] "
+  fi
+
+  if [ -z "$candidate" ]; then
+    echo "⚠️ ${context_prefix}Пустое значение ${label} для -ss, используется ${fallback}" >&2
+    final="$fallback"
+  else
+    if [ $token_count -gt 1 ]; then
+      echo "⚠️ ${context_prefix}Обнаружено несколько значений ${label} для -ss: '${sanitized}'. Используется '${candidate}'" >&2
+    fi
+    if ffmpeg_time_to_seconds "$candidate" >/dev/null 2>&1; then
+      final="$candidate"
+    else
+      echo "⚠️ ${context_prefix}Некорректное значение ${label} для -ss: '${candidate}', используется ${fallback}" >&2
+      final="$fallback"
+    fi
+  fi
+
+  if ! ffmpeg_time_to_seconds "$final" >/dev/null 2>&1; then
+    final="0.000"
+  fi
+
+  printf '%s' "$final"
+}
+
+PREVIEW_SS_NORMALIZED=$(normalize_ss_value "$PREVIEW_SS" "$PREVIEW_SS_FALLBACK" "preview_ss" "init")
+if [ -z "$PREVIEW_SS_NORMALIZED" ]; then
+  PREVIEW_SS_NORMALIZED="$PREVIEW_SS_FALLBACK"
+fi
 
 iso_to_epoch() {
   local iso="$1"
@@ -1399,6 +1482,7 @@ EOF
     local CLIP_START="0.000" CLIP_DURATION="$TARGET_DURATION"
     compute_clip_window "$TARGET_DURATION"
     TARGET_DURATION="$CLIP_DURATION"
+    CLIP_START=$(normalize_ss_value "$CLIP_START" "0.000" "clip_start" "copy ${copy_index}")
 
     NOISE=0
     if [ "$(rand_int 1 100)" -le "$NOISE_PROB_PERCENT" ]; then
@@ -1690,9 +1774,67 @@ EOF
 
   touch_randomize_mtime "$OUT"
   FILE_NAME="$(basename "$OUT")"
+  local MEDIA_DURATION_RAW=""
+  local MEDIA_DURATION_SEC=""
+  MEDIA_DURATION_RAW=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$OUT" 2>/dev/null || true)
   local PREVIEW_NAME=""
   local PREVIEW_PATH="${PREVIEW_DIR}/${FILE_STEM}.png"
-  if ffmpeg -y -hide_banner -loglevel error -ss 00:00:01.000 -i "$OUT" -vframes 1 "$PREVIEW_PATH"; then
+  if [ -n "$MEDIA_DURATION_RAW" ] && [ "$MEDIA_DURATION_RAW" != "N/A" ]; then
+    MEDIA_DURATION_SEC=$(awk -v d="$MEDIA_DURATION_RAW" 'BEGIN{if(d==""||d=="N/A"){exit 1}; d+=0; if(d<0) d=0; printf "%.6f", d}' 2>/dev/null || printf "")
+    if [ -z "$MEDIA_DURATION_SEC" ]; then
+      echo "⚠️ Не удалось преобразовать длительность $FILE_NAME (${MEDIA_DURATION_RAW}) для проверки превью"
+      MEDIA_DURATION_SEC=""
+    fi
+  else
+    if [ -z "$MEDIA_DURATION_RAW" ] || [ "$MEDIA_DURATION_RAW" = "N/A" ]; then
+      echo "⚠️ Не удалось определить длительность $FILE_NAME перед генерацией превью"
+    fi
+    MEDIA_DURATION_RAW=""
+  fi
+
+  local preview_seek_value="$PREVIEW_SS_NORMALIZED"
+  local preview_seek_seconds=""
+  preview_seek_seconds=$(ffmpeg_time_to_seconds "$preview_seek_value" 2>/dev/null || true)
+  if [ -z "$preview_seek_seconds" ]; then
+    preview_seek_value="$PREVIEW_SS_FALLBACK"
+    preview_seek_seconds=$(ffmpeg_time_to_seconds "$preview_seek_value" 2>/dev/null || true)
+  fi
+  if [ -z "$preview_seek_seconds" ]; then
+    echo "⚠️ Превью для $FILE_NAME: не удалось интерпретировать значение времени '${preview_seek_value}', используется 0.000"
+    preview_seek_value="0.000"
+    preview_seek_seconds="0.000"
+  fi
+
+  if [ -n "$MEDIA_DURATION_SEC" ] && [ -n "$preview_seek_seconds" ]; then
+    if ! awk -v seek="$preview_seek_seconds" -v dur="$MEDIA_DURATION_SEC" 'BEGIN{exit (dur>0 && seek<dur ? 0 : 1)}'; then
+      local preview_seek_seconds_fmt=""
+      preview_seek_seconds_fmt=$(awk -v s="$preview_seek_seconds" 'BEGIN{printf "%.3f", s+0}')
+      local media_duration_fmt=""
+      media_duration_fmt=$(awk -v d="$MEDIA_DURATION_SEC" 'BEGIN{printf "%.3f", d+0}')
+      echo "⚠️ Превью для $FILE_NAME: время ${preview_seek_value} (≈${preview_seek_seconds_fmt}s) выходит за пределы длительности ${media_duration_fmt}s"
+      local adjusted_seek=""
+      adjusted_seek=$(awk -v dur="$MEDIA_DURATION_SEC" 'BEGIN{if(dur<=0){printf "0.000"; exit} adj=dur-0.250; if(adj<0) adj=0; printf "%.3f", adj}')
+      preview_seek_value="$adjusted_seek"
+      preview_seek_seconds="$adjusted_seek"
+      preview_seek_seconds_fmt=$(awk -v s="$preview_seek_seconds" 'BEGIN{printf "%.3f", s+0}')
+      echo "ℹ️ Превью для $FILE_NAME будет взято по скорректированному времени ${preview_seek_seconds_fmt}s"
+    fi
+  fi
+
+  if [ "$DEBUG" -eq 1 ]; then
+    local media_duration_dbg="unknown"
+    if [ -n "$MEDIA_DURATION_SEC" ]; then
+      media_duration_dbg=$(awk -v d="$MEDIA_DURATION_SEC" 'BEGIN{printf "%.3f", d+0}')
+    fi
+    if [ -n "$preview_seek_seconds" ]; then
+      local preview_seek_seconds_dbg="$(awk -v s="$preview_seek_seconds" 'BEGIN{printf "%.3f", s+0}')"
+      echo "DEBUG preview_ss=${preview_seek_value} (~${preview_seek_seconds_dbg}s) duration=${media_duration_dbg}s"
+    else
+      echo "DEBUG preview_ss=${preview_seek_value} duration=${media_duration_dbg}s (seconds unresolved)"
+    fi
+  fi
+
+  if ffmpeg -y -hide_banner -loglevel error -ss "$preview_seek_value" -i "$OUT" -vframes 1 "$PREVIEW_PATH"; then
     if [ -s "$PREVIEW_PATH" ]; then
       PREVIEW_NAME="previews/${FILE_STEM}.png"
     else
@@ -1705,7 +1847,10 @@ EOF
   fi
   BITRATE_RAW=$(ffprobe -v error -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 "$OUT")
   BITRATE=$(awk -v b="$BITRATE_RAW" 'BEGIN{if(b==""||b=="N/A") printf "0"; else printf "%.0f", b/1000}')
-  DURATION_RAW=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$OUT")
+  DURATION_RAW="$MEDIA_DURATION_RAW"
+  if [ -z "$DURATION_RAW" ]; then
+    DURATION_RAW=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$OUT")
+  fi
   DURATION=$(awk -v d="$DURATION_RAW" 'BEGIN{if(d==""||d=="N/A") printf "0"; else printf "%.3f", d}')
   SIZE_BYTES=$(file_size_bytes "$OUT")
   SIZE_KB=$(awk -v s="$SIZE_BYTES" 'BEGIN{if(s==""||s==0) printf "0"; else printf "%.0f", s/1024}')

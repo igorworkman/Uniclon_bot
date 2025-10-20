@@ -200,8 +200,19 @@ async def run_script_with_logs(
         logger.exception("Failed to build uniqueness report")
     else:
         if report_result:
-            _, trend_line = report_result
-            lines.append(trend_line + "\n")
+            _, summary_line, level_emoji = report_result
+            lines.append(summary_line + "\n")
+            try:
+                from handlers import broadcast_uniqscore_indicator
+            except ImportError:
+                pass
+            except Exception:
+                logger.debug("UniqScore notifier import failed", exc_info=True)
+            else:
+                try:
+                    broadcast_uniqscore_indicator(level_emoji)
+                except Exception:
+                    logger.debug("UniqScore notifier call failed", exc_info=True)
     # END REGION AI
 
     return rc, "".join(lines)

@@ -12,8 +12,8 @@ log() {
 }
 # END REGION AI
 # REGION AI: runtime state arrays
-declare -a RUN_COMBOS RUN_FILES RUN_BITRATES RUN_FPS RUN_DURATIONS RUN_SIZES RUN_ENCODERS RUN_SOFTWARES RUN_CREATION_TIMES RUN_SEEDS RUN_TARGET_DURS RUN_TARGET_BRS RUN_PROFILES RUN_QT_MAKES RUN_QT_MODELS RUN_QT_SOFTWARES RUN_SSIM RUN_PSNR RUN_PHASH RUN_QPASS RUN_QUALITIES RUN_CREATIVE_MIRROR RUN_CREATIVE_INTRO RUN_CREATIVE_LUT RUN_PREVIEWS
-RUN_COMBOS=()
+declare -a RUN_COMBOS RUN_COMBO_HISTORY RUN_FILES RUN_BITRATES RUN_FPS RUN_DURATIONS RUN_SIZES RUN_ENCODERS RUN_SOFTWARES RUN_CREATION_TIMES RUN_SEEDS RUN_TARGET_DURS RUN_TARGET_BRS RUN_PROFILES RUN_QT_MAKES RUN_QT_MODELS RUN_QT_SOFTWARES RUN_SSIM RUN_PSNR RUN_PHASH RUN_QPASS RUN_QUALITIES RUN_CREATIVE_MIRROR RUN_CREATIVE_INTRO RUN_CREATIVE_LUT RUN_PREVIEWS
+RUN_COMBOS=(); RUN_COMBO_HISTORY=()
 # END REGION AI
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1079,7 +1079,7 @@ declare -a RUN_CREATION_TIMES=()
 declare -a RUN_SEEDS=()
 declare -a RUN_TARGET_DURS=()
 declare -a RUN_TARGET_BRS=()
-declare -a RUN_COMBOS=()
+declare -a RUN_COMBO_HISTORY=()
 declare -a RUN_PROFILES=()
 declare -a RUN_QUALITIES=()
 declare -a RUN_QT_MAKES=()
@@ -1213,11 +1213,15 @@ pick_software_encoder() {
   while :; do
     local prefer=$(rand_int 0 99)
     local family="CapCut"
-    case "$profile_key" in
-      instagram) if [ "$prefer" -ge 45 ]; then family="VN"; fi ;;
-      youtube) if [ "$prefer" -ge 55 ]; then family="VN"; fi ;;
-      *) if [ "$prefer" -ge 60 ]; then family="VN"; fi ;;
-    esac
+    if [ -n "${CSOFT:-}" ]; then
+      family="$CSOFT"
+    else
+      case "$profile_key" in
+        instagram) if [ "$prefer" -ge 45 ]; then family="VN"; fi ;;
+        youtube) if [ "$prefer" -ge 55 ]; then family="VN"; fi ;;
+        *) if [ "$prefer" -ge 60 ]; then family="VN"; fi ;;
+      esac
+    fi
 
     local variant_roll=$(rand_int 0 99)
     local minor patch
@@ -1262,10 +1266,14 @@ pick_software_encoder() {
   done
 }
 
+ensure_run_combos(){ local total=${#RUN_COMBOS[@]:-0};[ "$RUN_COMBO_POS" -ge "$total" ] && total=0;[ "$total" -ge 8 ] && return;RUN_COMBOS=("CFPS=30 CNOISE=1 CMIRROR=hflip CAUDIO=asetrate CBR=1.12 CSHIFT=0.07 CSOFT=VN CLEVEL=4.0" "CFPS=60 CNOISE=0 CMIRROR=none CAUDIO=resample CBR=0.88 CSHIFT=-0.05 CSOFT=CapCut CLEVEL=4.2" "CFPS=30 CNOISE=0 CMIRROR=vflip CAUDIO=jitter CBR=1.10 CSHIFT=0.09 CSOFT=LumaFusion CLEVEL=4.0" "CFPS=24 CNOISE=1 CMIRROR=none CAUDIO=asetrate CBR=0.90 CSHIFT=-0.08 CSOFT=CapCut CLEVEL=4.0" "CFPS=25 CNOISE=0 CMIRROR=hflip CAUDIO=resample CBR=1.15 CSHIFT=0.06 CSOFT=VN CLEVEL=4.2" "CFPS=30 CNOISE=1 CMIRROR=none CAUDIO=jitter CBR=0.85 CSHIFT=-0.10 CSOFT=LumaFusion CLEVEL=4.0" "CFPS=60 CNOISE=1 CMIRROR=none CAUDIO=asetrate CBR=1.13 CSHIFT=0.12 CSOFT=CapCut CLEVEL=4.2" "CFPS=30 CNOISE=0 CMIRROR=none CAUDIO=resample CBR=0.87 CSHIFT=-0.07 CSOFT=VN CLEVEL=4.0");RUN_COMBO_POS=0;}
+
+next_regen_combo(){ ensure_run_combos;if [ "$RUN_COMBO_POS" -lt "${#RUN_COMBOS[@]}" ]; then printf '%s' "${RUN_COMBOS[$RUN_COMBO_POS]}";RUN_COMBO_POS=$((RUN_COMBO_POS+1));else printf '';fi;}
+
 REGEN_ITER=0
 REGEN_OCCURRED=0
 LOW_UNIQUENESS_TRIGGERED=0
-MAX_REGEN_ATTEMPTS=2
+MAX_REGEN_ATTEMPTS=2; RUN_COMBO_POS=0
 
 duration_bucket() {
   local value="$1"
@@ -1380,7 +1388,7 @@ remove_last_generated() {
     RUN_SEEDS=("${RUN_SEEDS[@]:0:$idx}")
     RUN_TARGET_DURS=("${RUN_TARGET_DURS[@]:0:$idx}")
     RUN_TARGET_BRS=("${RUN_TARGET_BRS[@]:0:$idx}")
-    RUN_COMBOS=("${RUN_COMBOS[@]:0:$idx}")
+    RUN_COMBO_HISTORY=("${RUN_COMBO_HISTORY[@]:0:$idx}")
     RUN_PROFILES=("${RUN_PROFILES[@]:0:$idx}")
     RUN_QUALITIES=("${RUN_QUALITIES[@]:0:$idx}")
     RUN_QT_MAKES=("${RUN_QT_MAKES[@]:0:$idx}")
@@ -1428,7 +1436,7 @@ remove_indices_for_regen() {
     RUN_SEEDS=("${RUN_SEEDS[@]:0:$idx}" "${RUN_SEEDS[@]:$((idx + 1))}")
     RUN_TARGET_DURS=("${RUN_TARGET_DURS[@]:0:$idx}" "${RUN_TARGET_DURS[@]:$((idx + 1))}")
     RUN_TARGET_BRS=("${RUN_TARGET_BRS[@]:0:$idx}" "${RUN_TARGET_BRS[@]:$((idx + 1))}")
-    RUN_COMBOS=("${RUN_COMBOS[@]:0:$idx}" "${RUN_COMBOS[@]:$((idx + 1))}")
+    RUN_COMBO_HISTORY=("${RUN_COMBO_HISTORY[@]:0:$idx}" "${RUN_COMBO_HISTORY[@]:$((idx + 1))}")
     RUN_PROFILES=("${RUN_PROFILES[@]:0:$idx}" "${RUN_PROFILES[@]:$((idx + 1))}")
     RUN_QUALITIES=("${RUN_QUALITIES[@]:0:$idx}" "${RUN_QUALITIES[@]:$((idx + 1))}")
     RUN_QT_MAKES=("${RUN_QT_MAKES[@]:0:$idx}" "${RUN_QT_MAKES[@]:$((idx + 1))}")
@@ -1445,12 +1453,10 @@ remove_indices_for_regen() {
     RUN_VARIANT_KEYS=("${RUN_VARIANT_KEYS[@]:0:$idx}" "${RUN_VARIANT_KEYS[@]:$((idx + 1))}")
   done <<<"$sorted"
   LAST_COMBOS=()
-  if [ "${#RUN_COMBOS[@]:-0}" -gt 0 ]; then
-    for combo in "${RUN_COMBOS[@]}"; do
+  if [ "${#RUN_COMBO_HISTORY[@]:-0}" -gt 0 ]; then
+    for combo in "${RUN_COMBO_HISTORY[@]}"; do
       LAST_COMBOS+=("$combo")
     done
-  else
-    log "warn" "Low uniqueness fallback requested but RUN_COMBOS is empty; skipping regen."
   fi
 }
 
@@ -1549,10 +1555,7 @@ quality_check() {
 
 # REGION AI: safe quality fallback driver
 _try_regen_quality() {
-  if [ -z "${RUN_COMBOS+x}" ] || [ ${#RUN_COMBOS[@]:-0} -eq 0 ]; then
-    echo "warn: Low uniqueness fallback requested but RUN_COMBOS is empty; skipping regen."
-    return 0
-  fi
+  ensure_run_combos
   if [ ${#QUALITY_ISSUES[@]:-0} -eq 0 ] || [ ${#QUALITY_COPY_IDS[@]:-0} -eq 0 ]; then
     return 0
   fi
@@ -1610,6 +1613,8 @@ warn_similar_copies() {
     echo "$message"
   fi
 }
+
+log_uniqueness_summary(){ local ok=0 bad=0 idx delta ph s t a;for idx in "${!RUN_FILES[@]}"; do ph="${RUN_PHASH[$idx]:-0}";s="${RUN_SSIM[$idx]:-0}";t="${RUN_TARGET_BRS[$idx]:-0}";a="${RUN_BITRATES[$idx]:-0}";delta=$(awk -v tt="$t" -v aa="$a" 'BEGIN{tt+=0;aa+=0;if(tt<=0){print 0;exit} diff=aa-tt;if(diff<0)diff=-diff;printf "%.3f",(diff/tt)*100}');if awk -v p="$ph" 'BEGIN{p+=0; exit (p>=6?0:1)}'; then ok=$((ok+1));elif awk -v ss="$s" -v dd="$delta" 'BEGIN{ss+=0;dd+=0; exit (ss<0.995 && dd>=10?0:1)}'; then ok=$((ok+1));else bad=$((bad+1));fi;done;echo "ℹ️ Итог уникальности: принято $ok, отклонено $bad (порог ΔpHash>=6 или SSIM<0.995 и Δbitrate≥10%).";}
 
 low_uniqueness_fallback() {
   local total=${#RUN_FILES[@]}
@@ -1729,6 +1734,9 @@ report_template_statistics() {
 generate_copy() {
   local copy_index="$1"
   local regen_tag="${2:-0}"
+  local CFPS="" CNOISE="" CMIRROR="" CAUDIO="" CSHIFT="" CBR="" CSOFT="" CLEVEL="" regen_combo=""
+  if [ "$regen_tag" -gt 0 ]; then regen_combo=$(next_regen_combo); JITTER_RANGE_OVERRIDE=7; fi
+  [ -n "$regen_combo" ] && eval "$regen_combo"
   local attempt=0
   while :; do
     SEED_HEX=$(deterministic_md5 "${SRC}_${copy_index}_соль_${regen_tag}_${attempt}")
@@ -1739,6 +1747,7 @@ generate_copy() {
 
     # параметры видео
     FPS=$(select_fps)
+    [ -n "$CFPS" ] && FPS="$CFPS"
 
     BR=$(rand_int "$BR_MIN" "$BR_MAX")
     if [ "$BR_MIN" -le 4600 ] && [ "$BR_MAX" -ge 3200 ]; then
@@ -1749,6 +1758,7 @@ generate_copy() {
         BR=$(rand_int "$mid_min" "$mid_max")
       fi
     fi
+    [ -n "$CBR" ] && BR=$(awk -v b="$BR" -v m="$CBR" 'BEGIN{b+=0;m+=0;if(m<=0)m=1;printf "%.0f",b*m}')
 
     compute_duration_profile
 
@@ -1781,12 +1791,14 @@ EOF
     CLIP_DURATION=$(normalize_duration_value "$CLIP_DURATION" "$clip_duration_fallback" "clip_duration" "copy ${copy_index}")
     TARGET_DURATION="$CLIP_DURATION"
     CLIP_START=$(normalize_ss_value "$CLIP_START" "0.000" "clip_start" "copy ${copy_index}")
+    [ -n "$CSHIFT" ] && CLIP_START=$(awk -v s="${CLIP_START:-0}" -v d="$CSHIFT" -v l="$clip_duration_fallback" 'BEGIN{s+=0;d+=0;l+=0;v=s+d;if(v<0)v=0;if(l>0 && v>l-0.2)v=l-0.2;if(v<0)v=0;printf "%.3f",v}')
 # END REGION AI
 
     NOISE=0
     if [ "$(rand_int 1 100)" -le "$NOISE_PROB_PERCENT" ]; then
       NOISE=1
     fi
+    [ -n "$CNOISE" ] && NOISE="$CNOISE"
 
     pick_crop_offsets
     if [ "$TARGET_W" -gt 0 ] && [ "$TARGET_H" -gt 0 ]; then
@@ -1814,6 +1826,7 @@ EOF
       AUDIO_SR=$(rand_choice AUDIO_SR_OPTIONS)
     fi
     pick_audio_chain
+    if [ -n "$CAUDIO" ]; then if [ "$CAUDIO" = "asetrate" ]; then AFILTER="asetrate=${AUDIO_SR}*1.01,aresample=${AUDIO_SR}"; AUDIO_PROFILE="asetrate"; elif [ "$CAUDIO" = "resample" ]; then AFILTER="aresample=${AUDIO_SR},atempo=${TEMPO_FACTOR}"; AUDIO_PROFILE="resample"; else AFILTER="anull,aresample=${AUDIO_SR},apulsator=mode=sine:freq=0.9,atempo=${TEMPO_FACTOR}"; AUDIO_PROFILE="anull+jitter"; fi; fi
 
     local jitter_filters=()
     if (( RANDOM % 3 == 0 )); then
@@ -1884,6 +1897,7 @@ EOF
       fi
       MIRROR_DESC="$MIRROR_FILTER"
     fi
+    if [ -n "$CMIRROR" ]; then if [ "$CMIRROR" = "none" ]; then MIRROR_ACTIVE=0; MIRROR_FILTER=""; MIRROR_DESC="none"; else MIRROR_ACTIVE=1; MIRROR_FILTER="$CMIRROR"; MIRROR_DESC="$CMIRROR"; fi; fi
 
     local LUT_DESC="none" LUT_FILTER="" LUT_ACTIVE=0
     if [ "$ENABLE_LUT" -eq 1 ]; then
@@ -1947,7 +1961,7 @@ EOF
   MAXRATE=$((BR + RATE_PAD))
   BUFSIZE=$((BR * 2 + RATE_PAD * 2))
 
-  pick_software_encoder "$PROFILE_VALUE" "$SEED_HEX"
+  pick_software_encoder "$PROFILE_VALUE" "$SEED_HEX"; CSOFT=""
 
   CREATION_TIME=$(generate_iso_timestamp)
   CREATION_TIME=$(jitter_iso_timestamp "$CREATION_TIME")
@@ -2069,6 +2083,7 @@ EOF
   if [ "$FPS" -ge 60 ]; then
     CODEC_LEVEL="4.2"
   fi
+  [ -n "$CLEVEL" ] && CODEC_LEVEL="$CLEVEL"
 
   # REGION AI: primary ffmpeg command with stable stream mapping
   local audio_input_index=0 audio_stream_present=0
@@ -2300,7 +2315,7 @@ EOF
   RUN_SEEDS+=("$SEED")
   RUN_TARGET_DURS+=("$TARGET_DURATION")
   RUN_TARGET_BRS+=("$BR")
-  RUN_COMBOS+=("$combo_key")
+  RUN_COMBO_HISTORY+=("$combo_key")
   RUN_PROFILES+=("$PROFILE_VALUE")
   RUN_QUALITIES+=("$QUALITY")
   RUN_QT_MAKES+=("$QT_MAKE")
@@ -2336,6 +2351,7 @@ for ((i=1;i<=COUNT;i++)); do
 done
 
 fallback_attempts=0
+ensure_run_combos
 while low_uniqueness_fallback; do
   fallback_attempts=$((fallback_attempts + 1))
   if [ "$fallback_attempts" -ge 2 ]; then
@@ -2397,6 +2413,7 @@ while :; do
   done
 
   fallback_happened=0
+  ensure_run_combos
   while low_uniqueness_fallback; do
     fallback_happened=1
     fallback_attempts=$((fallback_attempts + 1))
@@ -2430,7 +2447,7 @@ if [ "$quality_pass_all" != true ]; then
   quality_check
 fi
 
-warn_similar_copies
+warn_similar_copies; log_uniqueness_summary
 
 regen_flag=false
 if [ "$REGEN_OCCURRED" -eq 1 ]; then

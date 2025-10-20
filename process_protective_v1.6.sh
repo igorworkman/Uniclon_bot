@@ -389,7 +389,16 @@ rng_next_chunk() {
 }
 
 rand_int() {
-  local A="$1" B="$2" span=$((B - A + 1)) raw
+  if [ $# -lt 2 ]; then
+    printf "rand_int requires two arguments\n" >&2
+    return 1
+  fi
+
+  local A="$1"
+  local B="$2"
+  local span raw
+
+  span=$((B - A + 1))
   raw=$(rng_next_chunk)
   echo $((A + raw % span))
 }

@@ -9,6 +9,7 @@ from adaptive_tuner import get_tuned_params, record_render_result
 from config import SCRIPT_PATH, OUTPUT_DIR, NO_DEVICE_INFO, PLATFORM_PRESETS
 from report_builder import build_uniqueness_report
 from render_queue import acquire_render_slot
+from orchestrator import add_task as orchestrator_add_task, finish_task as orchestrator_finish_task
 # END REGION AI
 
 
@@ -34,20 +35,54 @@ async def run_script_with_logs(
         priority = max(1, int(os.getenv("UNICLON_RENDER_PRIORITY", "1")))
     except ValueError:
         priority = 1
-    release = await acquire_render_slot(input_file.name, copies, priority)
+    ticket = await orchestrator_add_task(input_file.name, copies, priority)
+    release = None
     try:
-        return await _run_script_core(input_file, copies, cwd, profile, quality)
+        release = await acquire_render_slot(input_file.name, copies, priority)
+    except Exception:
+        try:
+            await orchestrator_finish_task(ticket)
+        except Exception:
+            logger.debug("Orchestrator finalize on slot failure", exc_info=True)
+        raise
+    try:
+        try:
+            result = await _run_script_core(
+                input_file,
+                copies,
+                cwd,
+                profile,
+                quality,
+                orchestrator_ticket=ticket,
+            )
+        except Exception:
+            try:
+                await orchestrator_finish_task(ticket)
+            except Exception:
+                logger.debug("Orchestrator finalize on error failed", exc_info=True)
+            raise
+        await orchestrator_finish_task(ticket, ticket.get("metrics"))
+        return result
     finally:
-        release()
+        if release:
+            release()
 # END REGION AI
 
 
 async def _run_script_core(
-    input_file: Path, copies: int, cwd: Path, profile: str, quality: str
+    input_file: Path,
+    copies: int,
+    cwd: Path,
+    profile: str,
+    quality: str,
+    orchestrator_ticket: Optional[Dict[str, object]] = None,
 ) -> Tuple[int, str]:
     """Запускает bash-скрипт и возвращает (returncode, объединённые логи)."""
     if not SCRIPT_PATH.exists():
         raise FileNotFoundError(f"Script not found: {SCRIPT_PATH}")
+
+    if orchestrator_ticket is not None:
+        orchestrator_ticket["metrics"] = None
 
     # ensure +x
     try:
@@ -126,6 +161,14 @@ async def _run_script_core(
     failure_names: List[str] = []
     # END REGION AI
     env = os.environ.copy()
+    if orchestrator_ticket:
+        env.update({k: str(v) for k, v in orchestrator_ticket.get("env", {}).items()})
+        if orchestrator_ticket.get("mode") and orchestrator_ticket.get("mode") != "neutral":
+            logger.info(
+                "🎛 Orchestrator mode: %s | %s",
+                orchestrator_ticket["mode"],
+                input_file.name,
+            )
     env["OUTPUT_DIR"] = str(OUTPUT_DIR)
     env["PREVIEW_DIR"] = str(OUTPUT_DIR / "previews")
 
@@ -214,6 +257,8 @@ async def _run_script_core(
             last_nonempty or "",
             tail,
         )
+        if orchestrator_ticket is not None:
+            orchestrator_ticket["metrics"] = None
         return rc, "".join(lines)
 # END REGION AI
 
@@ -231,6 +276,8 @@ async def _run_script_core(
             except Exception:
                 logger.debug("Adaptive tuner history update failed", exc_info=True)
             lines.append(summary_line + "\n")
+            if orchestrator_ticket is not None:
+                orchestrator_ticket["metrics"] = report_payload
             try:
                 from handlers import broadcast_uniqscore_indicator
             except ImportError:
@@ -242,6 +289,8 @@ async def _run_script_core(
                     broadcast_uniqscore_indicator(level_emoji)
                 except Exception:
                     logger.debug("UniqScore notifier call failed", exc_info=True)
+        elif orchestrator_ticket is not None:
+            orchestrator_ticket["metrics"] = None
     # END REGION AI
 
     return rc, "".join(lines)

@@ -359,11 +359,14 @@ async def _perform_self_audit_impl(
     phash_ok = mean_phash >= 10.0
 
     profile_label: Optional[str] = None
+    # REGION AI: audit profile labels
     profile_map = {
         "tiktok": "TikTok",
         "instagram": "Instagram",
         "youtube": "YouTube Shorts",
+        "telegram": "Telegram Stories",
     }
+    # END REGION AI
     if manifest_path.exists():
         try:
             with manifest_path.open("r", encoding="utf-8", newline="") as fh:

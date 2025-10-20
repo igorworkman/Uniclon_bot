@@ -48,11 +48,14 @@ _user_outputs: Dict[int, Set[Path]] = {}
 
 _TELEGRAM_DOCUMENT_LIMIT = 2 * 1024 * 1024 * 1024  # 2 GB
 
+# REGION AI: available export profiles
 _VALID_PROFILES = {
     "tiktok": "TikTok",
     "instagram": "Instagram",
     "youtube": "YouTube Shorts",
+    "telegram": "Telegram Stories",
 }
+# END REGION AI
 
 
 class FSM(StatesGroup):
@@ -61,13 +64,26 @@ class FSM(StatesGroup):
     awaiting_preview = State()
 
 
+# REGION AI: dynamic profile keyboard with telegram support
 def _profile_keyboard() -> InlineKeyboardMarkup:
-    buttons = [
-        InlineKeyboardButton(text=_VALID_PROFILES["tiktok"], callback_data="profile:tiktok"),
-        InlineKeyboardButton(text=_VALID_PROFILES["instagram"], callback_data="profile:instagram"),
-        InlineKeyboardButton(text=_VALID_PROFILES["youtube"], callback_data="profile:youtube"),
+    first_row = [
+        InlineKeyboardButton(
+            text=_VALID_PROFILES["tiktok"], callback_data="profile:tiktok"
+        ),
+        InlineKeyboardButton(
+            text=_VALID_PROFILES["instagram"], callback_data="profile:instagram"
+        ),
     ]
-    return InlineKeyboardMarkup(inline_keyboard=[buttons])
+    second_row = [
+        InlineKeyboardButton(
+            text=_VALID_PROFILES["youtube"], callback_data="profile:youtube"
+        ),
+        InlineKeyboardButton(
+            text=_VALID_PROFILES["telegram"], callback_data="profile:telegram"
+        ),
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[first_row, second_row])
+# END REGION AI
 
 
 def _preview_keyboard() -> InlineKeyboardMarkup:

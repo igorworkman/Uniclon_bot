@@ -150,8 +150,25 @@ case "$PROFILE" in
     AUDIO_SR=48000
     PROFILE_MAX_DURATION=60
     VIDEO_PROFILE="high"
-    VIDEO_LEVEL="4.1"
+# REGION AI: instagram codec level override
+    VIDEO_LEVEL="4.0"
+# END REGION AI
     ;;
+# REGION AI: telegram distribution profile
+  telegram)
+    TARGET_W=1080
+    TARGET_H=1920
+    BR_MIN=3200
+    BR_MAX=4000
+    FPS_BASE=(25 30)
+    FPS_RARE=(50)
+    AUDIO_SR=44100
+    PROFILE_FORCE_FPS=""
+    PROFILE_MAX_DURATION=120
+    VIDEO_PROFILE="high"
+    VIDEO_LEVEL="4.0"
+    ;;
+# END REGION AI
   youtube)
     TARGET_W=1920
     TARGET_H=1080
@@ -1069,6 +1086,11 @@ MINOR_VERSION_TAG="0"
 COMPAT_BRANDS_TAG="isommp42"
 # END REGION AI
 USED_SOFT_ENC_KEYS_LIST=""
+# REGION AI: variant uniqueness state
+declare -a RUN_VARIANT_KEYS=()
+USED_VARIANT_KEYS_LIST=""
+CURRENT_VARIANT_KEY=""
+# END REGION AI
 
 combo_key_seen() {
   local key="$1" existing
@@ -1098,6 +1120,57 @@ mark_combo_key() {
     USED_SOFT_ENC_KEYS_LIST="${USED_SOFT_ENC_KEYS_LIST}"$'\n'"$key"
   fi
 }
+
+# REGION AI: variant key helpers
+variant_key_seen() {
+  local key="$1" existing
+  if [ -z "${USED_VARIANT_KEYS_LIST:-}" ]; then
+    return 1
+  fi
+  while IFS= read -r existing; do
+    [ -z "$existing" ] && continue
+    if [ "$existing" = "$key" ]; then
+      return 0
+    fi
+  done <<EOF
+${USED_VARIANT_KEYS_LIST}
+EOF
+  return 1
+}
+
+mark_variant_key() {
+  local key="$1"
+  : "${USED_VARIANT_KEYS_LIST:=}"
+  if variant_key_seen "$key"; then
+    return
+  fi
+  if [ -z "$USED_VARIANT_KEYS_LIST" ]; then
+    USED_VARIANT_KEYS_LIST="$key"
+  else
+    USED_VARIANT_KEYS_LIST="${USED_VARIANT_KEYS_LIST}"$'\n'"$key"
+  fi
+}
+
+unmark_variant_key() {
+  local key="$1" existing new_list=""
+  if [ -z "${USED_VARIANT_KEYS_LIST:-}" ]; then
+    return
+  fi
+  while IFS= read -r existing; do
+    [ -z "$existing" ] && continue
+    if [ "$existing" != "$key" ]; then
+      if [ -z "$new_list" ]; then
+        new_list="$existing"
+      else
+        new_list="${new_list}"$'\n'"$existing"
+      fi
+    fi
+  done <<EOF
+${USED_VARIANT_KEYS_LIST}
+EOF
+  USED_VARIANT_KEYS_LIST="$new_list"
+}
+# END REGION AI
 
 unmark_combo_key() {
   local key="$1" existing new_list=""
@@ -1236,6 +1309,34 @@ calculate_duplicate_max() {
   echo "$max_count"
 }
 
+# REGION AI: variant share calculator
+variant_max_share() {
+  local arr_name="$1" total=0
+  eval "total=\${#$arr_name[@]}"
+  if [ "$total" -eq 0 ]; then
+    echo "0"
+    return
+  fi
+  eval "printf '%s\n' \"\${$arr_name[@]}\"" | awk -v total="$total" '
+    NF==0 {next}
+    {count[$0]++}
+    END {
+      max=0
+      for (k in count) {
+        if (count[k] > max) {
+          max = count[k]
+        }
+      }
+      if (total > 0) {
+        printf "%.4f", max/total
+      } else {
+        printf "0"
+      }
+    }
+  '
+}
+# END REGION AI
+
 remove_last_generated() {
   local remove_count="$1"
   for ((drop=0; drop<remove_count; drop++)); do
@@ -1243,6 +1344,10 @@ remove_last_generated() {
     [ "$idx" -lt 0 ] && break
     local combo_key="${RUN_SOFTWARES[$idx]}|${RUN_ENCODERS[$idx]}"
     unmark_combo_key "$combo_key"
+    local variant_key="${RUN_VARIANT_KEYS[$idx]:-}"
+    if [ -n "$variant_key" ]; then
+      unmark_variant_key "$variant_key"
+    fi
     local file_path="${OUTPUT_DIR}/${RUN_FILES[$idx]}"
     local preview_file="${RUN_PREVIEWS[$idx]:-}"
     rm -f "$file_path" 2>/dev/null || true
@@ -1322,6 +1427,7 @@ remove_indices_for_regen() {
     RUN_CREATIVE_INTRO=("${RUN_CREATIVE_INTRO[@]:0:$idx}" "${RUN_CREATIVE_INTRO[@]:$((idx + 1))}")
     RUN_CREATIVE_LUT=("${RUN_CREATIVE_LUT[@]:0:$idx}" "${RUN_CREATIVE_LUT[@]:$((idx + 1))}")
     RUN_PREVIEWS=("${RUN_PREVIEWS[@]:0:$idx}" "${RUN_PREVIEWS[@]:$((idx + 1))}")
+    RUN_VARIANT_KEYS=("${RUN_VARIANT_KEYS[@]:0:$idx}" "${RUN_VARIANT_KEYS[@]:$((idx + 1))}")
   done <<<"$sorted"
   LAST_COMBOS=("${RUN_COMBOS[@]}")
 }
@@ -1584,6 +1690,9 @@ generate_copy() {
   while :; do
     SEED_HEX=$(deterministic_md5 "${SRC}_${copy_index}_соль_${regen_tag}_${attempt}")
     init_rng "$SEED_HEX"
+# REGION AI: reset variant descriptor per attempt
+    CURRENT_VARIANT_KEY=""
+# END REGION AI
 
     # параметры видео
     FPS=$(select_fps)
@@ -1674,6 +1783,27 @@ EOF
     else
       AFILTER="$jitter_chain"
     fi
+
+# REGION AI: enforce variant uniqueness signature
+    local crop_signature
+    crop_signature=$(printf "%sx%s@%s,%s" "$CROP_W" "$CROP_H" "$CROP_X" "$CROP_Y")
+    local duration_signature
+    duration_signature=$(awk -v d="$CLIP_DURATION" 'BEGIN{d+=0; printf "%.3f", d}')
+    local jitter_signature="$jitter_chain"
+    if [ -n "$jitter_signature" ]; then
+      jitter_signature=$(deterministic_md5 "$jitter_signature")
+    fi
+    local variant_key="${FPS}|${crop_signature}|${NOISE}|${jitter_signature}|${duration_signature}"
+    if variant_key_seen "$variant_key"; then
+      if [ "$attempt" -lt 4 ]; then
+        attempt=$((attempt + 1))
+        continue
+      else
+        echo "⚠️ Вариант параметров повторяется, сохранён после ${attempt} попыток"
+      fi
+    fi
+    CURRENT_VARIANT_KEY="$variant_key"
+# END REGION AI
 
     MUSIC_VARIANT_TRACK=""
     if [ "$MUSIC_VARIANT" -eq 1 ]; then
@@ -1935,6 +2065,8 @@ EOF
     OUT="$ENCODE_TARGET"
   fi
 
+  # REGION AI: exif randomization bindings
+  RND_DATE="$CREATION_TIME_EXIF"
   EXIF_CMD=(
     exiftool
     -overwrite_original
@@ -1942,11 +2074,13 @@ EOF
     -Location:all=
     -SerialNumber=
     -Software="$SOFTWARE_TAG"
-    -CreateDate="$CREATION_TIME_EXIF"
-    -ModifyDate="$CREATION_TIME_EXIF"
-    -QuickTime:CreateDate="$CREATION_TIME_EXIF"
-    -QuickTime:ModifyDate="$CREATION_TIME_EXIF"
+    -Encoder="$ENCODER_TAG"
+    -CreateDate="$RND_DATE"
+    -ModifyDate="$RND_DATE"
+    -QuickTime:CreateDate="$RND_DATE"
+    -QuickTime:ModifyDate="$RND_DATE"
   )
+  # END REGION AI
   if [ "$QT_META" -eq 1 ]; then
     if [ "$DEVICE_INFO" -eq 1 ]; then
       if [ -n "$QT_MAKE" ]; then
@@ -2076,6 +2210,14 @@ EOF
   RUN_CREATIVE_INTRO+=("$INTRO_DESC")
   RUN_CREATIVE_LUT+=("$LUT_DESC")
   RUN_PREVIEWS+=("$PREVIEW_NAME")
+# REGION AI: persist variant signature state
+  if [ -n "$CURRENT_VARIANT_KEY" ]; then
+    mark_variant_key "$CURRENT_VARIANT_KEY"
+    RUN_VARIANT_KEYS+=("$CURRENT_VARIANT_KEY")
+  else
+    RUN_VARIANT_KEYS+=("")
+  fi
+# END REGION AI
 
   local metrics
   metrics=$(compute_metrics_for_copy "$SRC" "$OUT")
@@ -2109,6 +2251,30 @@ while :; do
   while :; do
     max_dup=$(calculate_duplicate_max RUN_FPS RUN_BITRATES RUN_DURATIONS)
     if [ "$max_dup" -lt "$threshold" ]; then
+      # REGION AI: variant similarity guard
+      local variant_share
+      variant_share=$(variant_max_share RUN_VARIANT_KEYS)
+      if awk -v share="$variant_share" 'BEGIN{exit !(share>0.70)}'; then
+        if [ "$regen_attempts" -ge "$MAX_REGEN_ATTEMPTS" ]; then
+          echo "⚠️ >70% копий имеют одинаковые параметры, повторная генерация остановлена"
+          break
+        fi
+        REGEN_OCCURRED=1
+        regen_attempts=$((regen_attempts + 1))
+        echo "⚠️ Обнаружена высокая схожесть параметров, перегенерация выбранных копий…"
+        local local_regen_count=2
+        if [ "$local_regen_count" -gt "${#RUN_FILES[@]}" ]; then
+          local_regen_count="${#RUN_FILES[@]}"
+        fi
+        remove_last_generated "$local_regen_count"
+        REGEN_ITER=$((REGEN_ITER + 1))
+        start_index=$((COUNT - local_regen_count + 1))
+        for ((idx=start_index; idx<=COUNT; idx++)); do
+          generate_copy "$idx" "$REGEN_ITER"
+        done
+        continue
+      fi
+      # END REGION AI
       break
     fi
     if [ "$regen_attempts" -ge "$MAX_REGEN_ATTEMPTS" ]; then

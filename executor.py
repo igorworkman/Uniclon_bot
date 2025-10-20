@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # REGION AI: imports
 from config import SCRIPT_PATH, OUTPUT_DIR, NO_DEVICE_INFO
@@ -51,6 +51,14 @@ async def run_script_with_logs(
 
     device_args: List[str] = ["--no-device-info"] if NO_DEVICE_INFO else []
 
+    # REGION AI: task logging state
+    logger.info("🚀 Запуск скрипта: src=%s | copies=%s | profile=%s | q=%s", input_file.name, copies, normalized_profile or "-", normalized_quality)
+    clip_hint = ""
+    last_target: Optional[str] = None
+    duration_map: Dict[str, str] = {}
+    success_files: List[str] = []
+    failure_names: List[str] = []
+    # END REGION AI
     proc = await asyncio.create_subprocess_exec(
         str(SCRIPT_PATH),
         input_file.name,
@@ -65,11 +73,15 @@ async def run_script_with_logs(
     )
 
     lines: List[str] = []
+    last_nonempty: Optional[str] = None
     assert proc.stdout is not None
     async for raw in proc.stdout:
         decoded = raw.decode(errors="replace")
         lines.append(decoded)
         message = decoded.rstrip("\n")
+        stripped = message.strip()
+        if stripped:
+            last_nonempty = stripped
         if message:
             logger.info(
                 "[%s|copies=%s|profile=%s] %s",
@@ -86,15 +98,48 @@ async def run_script_with_logs(
                 f"{normalized_profile or '-'}|q={normalized_quality}",
             )
 
+        if stripped and "clip_start=" in stripped:
+            token = stripped.split("clip_start=", 1)[1].split()[0].rstrip(",")
+            clip_hint = token[:-1] if token.endswith("s") else token
+        if stripped.startswith("▶️"):
+            parts = stripped.split("→", 1)
+            if len(parts) == 2:
+                rhs = parts[1]
+                target = rhs.split("|", 1)[0].strip()
+                params_text = rhs.split("|", 1)[1] if "|" in rhs else ""
+                tokens = {key: value.rstrip(",") for key, value in (seg.split("=", 1) for seg in params_text.split() if "=" in seg)}
+                ss_value = clip_hint or tokens.get("ss", "0")
+                duration_map[target] = tokens.get("duration", "-")
+                logger.info("🎛 Параметры копии: file=%s | fps=%s | bitrate=%s | ss=%s | duration=%s", target, tokens.get("fps", "-"), tokens.get("br", "-"), ss_value, duration_map[target])
+                last_target = target
+                clip_hint = ""
+        elif stripped.startswith("✅ done:"):
+            target = stripped.split("✅ done:", 1)[1].strip()
+            success_files.append(target)
+            logger.info("✅ Копия завершена: file=%s | duration=%s", target, duration_map.get(target, "-"))
+        elif stripped.startswith("❌"):
+            failure = Path(last_target or input_file.name).name
+            if failure not in failure_names:
+                failure_names.append(failure)
+
     rc = await proc.wait()
+    logger.info("✅ %s копии успешно", len(success_files))
+    if failure_names:
+        logger.error("❌ %s копии с ошибкой: %s", len(failure_names), ", ".join(failure_names))
+    tail = "".join(lines[-10:])
     if rc != 0:
-        tail = "".join(lines[-10:])
+        if last_target:
+            base_name = Path(last_target).name
+            if base_name not in failure_names:
+                failure_names.append(base_name)
+                logger.error("❌ %s копии с ошибкой: %s", len(failure_names), ", ".join(failure_names))
         logger.error(
-            "Script %s exited with code %s for %s (copies=%s). Tail logs:\n%s",
+            "Script %s exited with code %s for %s (copies=%s). Last line: %s. Tail logs:\n%s",
             SCRIPT_PATH,
             rc,
             input_file.name,
             copies,
+            last_nonempty or "",
             tail,
         )
         raise RuntimeError(

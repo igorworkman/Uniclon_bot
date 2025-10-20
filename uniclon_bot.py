@@ -438,6 +438,7 @@ class TaskInfo:
     profile: Optional[str] = None
     copies: Optional[int] = None
     save_preview: Optional[bool] = None
+    quality: Optional[str] = None
 
 
 class UserTaskQueue:
@@ -460,6 +461,7 @@ class UserTaskQueue:
         profile: Optional[str] = None,
         copies: Optional[int] = None,
         save_preview: Optional[bool] = None,
+        quality: Optional[str] = None,
     ) -> None:
         if self._closed:
             raise RuntimeError("Task queue is shutting down")
@@ -477,6 +479,7 @@ class UserTaskQueue:
                     profile=profile,
                     copies=copies,
                     save_preview=save_preview,
+                    quality=quality,
                 )
             )
             await queue.put((task_id, task_factory))
@@ -512,12 +515,25 @@ class UserTaskQueue:
                     queue.task_done()
                     break
                 task_id, task_factory = payload
+                task_info: Optional[TaskInfo] = None
                 async with self._lock:
                     for info in self._tasks.get(user_id, []):
                         if info.task_id == task_id:
                             info.status = "active"
                             info.started_at = time.time()
+                            task_info = info
                             break
+                if task_info:
+                    # REGION AI: worker logging
+                    logging.info(
+                        "🚀 Исполнение: user=%s | video=%s | copies=%s | profile=%s | q=%s",
+                        user_id,
+                        task_info.label,
+                        task_info.copies if task_info.copies is not None else "-",
+                        task_info.profile or "-",
+                        task_info.quality or "-",
+                    )
+                    # END REGION AI
                 try:
                     await task_factory()
                 except Exception:  # noqa: BLE001

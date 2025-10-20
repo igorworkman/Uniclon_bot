@@ -615,6 +615,18 @@ async def _enqueue_processing(
     profile = profile_override if profile_override is not None else _get_profile(user_id)
     quality = _get_quality(user_id)
 
+    # REGION AI: enqueue logging
+    logger.info(
+        "🚀 Старт задачи: user=%s | video=%s | copies=%s | profile=%s | q=%s | preview=%s",
+        user_id,
+        input_path.name,
+        copies,
+        profile or "-",
+        quality,
+        "yes" if save_preview else "no",
+    )
+    # END REGION AI
+
     removed_auto = auto_cleanup_stale_outputs(user_id)
     if removed_auto:
         logger.info("Auto-clean removed %s stale files for user=%s", removed_auto, user_id)
@@ -642,6 +654,7 @@ async def _enqueue_processing(
             profile=profile or None,
             copies=copies,
             save_preview=save_preview,
+            quality=quality,
         )
     except RuntimeError:
         await task()

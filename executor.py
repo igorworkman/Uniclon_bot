@@ -14,10 +14,36 @@ from report_builder import build_uniqueness_report
 logger = logging.getLogger(__name__)
 
 # REGION AI: adaptive tuning bootstrap
-_ADAPTIVE_ENV, _ADAPTIVE_META = get_tuned_params()
-os.environ.update(_ADAPTIVE_ENV)
-_avg_text = "-" if _ADAPTIVE_META.get("uniq_avg") is None else f"{_ADAPTIVE_META['uniq_avg']:.1f}"
-logger.info("🎚 Adaptive tuner applied: mode=%s | UniqScore_avg=%s", _ADAPTIVE_META.get("mode", "neutral"), _avg_text)
+_ADAPTIVE_ENV, _ADAPTIVE_META = {}, {}
+
+
+def _format_avg(meta: Dict[str, float]) -> str:
+    value = meta.get("uniq_avg")
+    return "-" if value is None else f"{value:.1f}"
+
+
+def _refresh_adaptive_env(reason: str) -> None:
+    global _ADAPTIVE_ENV, _ADAPTIVE_META
+    new_env, new_meta = get_tuned_params()
+
+    if _ADAPTIVE_ENV:
+        for stale_key in set(_ADAPTIVE_ENV) - set(new_env):
+            os.environ.pop(stale_key, None)
+
+    os.environ.update(new_env)
+
+    if new_env != _ADAPTIVE_ENV or _format_avg(new_meta) != _format_avg(_ADAPTIVE_META):
+        logger.info(
+            "🎚 Adaptive tuner applied (%s): mode=%s | UniqScore_avg=%s",
+            reason,
+            new_meta.get("mode", "neutral"),
+            _format_avg(new_meta),
+        )
+
+    _ADAPTIVE_ENV, _ADAPTIVE_META = new_env, new_meta
+
+
+_refresh_adaptive_env("bootstrap")
 # END REGION AI
 
 # REGION AI: script path logging
@@ -29,6 +55,8 @@ async def run_script_with_logs(
     input_file: Path, copies: int, cwd: Path, profile: str, quality: str
 ) -> Tuple[int, str]:
     """Запускает bash-скрипт и возвращает (returncode, объединённые логи)."""
+    _refresh_adaptive_env("pre-run")
+
     if not SCRIPT_PATH.exists():
         raise FileNotFoundError(f"Script not found: {SCRIPT_PATH}")
 
@@ -213,6 +241,8 @@ async def run_script_with_logs(
                 record_render_result(report_payload)
             except Exception:
                 logger.debug("Adaptive tuner history update failed", exc_info=True)
+            else:
+                _refresh_adaptive_env("post-run")
             lines.append(summary_line + "\n")
             try:
                 from handlers import broadcast_uniqscore_indicator

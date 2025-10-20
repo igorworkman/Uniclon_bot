@@ -1687,9 +1687,23 @@ EOF
   fi
   VF="${VF},drawtext=text='${UID_TAG}':fontcolor=white@0.08:fontsize=16:x=10:y=H-30"
 
+  if [ -z "${CLIP_DURATION:-}" ]; then
+    CLIP_DURATION="1.0"
+  fi
+
   if ! awk -v d="$CLIP_DURATION" 'BEGIN{exit (d>0?0:1)}'; then
     CLIP_DURATION="$TARGET_DURATION"
   fi
+
+  if [ -z "${CLIP_START:-}" ]; then
+    CLIP_START="0.0"
+  fi
+
+  case "$CLIP_START" in
+    *[[:space:]]*)
+      CLIP_START="0.0"
+      ;;
+  esac
 
   FFMPEG_CMD=(ffmpeg -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC")
   if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
@@ -1713,6 +1727,12 @@ EOF
   fi
 
   echo "▶️ [$copy_index/$COUNT] $SRC → $OUT | fps=$FPS br=${BR}k noise=$NOISE crop=${CROP_W}x${CROP_H} duration=${TARGET_DURATION}s audio=${AUDIO_PROFILE} mirror=${MIRROR_DESC} lut=${LUT_DESC} intro=${INTRO_DESC}"
+
+  local ffmpeg_cmd_preview
+  ffmpeg_cmd_preview=$(printf '%q ' "${FFMPEG_CMD[@]}")
+  ffmpeg_cmd_preview=${ffmpeg_cmd_preview% }
+  echo "ℹ️ clip_start=$CLIP_START duration=$CLIP_DURATION"
+  echo "ℹ️ ffmpeg command: $ffmpeg_cmd_preview"
 
   "${FFMPEG_CMD[@]}"
 

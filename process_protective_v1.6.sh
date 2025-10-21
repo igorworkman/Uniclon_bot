@@ -2550,10 +2550,15 @@ EOF
       local fallback_vf_chain
       fallback_vf_chain=$(compose_vf_chain "$base_vf" "${fallback_vf_extra:+$fallback_vf_extra,}hflip,vignette=PI/4:0.7,rotate=0.5*(PI/180):fillcolor=black")
       fallback_vf_chain=$(ensure_vf_format "$fallback_vf_chain")
+      local fallback_af_payload
+      fallback_af_payload=$(compose_af_chain "$base_af" "$fallback_af_extra")
+      if [ -n "${SAFE_AF_CHAIN:-}" ]; then
+        fallback_af_payload=$(compose_af_chain "$SAFE_AF_CHAIN" "$fallback_af_payload")
+      fi
       ffmpeg -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC" \
         -t "$CLIP_DURATION" -c:v libx264 -preset medium -crf 24 \
         -vf "$fallback_vf_chain" \
-        -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$(compose_af_chain "$base_af" "$fallback_af_extra")" -movflags +faststart "$OUT"
+        -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$fallback_af_payload" -movflags +faststart "$OUT"
       continue
     elif [ "$fallback_needed" -eq 1 ]; then
       echo "[Warning] Max fallback attempts reached — accepting copy with warning."

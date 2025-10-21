@@ -2358,6 +2358,34 @@ EOF
 
   touch_randomize_mtime "$OUT"
   FILE_NAME="$(basename "$OUT")"
+  # REGION AI: similarity fallback with reinforced effects
+  local base_vf="$VF" base_af="$AFILTER" base_vf_extra="${CUR_VF_EXTRA:-}" base_af_extra="${CUR_AF_EXTRA:-}"
+  local metrics metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq fallback_attempts=0
+  while :; do
+    metrics=$(compute_metrics_for_copy "$SRC" "$OUT"); IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
+    local fallback_needed=0
+    if awk -v v="$metrics_phash" 'BEGIN{if(v==""||v=="None"||v=="NA") exit 1; exit (v+0<6?0:1)}'; then fallback_needed=1
+    elif awk -v v="$metrics_ssim" 'BEGIN{if(v==""||v=="None"||v=="NA") exit 1; exit (v+0>0.995?0:1)}'; then fallback_needed=1; fi
+    if [ "$fallback_needed" -eq 1 ] && [ "$fallback_attempts" -lt 2 ]; then
+      echo "[Fallback] Copy $copy_index too similar — regenerating..."; fallback_attempts=$((fallback_attempts + 1))
+      local combo_payload="" combo_vf="" combo_af=""
+      if [ "${#RUN_COMBOS[@]}" -gt 0 ]; then combo_payload="${RUN_COMBOS[$((RANDOM % ${#RUN_COMBOS[@]}))]}"; fi
+      if [ -n "$combo_payload" ]; then read -r combo_vf combo_af < <(bash -c "$combo_payload; printf '%s %s' \"\${CUR_VF_EXTRA:-}\" \"\${CUR_AF_EXTRA:-}\""); fi
+      local fallback_vf_extra="$base_vf_extra" fallback_af_extra="$base_af_extra"
+      [ -n "$combo_vf" ] && fallback_vf_extra="${fallback_vf_extra:+$fallback_vf_extra,}$combo_vf"
+      [ -n "$combo_af" ] && fallback_af_extra="${fallback_af_extra:+$fallback_af_extra,}$combo_af"
+      ffmpeg -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC" \
+        -t "$CLIP_DURATION" -c:v libx264 -preset medium -crf 24 \
+        -vf "$(compose_vf_chain "$base_vf" "${fallback_vf_extra:+$fallback_vf_extra,}hflip,vignette=PI/4:0.7,rotate=0.5*(PI/180)")" \
+        -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$(compose_af_chain "$base_af" "$fallback_af_extra")" -movflags +faststart "$OUT"
+      continue
+    elif [ "$fallback_needed" -eq 1 ]; then
+      echo "[Warning] Max fallback attempts reached — accepting copy with warning."
+    fi
+    break
+  done
+  # END REGION AI
+
   local MEDIA_DURATION_RAW=""
   local MEDIA_DURATION_SEC=""
   MEDIA_DURATION_RAW=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$OUT" 2>/dev/null || true)
@@ -2465,34 +2493,6 @@ EOF
     RUN_VARIANT_KEYS+=("")
   fi
 # END REGION AI
-
-  # REGION AI: similarity fallback with reinforced effects
-  local base_vf="$VF" base_af="$AFILTER" base_vf_extra="${CUR_VF_EXTRA:-}" base_af_extra="${CUR_AF_EXTRA:-}"
-  local metrics metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq fallback_attempts=0
-  while :; do
-    metrics=$(compute_metrics_for_copy "$SRC" "$OUT"); IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
-    local fallback_needed=0
-    if awk -v v="$metrics_phash" 'BEGIN{if(v==""||v=="None"||v=="NA") exit 1; exit (v+0<6?0:1)}'; then fallback_needed=1
-    elif awk -v v="$metrics_ssim" 'BEGIN{if(v==""||v=="None"||v=="NA") exit 1; exit (v+0>0.995?0:1)}'; then fallback_needed=1; fi
-    if [ "$fallback_needed" -eq 1 ] && [ "$fallback_attempts" -lt 2 ]; then
-      echo "[Fallback] Copy $copy_index too similar — regenerating..."; fallback_attempts=$((fallback_attempts + 1))
-      local combo_payload="" combo_vf="" combo_af=""
-      if [ "${#RUN_COMBOS[@]}" -gt 0 ]; then combo_payload="${RUN_COMBOS[$((RANDOM % ${#RUN_COMBOS[@]}))]}"; fi
-      if [ -n "$combo_payload" ]; then read -r combo_vf combo_af < <(bash -c "$combo_payload; printf '%s %s' \"\${CUR_VF_EXTRA:-}\" \"\${CUR_AF_EXTRA:-}\""); fi
-      local fallback_vf_extra="$base_vf_extra" fallback_af_extra="$base_af_extra"
-      [ -n "$combo_vf" ] && fallback_vf_extra="${fallback_vf_extra:+$fallback_vf_extra,}$combo_vf"
-      [ -n "$combo_af" ] && fallback_af_extra="${fallback_af_extra:+$fallback_af_extra,}$combo_af"
-      ffmpeg -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC" \
-        -t "$CLIP_DURATION" -c:v libx264 -preset medium -crf 24 \
-        -vf "$(compose_vf_chain "$base_vf" "${fallback_vf_extra:+$fallback_vf_extra,}hflip,vignette=PI/4:0.7,rotate=0.5*(PI/180)")" \
-        -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$(compose_af_chain "$base_af" "$fallback_af_extra")" -movflags +faststart "$OUT"
-      continue
-    elif [ "$fallback_needed" -eq 1 ]; then
-      echo "[Warning] Max fallback attempts reached — accepting copy with warning."
-    fi
-    break
-  done
-  # END REGION AI
 
   RUN_SSIM+=("$metrics_ssim")
   RUN_PSNR+=("$metrics_psnr")

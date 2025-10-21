@@ -1501,24 +1501,52 @@ compute_metrics_for_copy() {
   metrics_log="${CHECK_DIR}/metrics_${compare_name%.*}.log"
 # REGION AI: ffmpeg quality metrics analysis
   metrics_output=$({
-    ffmpeg -hide_banner -loglevel error \
-      -i "$source_file" -i "$compare_file" \
-      -lavfi "[0:v]scale=1080:1920:flags=bicubic,format=yuv420p[ref];[1:v]format=yuv420p[cmp];[ref][cmp]ssim;[ref][cmp]psnr" \
-      -f null - 2>&1 || true
+    ffmpeg -i "$source_file" -i "$compare_file" \
+      -lavfi "[0:v][1:v]ssim;[0:v][1:v]psnr" -f null - 2>&1 || true
   } | tee "$metrics_log")
-  ssim_val=$({ printf '%s\n' "$metrics_output" | grep -o 'All:[0-9.]*' | tail -1 | cut -d: -f2; } || true)
-  psnr_val=$({ printf '%s\n' "$metrics_output" | grep -o 'average:[0-9.]*' | tail -1 | cut -d: -f2; } || true)
-# END REGION AI
-  [ -n "$ssim_val" ] || ssim_val="0.000"
-  [ -n "$psnr_val" ] || psnr_val="0.00"
-  case "$psnr_val" in
-    inf|Inf|INF|nan|NaN|NA)
-      psnr_val="99.99"
-      ;;
-  esac
+  ssim_val=$({ printf '%s\n' "$metrics_output" | grep -o 'SSIM Y:[0-9.]*' | tail -1 | cut -d: -f2; } || true)
+  psnr_val=$({ printf '%s\n' "$metrics_output" | grep -o 'PSNR y:[0-9.]*' | tail -1 | cut -d: -f2; } || true)
+  [ -n "$ssim_val" ] || ssim_val="None"
+  [ -n "$psnr_val" ] || psnr_val="None"
+  echo "[Metrics] SSIM=${ssim_val} | PSNR=${psnr_val} dB"
   if [ -n "${LOG:-}" ]; then
-    echo "ℹ️ SSIM=${ssim_val} | PSNR=${psnr_val} dB" >>"$LOG"
+    echo "[Metrics] SSIM=${ssim_val} | PSNR=${psnr_val} dB" >>"$LOG"
   fi
+  metrics_manifest="${CHECK_DIR}/copy_metrics.json"
+  python3 - "$metrics_manifest" "$compare_name" "$ssim_val" "$psnr_val" <<'PY'
+import json
+import pathlib
+import sys
+
+manifest_path = pathlib.Path(sys.argv[1])
+copy_name, ssim_raw, psnr_raw = sys.argv[2:5]
+
+
+def _parse(value: str):
+    if value in ("", "None"):
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+entry = {"copy": copy_name, "ssim": _parse(ssim_raw), "psnr": _parse(psnr_raw)}
+
+try:
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        data = []
+except FileNotFoundError:
+    data = []
+except Exception:
+    data = []
+
+data = [item for item in data if item.get("copy") != copy_name]
+data.append(entry)
+manifest_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+PY
+# END REGION AI
   phash_val=$(compute_phash_diff "$source_file" "$compare_file")
   printf '%s|%s|%s' "$ssim_val" "$psnr_val" "$phash_val"
 }

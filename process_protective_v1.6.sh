@@ -234,6 +234,12 @@ SRC="$1"
 COUNT="${2:-1}"
 [[ "$COUNT" =~ ^[0-9]+$ ]] || { echo "❌ count должен быть числом"; exit 1; }
 
+SRC_BITRATE="None"
+SRC_BITRATE_RAW=$(ffprobe -v error -select_streams v:0 -show_entries stream=bit_rate -of csv=p=0 "$SRC" 2>/dev/null || true)
+if [ -n "$SRC_BITRATE_RAW" ] && awk -v val="$SRC_BITRATE_RAW" 'BEGIN{val+=0; exit (val>0 ? 0 : 1)}'; then
+  SRC_BITRATE=$(awk -v val="$SRC_BITRATE_RAW" 'BEGIN{printf "%.0f", val/1000}')
+fi
+
 mkdir -p "$OUTPUT_DIR"
 
 cleanup_temp_artifacts() {
@@ -1508,22 +1514,54 @@ compute_metrics_for_copy() {
   psnr_val=$({ printf '%s\n' "$metrics_output" | grep -o 'PSNR y:[0-9.]*' | tail -1 | cut -d: -f2; } || true)
   [ -n "$ssim_val" ] || ssim_val="None"
   [ -n "$psnr_val" ] || psnr_val="None"
+  local bitrate_val="None"
+  local bitrate_probe=""
+  bitrate_probe=$(ffprobe -v error -select_streams v:0 -show_entries stream=bit_rate -of csv=p=0 "$compare_file" 2>/dev/null || true)
+  if [ -n "$bitrate_probe" ] && awk -v val="$bitrate_probe" 'BEGIN{val+=0; exit (val>0 ? 0 : 1)}'; then
+    bitrate_val=$(awk -v val="$bitrate_probe" 'BEGIN{printf "%.0f", val/1000}')
+  fi
+  local delta_bitrate="None"
+  if [ "$bitrate_val" != "None" ] && [ "$SRC_BITRATE" != "None" ]; then
+    delta_bitrate=$(awk -v src="$SRC_BITRATE" -v copy="$bitrate_val" 'BEGIN{ if(src>0 && copy>0) printf "%.1f", (100*(copy-src)/src); else print "None" }')
+    [ -n "$delta_bitrate" ] || delta_bitrate="None"
+  fi
   echo "[Metrics] SSIM=${ssim_val} | PSNR=${psnr_val} dB"
   if [ -n "${LOG:-}" ]; then
     echo "[Metrics] SSIM=${ssim_val} | PSNR=${psnr_val} dB" >>"$LOG"
   fi
+  phash_val=$(compute_phash_diff "$source_file" "$compare_file")
+  local uniq_score="None"
+  if [ "$ssim_val" != "None" ] && [ "$phash_val" != "None" ] && [ "$phash_val" != "NA" ]; then
+    uniq_score=$(awk -v ssim="$ssim_val" -v phash="$phash_val" 'BEGIN{score=(1-ssim)*50 + (phash/64)*50; if(score>100)score=100; if(score<0)score=0; printf "%.1f", score}')
+  fi
+  local delta_log="None"
+  local delta_suffix=""
+  if [ "$delta_bitrate" != "None" ]; then
+    delta_log=$(awk -v d="$delta_bitrate" 'BEGIN{d+=0; printf "%+.1f", d}')
+    delta_suffix="%"
+  fi
+  local bitrate_suffix=""
+  local bitrate_log="None"
+  if [ "$bitrate_val" != "None" ]; then
+    bitrate_log="$bitrate_val"
+    bitrate_suffix=" kb/s"
+  fi
+  echo "[Metrics] Bitrate=${bitrate_log}${bitrate_suffix} | Δ=${delta_log}${delta_suffix} | UniqScore=${uniq_score}"
+  if [ -n "${LOG:-}" ]; then
+    echo "[Metrics] Bitrate=${bitrate_log}${bitrate_suffix} | Δ=${delta_log}${delta_suffix} | UniqScore=${uniq_score}" >>"$LOG"
+  fi
   metrics_manifest="${CHECK_DIR}/copy_metrics.json"
-  python3 - "$metrics_manifest" "$compare_name" "$ssim_val" "$psnr_val" <<'PY'
+  python3 - "$metrics_manifest" "$compare_name" "$ssim_val" "$psnr_val" "$phash_val" "$bitrate_val" "$delta_bitrate" "$uniq_score" <<'PY'
 import json
 import pathlib
 import sys
 
 manifest_path = pathlib.Path(sys.argv[1])
-copy_name, ssim_raw, psnr_raw = sys.argv[2:5]
+copy_name, ssim_raw, psnr_raw, phash_raw, bitrate_raw, delta_raw, uniq_raw = sys.argv[2:9]
 
 
-def _parse(value: str):
-    if value in ("", "None"):
+def _parse_float(value: str):
+    if value in ("", "None", "NA"):
         return None
     try:
         return float(value)
@@ -1531,7 +1569,24 @@ def _parse(value: str):
         return None
 
 
-entry = {"copy": copy_name, "ssim": _parse(ssim_raw), "psnr": _parse(psnr_raw)}
+def _parse_int(value: str):
+    if value in ("", "None", "NA"):
+        return None
+    try:
+        return int(float(value))
+    except ValueError:
+        return None
+
+
+entry = {
+    "copy": copy_name,
+    "ssim": _parse_float(ssim_raw),
+    "psnr": _parse_float(psnr_raw),
+    "phash": _parse_float(phash_raw),
+    "bitrate": _parse_int(bitrate_raw),
+    "delta_bitrate": _parse_float(delta_raw),
+    "UniqScore": _parse_float(uniq_raw),
+}
 
 try:
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1547,8 +1602,7 @@ data.append(entry)
 manifest_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 PY
 # END REGION AI
-  phash_val=$(compute_phash_diff "$source_file" "$compare_file")
-  printf '%s|%s|%s' "$ssim_val" "$psnr_val" "$phash_val"
+  printf '%s|%s|%s|%s|%s|%s' "$ssim_val" "$psnr_val" "$phash_val" "$bitrate_val" "$delta_bitrate" "$uniq_score"
 }
 
 quality_check() {
@@ -1564,13 +1618,17 @@ quality_check() {
     if [ -z "$ssim_val" ] || [ -z "$psnr_val" ] || [ "$psnr_val" = "NA" ]; then
       local metrics
       metrics=$(compute_metrics_for_copy "$SRC" "$copy_path")
-      ssim_val=${metrics%%|*}
-      local rest=${metrics#*|}
-      psnr_val=${rest%%|*}
-      phash_val=${rest#*|}
+      local metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq
+      IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
+      ssim_val="$metrics_ssim"
+      psnr_val="$metrics_psnr"
+      phash_val="$metrics_phash"
       RUN_SSIM[$idx]="$ssim_val"
       RUN_PSNR[$idx]="$psnr_val"
       RUN_PHASH[$idx]="$phash_val"
+      if [ -n "$metrics_bitrate" ] && [ "$metrics_bitrate" != "None" ]; then
+        RUN_BITRATES[$idx]="$metrics_bitrate"
+      fi
     fi
     local dur_delta
     dur_delta=$(awk -v o="$ORIG_DURATION" -v c="${RUN_DURATIONS[$idx]}" 'BEGIN{o+=0;c+=0;diff=o-c;if(diff<0) diff=-diff;printf "%.3f",diff}')
@@ -2342,8 +2400,6 @@ EOF
     echo "⚠️ Не удалось создать превью для $FILE_NAME"
     rm -f "$PREVIEW_PATH" 2>/dev/null || true
   fi
-  BITRATE_RAW=$(ffprobe -v error -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 "$OUT")
-  BITRATE=$(awk -v b="$BITRATE_RAW" 'BEGIN{if(b==""||b=="N/A") printf "0"; else printf "%.0f", b/1000}')
   DURATION_RAW="$MEDIA_DURATION_RAW"
   if [ -z "$DURATION_RAW" ]; then
     DURATION_RAW=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$OUT")
@@ -2352,7 +2408,6 @@ EOF
   SIZE_BYTES=$(file_size_bytes "$OUT")
   SIZE_KB=$(awk -v s="$SIZE_BYTES" 'BEGIN{if(s==""||s==0) printf "0"; else printf "%.0f", s/1024}')
   RUN_FILES+=("$FILE_NAME")
-  RUN_BITRATES+=("$BITRATE")
   RUN_FPS+=("$FPS")
   RUN_DURATIONS+=("$DURATION")
   RUN_SIZES+=("$SIZE_KB")
@@ -2384,11 +2439,12 @@ EOF
 
   local metrics
   metrics=$(compute_metrics_for_copy "$SRC" "$OUT")
-  local rest
-  RUN_SSIM+=("${metrics%%|*}")
-  rest=${metrics#*|}
-  RUN_PSNR+=("${rest%%|*}")
-  RUN_PHASH+=("${rest#*|}")
+  local metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq
+  IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
+  RUN_SSIM+=("$metrics_ssim")
+  RUN_PSNR+=("$metrics_psnr")
+  RUN_PHASH+=("$metrics_phash")
+  RUN_BITRATES+=("$metrics_bitrate")
 
   echo "✅ done: $OUT"
 }

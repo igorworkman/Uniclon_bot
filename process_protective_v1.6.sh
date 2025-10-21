@@ -2466,10 +2466,34 @@ EOF
   fi
 # END REGION AI
 
-  local metrics
-  metrics=$(compute_metrics_for_copy "$SRC" "$OUT")
-  local metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq
-  IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
+  # REGION AI: similarity fallback with reinforced effects
+  local base_vf="$VF" base_af="$AFILTER" base_vf_extra="${CUR_VF_EXTRA:-}" base_af_extra="${CUR_AF_EXTRA:-}"
+  local metrics metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq fallback_attempts=0
+  while :; do
+    metrics=$(compute_metrics_for_copy "$SRC" "$OUT"); IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
+    local fallback_needed=0
+    if awk -v v="$metrics_phash" 'BEGIN{if(v==""||v=="None"||v=="NA") exit 1; exit (v+0<6?0:1)}'; then fallback_needed=1
+    elif awk -v v="$metrics_ssim" 'BEGIN{if(v==""||v=="None"||v=="NA") exit 1; exit (v+0>0.995?0:1)}'; then fallback_needed=1; fi
+    if [ "$fallback_needed" -eq 1 ] && [ "$fallback_attempts" -lt 2 ]; then
+      echo "[Fallback] Copy $copy_index too similar — regenerating..."; fallback_attempts=$((fallback_attempts + 1))
+      local combo_payload="" combo_vf="" combo_af=""
+      if [ "${#RUN_COMBOS[@]}" -gt 0 ]; then combo_payload="${RUN_COMBOS[$((RANDOM % ${#RUN_COMBOS[@]}))]}"; fi
+      if [ -n "$combo_payload" ]; then read -r combo_vf combo_af < <(bash -c "$combo_payload; printf '%s %s' \"\${CUR_VF_EXTRA:-}\" \"\${CUR_AF_EXTRA:-}\""); fi
+      local fallback_vf_extra="$base_vf_extra" fallback_af_extra="$base_af_extra"
+      [ -n "$combo_vf" ] && fallback_vf_extra="${fallback_vf_extra:+$fallback_vf_extra,}$combo_vf"
+      [ -n "$combo_af" ] && fallback_af_extra="${fallback_af_extra:+$fallback_af_extra,}$combo_af"
+      ffmpeg -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC" \
+        -t "$CLIP_DURATION" -c:v libx264 -preset medium -crf 24 \
+        -vf "$(compose_vf_chain "$base_vf" "${fallback_vf_extra:+$fallback_vf_extra,}hflip,vignette=PI/4:0.7,rotate=0.5*(PI/180)")" \
+        -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$(compose_af_chain "$base_af" "$fallback_af_extra")" -movflags +faststart "$OUT"
+      continue
+    elif [ "$fallback_needed" -eq 1 ]; then
+      echo "[Warning] Max fallback attempts reached — accepting copy with warning."
+    fi
+    break
+  done
+  # END REGION AI
+
   RUN_SSIM+=("$metrics_ssim")
   RUN_PSNR+=("$metrics_psnr")
   RUN_PHASH+=("$metrics_phash")
@@ -2590,13 +2614,35 @@ if [ "$REGEN_OCCURRED" -eq 1 ]; then
   regen_flag=true
 fi
 
+# REGION AI: metrics aggregation init
+RESULTS=(); SSIM_SUM=0; PHASH_SUM=0; UNIQ_SUM=0; ACCEPTED=0; REJECTED=0
+# END REGION AI
+
 for idx in "${!RUN_FILES[@]}"; do
 
   echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]},${RUN_QT_MAKES[$idx]},${RUN_QT_MODELS[$idx]},${RUN_QT_SOFTWARES[$idx]},${RUN_SSIM[$idx]},${RUN_PHASH[$idx]},${RUN_QPASS[$idx]},${RUN_QUALITIES[$idx]},${RUN_CREATIVE_MIRROR[$idx]},${RUN_CREATIVE_INTRO[$idx]},${RUN_CREATIVE_LUT[$idx]},${RUN_PREVIEWS[$idx]}" >> "$MANIFEST_PATH"
 
   echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]},${RUN_QT_MAKES[$idx]},${RUN_QT_MODELS[$idx]},${RUN_SSIM[$idx]},${RUN_PSNR[$idx]},${RUN_PHASH[$idx]},${RUN_QPASS[$idx]},${RUN_QUALITIES[$idx]}" >> "$MANIFEST_PATH"
 
+  # REGION AI: accumulate metrics for report
+  ssim_num=$(awk -v v="${RUN_SSIM[$idx]}" 'BEGIN{if(v==""||v=="None"||v=="NA"){print "0"}else{printf "%.6f",v+0}}'); phash_num=$(awk -v v="${RUN_PHASH[$idx]}" 'BEGIN{if(v==""||v=="None"||v=="NA"){print "0"}else{printf "%.2f",v+0}}'); bitrate_num=$(awk -v v="${RUN_BITRATES[$idx]}" 'BEGIN{if(v==""||v=="None"||v=="NA"){print "0"}else{printf "%.0f",v+0}}'); uniq_num=$(awk -v s="$ssim_num" -v p="$phash_num" 'BEGIN{s+=0;p+=0;score=(1-s)*50 + (p/64)*50;if(score>100)score=100;if(score<0)score=0;printf "%.1f",score}')
+  SSIM_SUM=$(awk -v sum="$SSIM_SUM" -v val="$ssim_num" 'BEGIN{printf "%.6f", sum+val}'); PHASH_SUM=$(awk -v sum="$PHASH_SUM" -v val="$phash_num" 'BEGIN{printf "%.6f", sum+val}'); UNIQ_SUM=$(awk -v sum="$UNIQ_SUM" -v val="$uniq_num" 'BEGIN{printf "%.6f", sum+val}')
+  copy_name_json=$(printf '%s' "${RUN_FILES[$idx]}" | sed 's/"/\\"/g'); RESULTS+=("{\"copy\":\"$copy_name_json\",\"ssim\":$ssim_num,\"phash\":$phash_num,\"bitrate\":$bitrate_num,\"uniqscore\":$uniq_num}")
+  if awk -v p="$phash_num" 'BEGIN{exit (p<6?0:1)}'; then REJECTED=$((REJECTED + 1)); elif awk -v s="$ssim_num" 'BEGIN{exit (s>0.995?0:1)}'; then REJECTED=$((REJECTED + 1)); else ACCEPTED=$((ACCEPTED + 1)); fi
+  # END REGION AI
+
 done
+
+# REGION AI: finalize metrics report
+total_results=${#RESULTS[@]}
+if [ "$total_results" -gt 0 ]; then
+  AVG_SSIM=$(awk -v sum="$SSIM_SUM" -v cnt="$total_results" 'BEGIN{cnt+=0;if(cnt<=0)cnt=1;printf "%.3f",sum/cnt}'); AVG_PHASH=$(awk -v sum="$PHASH_SUM" -v cnt="$total_results" 'BEGIN{cnt+=0;if(cnt<=0)cnt=1;printf "%.1f",sum/cnt}'); AVG_UNIQ=$(awk -v sum="$UNIQ_SUM" -v cnt="$total_results" 'BEGIN{cnt+=0;if(cnt<=0)cnt=1;printf "%.1f",sum/cnt}')
+  REPORT_PATH="${OUTPUT_DIR}/report.json"; copies_json=$(IFS=,; echo "${RESULTS[*]}")
+  { echo "{"; echo "  \"average\": {\"SSIM\": $AVG_SSIM, \"pHash\": $AVG_PHASH, \"UniqScore\": $AVG_UNIQ},"; echo "  \"accepted\": $ACCEPTED,"; echo "  \"rejected\": $REJECTED,"; echo "  \"copies\": [$copies_json]"; echo "}"; } > "$REPORT_PATH"
+  echo "[Report] Saved to $REPORT_PATH"
+  echo "[Summary] Avg SSIM=${AVG_SSIM} | Avg pHash=${AVG_PHASH} | Avg UniqScore=${AVG_UNIQ} | accepted=${ACCEPTED} | rejected=${REJECTED}"
+fi
+# END REGION AI
 
 report_template_statistics
 

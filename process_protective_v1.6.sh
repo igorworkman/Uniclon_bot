@@ -2438,7 +2438,7 @@ EOF
 # END REGION AI
 
   local metrics
-  metrics=$(compute_metrics_for_copy "$SRC" "$OUT")
+  metrics=$(compute_metrics_for_copy "$SRC" "$OUT" | tail -n 1)
   local metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq
   IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
   RUN_SSIM+=("$metrics_ssim")

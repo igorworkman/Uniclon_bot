@@ -970,6 +970,17 @@ pick_crop_offsets() {
   if [ "$CROP_H" -gt 0 ]; then CROP_Y=$(rand_int 0 "$CROP_H"); fi
 }
 
+# REGION AI: ffmpeg audio filter guards
+log_warn() {
+  log "⚠️" "$@"
+}
+
+function check_ffmpeg_filter_support() {
+  local filter="$1"
+  ffmpeg -hide_banner -filters 2>/dev/null | grep -q "$filter"
+}
+# END REGION AI
+
 pick_audio_chain() {
   local roll=$(rand_int 1 100)
   AUDIO_PROFILE="resample"
@@ -1004,13 +1015,16 @@ BEGIN {
 # REGION AI: safe audio uniqueness chain randomization
   local safe_volume=$(rand_float 0.980 1.000 4)
   safe_volume=$(awk -v v="$safe_volume" 'BEGIN{printf "%.4f", v+0}')
-  local safe_freq=$(rand_int 1200 3000)
-  local safe_gain=$(rand_float -0.50 0.50 3)
-  safe_gain=$(awk -v g="$safe_gain" 'BEGIN{printf "%.3f", g+0}')
   local safe_rate=$(rand_float 1.0002 1.0008 7)
   local safe_tempo
   safe_tempo=$(awk -v base="$tempo_target" -v rate="$safe_rate" 'BEGIN{base+=0;rate+=0;if(rate<=0)rate=1;printf "%.6f", base/rate}')
-  SAFE_AF_CHAIN=$(printf 'aresample=%s:resampler=soxr:precision=28:dither_method=triangular,volume=%s,afftdn=nf=-30,anequalizer=f=%s:t=q:w=1:g=%s,asetrate=%s*%s,aresample=%s,atempo=%s' "$AUDIO_SR" "$safe_volume" "$safe_freq" "$safe_gain" "$AUDIO_SR" "$safe_rate" "$AUDIO_SR" "$safe_tempo")
+  if check_ffmpeg_filter_support "anequalizer"; then
+    AUDIO_FILTER="anequalizer=f=1831:t=q:w=1:g=-0.408"
+  else
+    AUDIO_FILTER="aecho=0.8:0.9:1000:0.3"
+    log_warn "[Audio] 'anequalizer' not supported — fallback to 'aecho'"
+  fi
+  SAFE_AF_CHAIN=$(printf 'aresample=%s:resampler=soxr:precision=28:dither_method=triangular,volume=%s,afftdn=nf=-30,asetrate=%s*%s,aresample=%s,atempo=%s' "$AUDIO_SR" "$safe_volume" "$AUDIO_SR" "$safe_rate" "$AUDIO_SR" "$safe_tempo")
 # END REGION AI
   AFILTER_CORE=$(IFS=,; echo "${filters[*]}")
 }
@@ -2286,8 +2300,18 @@ EOF
 
   # REGION AI: primary ffmpeg command with stable stream mapping
   local audio_input_index=0 audio_stream_present=0
+  AUDIO_CODEC="none"
   if ffprobe -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 "$SRC" >/dev/null 2>&1; then
     audio_stream_present=1
+    AUDIO_CODEC=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$SRC" 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")
+    AUDIO_CODEC=${AUDIO_CODEC:-none}
+  fi
+  AUDIO_CHAIN="$af_payload"
+  if [[ "${AUDIO_CODEC:-none}" == "apac" || "${AUDIO_CODEC:-none}" == "none" ]]; then
+    AUDIO_CHAIN="anullsrc=r=44100:cl=stereo"
+  fi
+  if [ -z "${AUDIO_FILTER:-}" ]; then
+    AUDIO_FILTER="anull"
   fi
   FFMPEG_CMD=(
     ffmpeg -y -hide_banner -loglevel warning -ignore_unknown
@@ -2312,7 +2336,7 @@ EOF
   FFMPEG_CMD+=(-t "$CLIP_DURATION" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$CODEC_LEVEL" -crf "$CRF"
     -r "$FPS" -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k"
     -vf "$vf_payload"
-    -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$af_payload"
+    -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$AUDIO_CHAIN,$AUDIO_FILTER"
     -movflags +faststart
     -map_metadata -1
     -metadata major_brand="$MAJOR_BRAND_TAG"

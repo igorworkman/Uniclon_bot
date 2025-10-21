@@ -2308,7 +2308,7 @@ EOF
   fi
   AUDIO_CHAIN="$af_payload"
   if [[ "${AUDIO_CODEC:-none}" == "apac" || "${AUDIO_CODEC:-none}" == "none" ]]; then
-    AUDIO_CHAIN="anullsrc=r=44100:cl=stereo"
+    AUDIO_CHAIN=$(compose_af_chain "$AUDIO_CHAIN" "anull")
   fi
   if [ -z "${AUDIO_FILTER:-}" ]; then
     AUDIO_FILTER="anull"

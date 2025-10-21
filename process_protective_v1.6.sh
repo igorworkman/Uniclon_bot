@@ -1502,7 +1502,7 @@ compute_metrics_for_copy() {
 # REGION AI: ffmpeg quality metrics analysis
   metrics_output=$({
     ffmpeg -i "$source_file" -i "$compare_file" \
-      -lavfi "[0:v]format=yuv420p[ref_fmt];[1:v]format=yuv420p[cmp_fmt];[cmp_fmt][ref_fmt]scale2ref=flags=bicubic[cmp_scaled][ref_scaled];[ref_scaled][cmp_scaled]ssim;[ref_scaled][cmp_scaled]psnr" \
+      -lavfi "[0:v]format=yuv420p[ref_fmt];[1:v]format=yuv420p[cmp_fmt];[cmp_fmt][ref_fmt]scale2ref=flags=bicubic[cmp_scaled][ref_scaled];[ref_scaled]split[ref_ssim][ref_psnr];[cmp_scaled]split[cmp_ssim][cmp_psnr];[ref_ssim][cmp_ssim]ssim;[ref_psnr][cmp_psnr]psnr" \
       -f null - 2>&1 || true
   } | tee "$metrics_log")
   ssim_val=$({ printf '%s\n' "$metrics_output" | grep -o 'SSIM Y:[0-9.]*' | tail -1 | cut -d: -f2; } || true)

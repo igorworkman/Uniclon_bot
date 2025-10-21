@@ -1001,7 +1001,17 @@ BEGIN {
   tempo_target=$(awk -v t="${tempo_target:-}" 'BEGIN{
     if (t == "" || t+0 <= 0) { printf "%.6g", 1.0 } else { printf "%.6g", t+0 }
   }')
-  filters+=("atempo=${tempo_target}")
+# REGION AI: safe audio uniqueness chain randomization
+  local safe_volume=$(rand_float 0.980 1.000 4)
+  safe_volume=$(awk -v v="$safe_volume" 'BEGIN{printf "%.4f", v+0}')
+  local safe_freq=$(rand_int 1200 3000)
+  local safe_gain=$(rand_float -0.50 0.50 3)
+  safe_gain=$(awk -v g="$safe_gain" 'BEGIN{printf "%.3f", g+0}')
+  local safe_rate=$(rand_float 1.0002 1.0008 7)
+  local safe_tempo
+  safe_tempo=$(awk -v base="$tempo_target" -v rate="$safe_rate" 'BEGIN{base+=0;rate+=0;if(rate<=0)rate=1;printf "%.6f", base/rate}')
+  SAFE_AF_CHAIN=$(printf 'aresample=%s:resampler=soxr:precision=28:dither_method=triangular,volume=%s,afftdn=nf=-30,anequalizer=f=%s:t=q:w=1:g=%s,asetrate=%s*%s,aresample=%s,atempo=%s' "$AUDIO_SR" "$safe_volume" "$safe_freq" "$safe_gain" "$AUDIO_SR" "$safe_rate" "$AUDIO_SR" "$safe_tempo")
+# END REGION AI
   AFILTER_CORE=$(IFS=,; echo "${filters[*]}")
 }
 
@@ -2268,6 +2278,11 @@ EOF
   vf_payload=$(ensure_vf_format "$VF")
   local af_payload
   af_payload=$(compose_af_chain "$AFILTER" "$CUR_AF_EXTRA")
+# REGION AI: inject safe uniqueness chain at tail
+  if [ -n "${SAFE_AF_CHAIN:-}" ]; then
+    af_payload=$(compose_af_chain "$SAFE_AF_CHAIN" "$af_payload")
+  fi
+# END REGION AI
 
   # REGION AI: primary ffmpeg command with stable stream mapping
   local audio_input_index=0 audio_stream_present=0

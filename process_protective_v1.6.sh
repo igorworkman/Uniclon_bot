@@ -1502,15 +1502,16 @@ compute_metrics_for_copy() {
 # REGION AI: ffmpeg quality metrics analysis
   metrics_output=$({
     ffmpeg -i "$source_file" -i "$compare_file" \
-      -lavfi "[0:v][1:v]ssim;[0:v][1:v]psnr" -f null - 2>&1 || true
+      -lavfi "[0:v]format=yuv420p[ref_fmt];[1:v]format=yuv420p[cmp_fmt];[cmp_fmt][ref_fmt]scale2ref=flags=bicubic[cmp_scaled][ref_scaled];[ref_scaled][cmp_scaled]ssim;[ref_scaled][cmp_scaled]psnr" \
+      -f null - 2>&1 || true
   } | tee "$metrics_log")
   ssim_val=$({ printf '%s\n' "$metrics_output" | grep -o 'SSIM Y:[0-9.]*' | tail -1 | cut -d: -f2; } || true)
   psnr_val=$({ printf '%s\n' "$metrics_output" | grep -o 'PSNR y:[0-9.]*' | tail -1 | cut -d: -f2; } || true)
   [ -n "$ssim_val" ] || ssim_val="None"
   [ -n "$psnr_val" ] || psnr_val="None"
-  echo "[Metrics] SSIM=${ssim_val} | PSNR=${psnr_val} dB"
+  printf '[Metrics] SSIM=%s | PSNR=%s dB\n' "$ssim_val" "$psnr_val" >&2
   if [ -n "${LOG:-}" ]; then
-    echo "[Metrics] SSIM=${ssim_val} | PSNR=${psnr_val} dB" >>"$LOG"
+    printf '[Metrics] SSIM=%s | PSNR=%s dB\n' "$ssim_val" "$psnr_val" >>"$LOG"
   fi
   metrics_manifest="${CHECK_DIR}/copy_metrics.json"
   python3 - "$metrics_manifest" "$compare_name" "$ssim_val" "$psnr_val" <<'PY'

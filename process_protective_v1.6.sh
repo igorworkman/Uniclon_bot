@@ -1552,8 +1552,24 @@ compute_metrics_for_copy() {
     ffmpeg -hide_banner -i "$source_file" -i "$compare_file" \
       -lavfi "[0:v][1:v]ssim;[0:v][1:v]psnr" -f null - 2>&1 || true
   } | tee "$metrics_log" >/dev/null
-  ssim_val=$({ grep -o 'SSIM=[0-9\.]*' "$metrics_log" || true; } | tail -1 | cut -d= -f2)
-  psnr_val=$({ grep -o 'PSNR_mean:[0-9\.]*' "$metrics_log" || true; } | tail -1 | cut -d: -f2)
+  ssim_val=$(awk '
+    {
+      if (match($0, /All:([0-9.]+)/, m)) last_all = m[1];
+      else if (match($0, /SSIM[[:space:]]*[=:][[:space:]]*([0-9.]+)/, m)) last_all = m[1];
+    }
+    END {
+      if (length(last_all)) print last_all;
+    }
+  ' "$metrics_log")
+  psnr_val=$(awk '
+    {
+      if (match($0, /average:([0-9.]+)/, m)) last_avg = m[1];
+      else if (match($0, /PSNR_mean[[:space:]]*[=:][[:space:]]*([0-9.]+)/, m)) last_avg = m[1];
+    }
+    END {
+      if (length(last_avg)) print last_avg;
+    }
+  ' "$metrics_log")
   ssim_val=${ssim_val:-0.995}
   psnr_val=${psnr_val:-35.0}
   local bitrate_val="None"

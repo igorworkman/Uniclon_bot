@@ -1528,10 +1528,10 @@ compute_metrics_for_copy() {
     ffmpeg -i "$source_file" -i "$compare_file" \
       -lavfi "[0:v][1:v]ssim;[0:v][1:v]psnr" -f null - 2>&1 || true
   } | tee "$metrics_log")
-  ssim_val=$({ printf '%s\n' "$metrics_output" | grep -o 'SSIM Y:[0-9.]*' | tail -1 | cut -d: -f2; } || true)
-  psnr_val=$({ printf '%s\n' "$metrics_output" | grep -o 'PSNR y:[0-9.]*' | tail -1 | cut -d: -f2; } || true)
-  [ -n "$ssim_val" ] || ssim_val="None"
-  [ -n "$psnr_val" ] || psnr_val="None"
+  ssim_val=$({ printf '%s\n' "$metrics_output" | grep -Eo "All:[[:space:]]*[0-9]+\.[0-9]+" | tail -1 | awk '{print $2}'; } || true)
+  psnr_val=$({ printf '%s\n' "$metrics_output" | grep -Eo "average:[[:space:]]*[0-9]+\.[0-9]+" | tail -1 | awk '{print $2}'; } || true)
+  [ -n "$ssim_val" ] || ssim_val="N/A"
+  [ -n "$psnr_val" ] || psnr_val="N/A"
   local bitrate_val="None"
   local bitrate_probe=""
   bitrate_probe=$(ffprobe -v error -select_streams v:0 -show_entries stream=bit_rate -of csv=p=0 "$compare_file" 2>/dev/null || true)
@@ -1543,14 +1543,26 @@ compute_metrics_for_copy() {
     delta_bitrate=$(awk -v src="$SRC_BITRATE" -v copy="$bitrate_val" 'BEGIN{ if(src>0 && copy>0) printf "%.1f", (100*(copy-src)/src); else print "None" }')
     [ -n "$delta_bitrate" ] || delta_bitrate="None"
   fi
-  echo "[Metrics] SSIM=${ssim_val} | PSNR=${psnr_val} dB"
-  if [ -n "${LOG:-}" ]; then
-    echo "[Metrics] SSIM=${ssim_val} | PSNR=${psnr_val} dB" >>"$LOG"
-  fi
   phash_val=$(compute_phash_diff "$source_file" "$compare_file")
-  local uniq_score="None"
-  if [ "$ssim_val" != "None" ] && [ "$phash_val" != "None" ] && [ "$phash_val" != "NA" ]; then
-    uniq_score=$(awk -v ssim="$ssim_val" -v phash="$phash_val" 'BEGIN{score=(1-ssim)*50 + (phash/64)*50; if(score>100)score=100; if(score<0)score=0; printf "%.1f", score}')
+  [ "$phash_val" != "NA" ] || phash_val="N/A"
+  local uniq_score="N/A"
+  local ssim_missing=0
+  case "$ssim_val" in
+    ""|"None"|"NA"|"N/A") ssim_missing=1 ;;
+  esac
+  case "$phash_val" in
+    ""|"None"|"NA"|"N/A") ;;
+    *)
+      if [ "$ssim_missing" -eq 1 ]; then
+        uniq_score=$(awk -v p="$phash_val" 'BEGIN{p+=0;score=50+(p*2);if(score>100)score=100;if(score<0)score=0;printf "%.1f",score}')
+      else
+        uniq_score=$(awk -v s="$ssim_val" -v p="$phash_val" 'BEGIN{s+=0;p+=0;score=100-(s*50)+(p*1.5);if(score>100)score=100;if(score<0)score=0;printf "%.1f",score}')
+      fi
+      ;;
+  esac
+  echo "[Metrics] SSIM=${ssim_val} PSNR=${psnr_val} pHash=${phash_val} → UniqScore=${uniq_score}"
+  if [ -n "${LOG:-}" ]; then
+    echo "[Metrics] SSIM=${ssim_val} PSNR=${psnr_val} pHash=${phash_val} → UniqScore=${uniq_score}" >>"$LOG"
   fi
   local delta_log="None"
   local delta_suffix=""
@@ -1579,7 +1591,7 @@ copy_name, ssim_raw, psnr_raw, phash_raw, bitrate_raw, delta_raw, uniq_raw = sys
 
 
 def _parse_float(value: str):
-    if value in ("", "None", "NA"):
+    if value in ("", "None", "NA", "N/A"):
         return None
     try:
         return float(value)
@@ -1588,7 +1600,7 @@ def _parse_float(value: str):
 
 
 def _parse_int(value: str):
-    if value in ("", "None", "NA"):
+    if value in ("", "None", "NA", "N/A"):
         return None
     try:
         return int(float(value))
@@ -1633,7 +1645,7 @@ quality_check() {
     local ssim_val="${RUN_SSIM[$idx]:-}"
     local psnr_val="${RUN_PSNR[$idx]:-}"
     local phash_val="${RUN_PHASH[$idx]:-NA}"
-    if [ -z "$ssim_val" ] || [ -z "$psnr_val" ] || [ "$psnr_val" = "NA" ]; then
+    if [ -z "$ssim_val" ] || [ "$ssim_val" = "NA" ] || [ "$ssim_val" = "N/A" ] || [ -z "$psnr_val" ] || [ "$psnr_val" = "NA" ] || [ "$psnr_val" = "N/A" ]; then
       local metrics
       metrics=$(compute_metrics_for_copy "$SRC" "$copy_path")
       local metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq
@@ -1753,7 +1765,7 @@ low_uniqueness_fallback() {
       flag=1
       ssim_bad=1
     fi
-    if [ "$phash_val" != "NA" ] && [ -n "$phash_val" ]; then
+    if [ "$phash_val" != "NA" ] && [ "$phash_val" != "N/A" ] && [ -n "$phash_val" ]; then
       if awk -v p="$phash_val" 'BEGIN{p+=0; exit (p<5?0:1)}'; then
         low_phash=$((low_phash + 1))
         flag=1
@@ -1855,7 +1867,7 @@ report_template_statistics() {
 }
 
 # REGION AI: uniqueness combo orchestration
-generate_run_combos(){ RUN_COMBOS=("CUR_COMBO_LABEL='fps24_eq_boost' CFPS=30 CNOISE=1 CMIRROR=hflip CAUDIO=asetrate CBR=1.12 CSHIFT=0.07 CSOFT=VN CLEVEL=4.0 CUR_VF_EXTRA=\"fps=24,eq=brightness=0.03:contrast=1.02\" CUR_AF_EXTRA=\"acompressor=threshold=-16dB:ratio=2.4,aresample=44100\"" "CUR_COMBO_LABEL='vflip_curves' CFPS=60 CNOISE=0 CMIRROR=vflip CAUDIO=resample CBR=0.88 CSHIFT=-0.05 CSOFT=CapCut CLEVEL=4.2 CUR_VF_EXTRA=\"vflip,curves=preset=strong_contrast\" CUR_AF_EXTRA=\"apulsator=mode=sine:freq=0.8,atempo=0.99\"" "CUR_COMBO_LABEL='crop_rotate' CFPS=30 CNOISE=0 CMIRROR=none CAUDIO=jitter CBR=1.10 CSHIFT=0.09 CSOFT=LumaFusion CLEVEL=4.0 CUR_VF_EXTRA=\"crop=in_w-20:in_h-20,rotate=0.005*(PI/180)\" CUR_AF_EXTRA=\"atempo=1.02,treble=g=1.5\"" "CUR_COMBO_LABEL='hflip_noise' CFPS=24 CNOISE=1 CMIRROR=hflip CAUDIO=asetrate CBR=0.90 CSHIFT=-0.08 CSOFT=CapCut CLEVEL=4.0 CUR_VF_EXTRA=\"hflip,noise=alls=5:allf=t+u\" CUR_AF_EXTRA=\"acompressor=threshold=-20dB:ratio=3.0,lowpass=f=12000\"" "CUR_COMBO_LABEL='colorbalance_pop' CFPS=25 CNOISE=0 CMIRROR=hflip CAUDIO=resample CBR=1.15 CSHIFT=0.06 CSOFT=VN CLEVEL=4.2 CUR_VF_EXTRA=\"colorbalance=bs=0.05:rs=-0.05,eq=saturation=1.1\" CUR_AF_EXTRA=\"equalizer=f=1200:t=q:w=1.0:g=-3\"" "CUR_COMBO_LABEL='vignette_gamma' CFPS=30 CNOISE=1 CMIRROR=none CAUDIO=jitter CBR=0.85 CSHIFT=-0.10 CSOFT=LumaFusion CLEVEL=4.0 CUR_VF_EXTRA=\"vignette=PI/5:0.5,eq=gamma=1.03\" CUR_AF_EXTRA=\"crystalizer=i=2\"" "CUR_COMBO_LABEL='rotate_pad' CFPS=60 CNOISE=1 CMIRROR=none CAUDIO=asetrate CBR=1.13 CSHIFT=0.12 CSOFT=CapCut CLEVEL=4.2 CUR_VF_EXTRA=\"rotate=-0.3*(PI/180):fillcolor=black,pad=ceil(iw/2)*2:ceil(ih/2)*2\" CUR_AF_EXTRA=\"highpass=f=200,atempo=0.98\"" "CUR_COMBO_LABEL='unsharp_speed' CFPS=30 CNOISE=0 CMIRROR=none CAUDIO=resample CBR=0.87 CSHIFT=-0.07 CSOFT=VN CLEVEL=4.0 CUR_VF_EXTRA=\"unsharp=3:3:1.5,setpts=PTS*0.98\" CUR_AF_EXTRA=\"chorus=0.6:0.9:55:0.4:0.25:2\"" "CUR_COMBO_LABEL='curves_light' CFPS=30 CNOISE=1 CMIRROR=vflip CAUDIO=jitter CBR=1.05 CSHIFT=0.04 CSOFT=VN CLEVEL=4.0 CUR_VF_EXTRA=\"curves=preset=lighter\" CUR_AF_EXTRA=\"superequalizer=1b=0.8:2b=0.4:3b=0.1:4b=-0.2:5b=-0.4\"" "CUR_COMBO_LABEL='hue_noise' CFPS=24 CNOISE=0 CMIRROR=none CAUDIO=asetrate CBR=0.95 CSHIFT=-0.03 CSOFT=CapCut CLEVEL=4.0 CUR_VF_EXTRA=\"hue=s=0.95,noise=alls=3:allf=t\" CUR_AF_EXTRA=\"aecho=0.7:0.4:30:0.6\""); RUN_COMBO_POS=0; }
+generate_run_combos(){ RUN_COMBOS=("CUR_COMBO_LABEL='fps24_eq_boost' CFPS=30 CNOISE=1 CMIRROR=hflip CAUDIO=asetrate CBR=1.12 CSHIFT=0.07 CSOFT=VN CLEVEL=4.0 CUR_VF_EXTRA=\"fps=24,eq=brightness=0.03:contrast=1.02\" CUR_AF_EXTRA=\"acompressor=threshold=-16dB:ratio=2.4,aresample=44100\"" "CUR_COMBO_LABEL='vflip_curves' CFPS=60 CNOISE=0 CMIRROR=vflip CAUDIO=resample CBR=0.88 CSHIFT=-0.05 CSOFT=CapCut CLEVEL=4.2 CUR_VF_EXTRA=\"vflip,curves=preset=strong_contrast\" CUR_AF_EXTRA=\"apulsator=mode=sine:freq=0.8,atempo=0.99\"" "CUR_COMBO_LABEL='crop_rotate' CFPS=30 CNOISE=0 CMIRROR=none CAUDIO=jitter CBR=1.10 CSHIFT=0.09 CSOFT=LumaFusion CLEVEL=4.0 CUR_VF_EXTRA=\"crop=in_w-20:in_h-20,rotate=0.5*(PI/180):fillcolor=black\" CUR_AF_EXTRA=\"atempo=1.02,treble=g=1.5\"" "CUR_COMBO_LABEL='hflip_noise' CFPS=24 CNOISE=1 CMIRROR=hflip CAUDIO=asetrate CBR=0.90 CSHIFT=-0.08 CSOFT=CapCut CLEVEL=4.0 CUR_VF_EXTRA=\"hflip,noise=alls=5:allf=t+u\" CUR_AF_EXTRA=\"acompressor=threshold=-20dB:ratio=3.0,lowpass=f=12000\"" "CUR_COMBO_LABEL='colorbalance_pop' CFPS=25 CNOISE=0 CMIRROR=hflip CAUDIO=resample CBR=1.15 CSHIFT=0.06 CSOFT=VN CLEVEL=4.2 CUR_VF_EXTRA=\"colorbalance=bs=0.05:rs=-0.05,eq=saturation=1.1\" CUR_AF_EXTRA=\"equalizer=f=1200:t=q:w=1.0:g=-3\"" "CUR_COMBO_LABEL='vignette_gamma' CFPS=30 CNOISE=1 CMIRROR=none CAUDIO=jitter CBR=0.85 CSHIFT=-0.10 CSOFT=LumaFusion CLEVEL=4.0 CUR_VF_EXTRA=\"vignette=PI/5:0.5,eq=gamma=1.03\" CUR_AF_EXTRA=\"crystalizer=i=2\"" "CUR_COMBO_LABEL='rotate_pad' CFPS=60 CNOISE=1 CMIRROR=none CAUDIO=asetrate CBR=1.13 CSHIFT=0.12 CSOFT=CapCut CLEVEL=4.2 CUR_VF_EXTRA=\"rotate=-0.3*(PI/180):fillcolor=black\" CUR_AF_EXTRA=\"highpass=f=200,atempo=0.98\"" "CUR_COMBO_LABEL='unsharp_speed' CFPS=30 CNOISE=0 CMIRROR=none CAUDIO=resample CBR=0.87 CSHIFT=-0.07 CSOFT=VN CLEVEL=4.0 CUR_VF_EXTRA=\"unsharp=3:3:1.5,setpts=PTS*0.98\" CUR_AF_EXTRA=\"chorus=0.6:0.9:55:0.4:0.25:2\"" "CUR_COMBO_LABEL='curves_light' CFPS=30 CNOISE=1 CMIRROR=vflip CAUDIO=jitter CBR=1.05 CSHIFT=0.04 CSOFT=VN CLEVEL=4.0 CUR_VF_EXTRA=\"curves=preset=lighter\" CUR_AF_EXTRA=\"superequalizer=1b=0.8:2b=0.4:3b=0.1:4b=-0.2:5b=-0.4\"" "CUR_COMBO_LABEL='hue_noise' CFPS=24 CNOISE=0 CMIRROR=none CAUDIO=asetrate CBR=0.95 CSHIFT=-0.03 CSOFT=CapCut CLEVEL=4.0 CUR_VF_EXTRA=\"hue=s=0.95,noise=alls=3:allf=t\" CUR_AF_EXTRA=\"aecho=0.7:0.4:30:0.6\""); RUN_COMBO_POS=0; }
 generate_dynamic_combo(){ local ident=$(rand_int 120 999) vf_options=("tblend=average" "edgedetect=mode=colormix:high=0.10:low=0.04" "smartblur=ls=2.5" "eq=brightness=0.02:saturation=1.08" "hue=h=20*PI/180") af_options=("vibrato=f=8:d=0.6" "aphaser=0.7:0.9:0.3:0.7:0.5:0.5" "compand=attacks=0:decays=0.8:points=-45/-45|-15/-3|0/-0.5" "flanger=delay=8:depth=2:regen=0.4:speed=0.3" "chorus=0.7:0.8:40:0.5:0.3:2") mirrors=(none hflip vflip) audios=(asetrate resample jitter) softwares=(CapCut VN LumaFusion) fps_pool=(24 25 30 60) br_pool=(0.85 0.92 1.05 1.12) shift_pool=(-0.08 -0.04 0.05 0.09) level_pool=(4.0 4.2); local vf_idx=$(rand_int 0 $(( ${#vf_options[@]} - 1 ))) af_idx=$(rand_int 0 $(( ${#af_options[@]} - 1 ))) mirror_idx=$(rand_int 0 $(( ${#mirrors[@]} - 1 ))) audio_idx=$(rand_int 0 $(( ${#audios[@]} - 1 ))) soft_idx=$(rand_int 0 $(( ${#softwares[@]} - 1 ))) fps_idx=$(rand_int 0 $(( ${#fps_pool[@]} - 1 ))) br_idx=$(rand_int 0 $(( ${#br_pool[@]} - 1 ))) shift_idx=$(rand_int 0 $(( ${#shift_pool[@]} - 1 ))) level_idx=$(rand_int 0 $(( ${#level_pool[@]} - 1 ))) noise=$(rand_int 0 1); printf "CUR_COMBO_LABEL='auto_%s' CFPS=%s CNOISE=%s CMIRROR=%s CAUDIO=%s CBR=%s CSHIFT=%s CSOFT=%s CLEVEL=%s CUR_VF_EXTRA=\"%s\" CUR_AF_EXTRA=\"%s\"" "$ident" "${fps_pool[$fps_idx]}" "$noise" "${mirrors[$mirror_idx]}" "${audios[$audio_idx]}" "${br_pool[$br_idx]}" "${shift_pool[$shift_idx]}" "${softwares[$soft_idx]}" "${level_pool[$level_idx]}" "${vf_options[$vf_idx]}" "${af_options[$af_idx]}"; }
 compose_vf_chain(){ local base="$1" extra="$2"; [ -z "$extra" ] && { printf '%s' "$base"; return; }; [ -z "$base" ] && { printf '%s' "$extra"; return; }; printf '%s,%s' "$base" "$extra"; }
 # REGION AI: ensure video filters default to yuv420p
@@ -1877,7 +1889,7 @@ compose_af_chain(){
   printf '%s,%s' "$extra" "$base"
 # END REGION AI
 }
-auto_expand_run_combos(){ local total=${#RUN_PHASH[@]}; [ "$total" -lt 3 ] && return; [ "${#RUN_COMBOS[@]}" -ge 16 ] && return; local sum=0 count=0 idx; for idx in "${RUN_PHASH[@]}"; do [ -z "$idx" ] || [ "$idx" = "NA" ] || [ "$idx" = "None" ] && continue; sum=$(awk -v acc="$sum" -v val="$idx" 'BEGIN{acc+=0;val+=0;printf "%.6f",acc+val}'); count=$((count+1)); done; [ "$count" -lt 3 ] && return; local avg=$(awk -v acc="$sum" -v c="$count" 'BEGIN{if(c<=0){print 0}else{printf "%.3f",acc/c}}'); awk -v a="$avg" 'BEGIN{exit (a<5?0:1)}' || return; local new_combo=$(generate_dynamic_combo); [ -z "$new_combo" ] && return; RUN_COMBOS+=("$new_combo"); local CUR_COMBO_LABEL="" CUR_VF_EXTRA="" CUR_AF_EXTRA="" CFPS="" CNOISE="" CMIRROR="" CAUDIO="" CSHIFT="" CBR="" CSOFT="" CLEVEL=""; eval "$new_combo"; local label="${CUR_COMBO_LABEL:-auto}"; echo "[Strategy] Auto-added combo → ${label}"; }
+auto_expand_run_combos(){ local total=${#RUN_PHASH[@]}; [ "$total" -lt 3 ] && return; [ "${#RUN_COMBOS[@]}" -ge 16 ] && return; local sum=0 count=0 idx; for idx in "${RUN_PHASH[@]}"; do [ -z "$idx" ] || [ "$idx" = "NA" ] || [ "$idx" = "N/A" ] || [ "$idx" = "None" ] && continue; sum=$(awk -v acc="$sum" -v val="$idx" 'BEGIN{acc+=0;val+=0;printf "%.6f",acc+val}'); count=$((count+1)); done; [ "$count" -lt 3 ] && return; local avg=$(awk -v acc="$sum" -v c="$count" 'BEGIN{if(c<=0){print 0}else{printf "%.3f",acc/c}}'); awk -v a="$avg" 'BEGIN{exit (a<5?0:1)}' || return; local new_combo=$(generate_dynamic_combo); [ -z "$new_combo" ] && return; RUN_COMBOS+=("$new_combo"); local CUR_COMBO_LABEL="" CUR_VF_EXTRA="" CUR_AF_EXTRA="" CFPS="" CNOISE="" CMIRROR="" CAUDIO="" CSHIFT="" CBR="" CSOFT="" CLEVEL=""; eval "$new_combo"; local label="${CUR_COMBO_LABEL:-auto}"; echo "[Strategy] Auto-added combo → ${label}"; }
 # END REGION AI
 
 generate_copy() {
@@ -2200,8 +2212,6 @@ EOF
 
   CROP_TOTAL_W=$((CROP_W * 2))
   CROP_TOTAL_H=$((CROP_H * 2))
-  if [ "$CROP_TOTAL_W" -gt 0 ]; then PAD_X=$(rand_int 0 "$CROP_TOTAL_W"); else PAD_X=0; fi
-  if [ "$CROP_TOTAL_H" -gt 0 ]; then PAD_Y=$(rand_int 0 "$CROP_TOTAL_H"); else PAD_Y=0; fi
 
   STRETCH_FACTOR=$(awk -v v="${STRETCH_FACTOR:-}" 'BEGIN{
     if (v == "" || v+0 <= 0) { printf "%.6g", 1.0 } else { printf "%.6g", v+0 }
@@ -2217,14 +2227,17 @@ EOF
     if [ "$CROP_WIDTH" -lt 16 ]; then CROP_WIDTH=$TARGET_W; fi
     if [ "$CROP_HEIGHT" -lt 16 ]; then CROP_HEIGHT=$TARGET_H; fi
     VF="${VF},crop=${CROP_WIDTH}:${CROP_HEIGHT}:${CROP_X}:${CROP_Y}"
-    VF="${VF},pad=${TARGET_W}:${TARGET_H}:${PAD_X}:${PAD_Y}:black"
   fi
+  local extras_chain=""
   if [ "$MIRROR_ACTIVE" -eq 1 ]; then
-    VF="${VF},${MIRROR_FILTER}"
+    extras_chain=$(compose_vf_chain "$extras_chain" "$MIRROR_FILTER")
   fi
   if [ "$LUT_ACTIVE" -eq 1 ] && [ -n "$LUT_FILTER" ]; then
-    VF="${VF},${LUT_FILTER}"
+    extras_chain=$(compose_vf_chain "$extras_chain" "$LUT_FILTER")
   fi
+  extras_chain=$(compose_vf_chain "$extras_chain" "$CUR_VF_EXTRA")
+  VF=$(compose_vf_chain "$VF" "$extras_chain")
+  VF="${VF},pad=${TARGET_W}:${TARGET_H}:(ow-iw)/2:(oh-ih)/2:black"
   VF="${VF},drawtext=text='${UID_TAG}':fontcolor=white@0.08:fontsize=16:x=10:y=H-30"
 
   if [ -z "${CLIP_DURATION:-}" ]; then
@@ -2252,8 +2265,7 @@ EOF
   [ -n "$CLEVEL" ] && CODEC_LEVEL="$CLEVEL"
 
   local vf_payload
-  vf_payload=$(compose_vf_chain "$VF" "$CUR_VF_EXTRA")
-  vf_payload=$(ensure_vf_format "$vf_payload")
+  vf_payload=$(ensure_vf_format "$VF")
   local af_payload
   af_payload=$(compose_af_chain "$AFILTER" "$CUR_AF_EXTRA")
 
@@ -2510,8 +2522,8 @@ EOF
   while :; do
     metrics=$(compute_metrics_for_copy "$SRC" "$OUT"); IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
     local fallback_needed=0
-    if awk -v v="$metrics_phash" 'BEGIN{if(v==""||v=="None"||v=="NA") exit 1; exit (v+0<6?0:1)}'; then fallback_needed=1
-    elif awk -v v="$metrics_ssim" 'BEGIN{if(v==""||v=="None"||v=="NA") exit 1; exit (v+0>0.995?0:1)}'; then fallback_needed=1; fi
+    if awk -v v="$metrics_phash" 'BEGIN{if(v==""||v=="None"||v=="NA"||v=="N/A") exit 1; exit (v+0<6?0:1)}'; then fallback_needed=1
+    elif awk -v v="$metrics_ssim" 'BEGIN{if(v==""||v=="None"||v=="NA"||v=="N/A") exit 1; exit (v+0>0.995?0:1)}'; then fallback_needed=1; fi
     if [ "$fallback_needed" -eq 1 ] && [ "$fallback_attempts" -lt 2 ]; then
       echo "[Fallback] Copy $copy_index too similar — regenerating..."; fallback_attempts=$((fallback_attempts + 1))
       local combo_payload="" combo_vf="" combo_af=""
@@ -2521,7 +2533,7 @@ EOF
       [ -n "$combo_vf" ] && fallback_vf_extra="${fallback_vf_extra:+$fallback_vf_extra,}$combo_vf"
       [ -n "$combo_af" ] && fallback_af_extra="${fallback_af_extra:+$fallback_af_extra,}$combo_af"
       local fallback_vf_chain
-      fallback_vf_chain=$(compose_vf_chain "$base_vf" "${fallback_vf_extra:+$fallback_vf_extra,}hflip,vignette=PI/4:0.7,rotate=0.5*(PI/180)")
+      fallback_vf_chain=$(compose_vf_chain "$base_vf" "${fallback_vf_extra:+$fallback_vf_extra,}hflip,vignette=PI/4:0.7,rotate=0.5*(PI/180):fillcolor=black")
       fallback_vf_chain=$(ensure_vf_format "$fallback_vf_chain")
       ffmpeg -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC" \
         -t "$CLIP_DURATION" -c:v libx264 -preset medium -crf 24 \
@@ -2666,9 +2678,30 @@ for idx in "${!RUN_FILES[@]}"; do
   echo "${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]},${RUN_QT_MAKES[$idx]},${RUN_QT_MODELS[$idx]},${RUN_SSIM[$idx]},${RUN_PSNR[$idx]},${RUN_PHASH[$idx]},${RUN_QPASS[$idx]},${RUN_QUALITIES[$idx]}" >> "$MANIFEST_PATH"
 
   # REGION AI: accumulate metrics for report
-  ssim_num=$(awk -v v="${RUN_SSIM[$idx]}" 'BEGIN{if(v==""||v=="None"||v=="NA"){print "0"}else{printf "%.6f",v+0}}'); phash_num=$(awk -v v="${RUN_PHASH[$idx]}" 'BEGIN{if(v==""||v=="None"||v=="NA"){print "0"}else{printf "%.2f",v+0}}'); bitrate_num=$(awk -v v="${RUN_BITRATES[$idx]}" 'BEGIN{if(v==""||v=="None"||v=="NA"){print "0"}else{printf "%.0f",v+0}}'); uniq_num=$(awk -v s="$ssim_num" -v p="$phash_num" 'BEGIN{s+=0;p+=0;score=(1-s)*50 + (p/64)*50;if(score>100)score=100;if(score<0)score=0;printf "%.1f",score}')
+  ssim_num=$(awk -v v="${RUN_SSIM[$idx]}" 'BEGIN{if(v==""||v=="None"||v=="NA"||v=="N/A"){print "0"}else{printf "%.6f",v+0}}'); phash_num=$(awk -v v="${RUN_PHASH[$idx]}" 'BEGIN{if(v==""||v=="None"||v=="NA"||v=="N/A"){print "0"}else{printf "%.2f",v+0}}'); bitrate_num=$(awk -v v="${RUN_BITRATES[$idx]}" 'BEGIN{if(v==""||v=="None"||v=="NA"||v=="N/A"){print "0"}else{printf "%.0f",v+0}}')
+  uniq_json="null"
+  uniq_num="0"
+  ssim_raw="${RUN_SSIM[$idx]}"
+  phash_raw="${RUN_PHASH[$idx]}"
+  s_missing=0
+  p_missing=0
+  case "$ssim_raw" in
+    ""|"None"|"NA"|"N/A") s_missing=1 ;;
+  esac
+  case "$phash_raw" in
+    ""|"None"|"NA"|"N/A") p_missing=1 ;;
+  esac
+  if [ "$p_missing" -eq 0 ]; then
+    if [ "$s_missing" -eq 1 ]; then
+      uniq_calc=$(awk -v p="$phash_raw" 'BEGIN{p+=0;score=50+(p*2);if(score>100)score=100;if(score<0)score=0;printf "%.1f",score}')
+    else
+      uniq_calc=$(awk -v s="$ssim_raw" -v p="$phash_raw" 'BEGIN{s+=0;p+=0;score=100-(s*50)+(p*1.5);if(score>100)score=100;if(score<0)score=0;printf "%.1f",score}')
+    fi
+    uniq_num="$uniq_calc"
+    uniq_json="$uniq_calc"
+  fi
   SSIM_SUM=$(awk -v sum="$SSIM_SUM" -v val="$ssim_num" 'BEGIN{printf "%.6f", sum+val}'); PHASH_SUM=$(awk -v sum="$PHASH_SUM" -v val="$phash_num" 'BEGIN{printf "%.6f", sum+val}'); UNIQ_SUM=$(awk -v sum="$UNIQ_SUM" -v val="$uniq_num" 'BEGIN{printf "%.6f", sum+val}')
-  copy_name_json=$(printf '%s' "${RUN_FILES[$idx]}" | sed 's/"/\\"/g'); RESULTS+=("{\"copy\":\"$copy_name_json\",\"ssim\":$ssim_num,\"phash\":$phash_num,\"bitrate\":$bitrate_num,\"uniqscore\":$uniq_num}")
+  copy_name_json=$(printf '%s' "${RUN_FILES[$idx]}" | sed 's/"/\\"/g'); RESULTS+=("{\"copy\":\"$copy_name_json\",\"ssim\":$ssim_num,\"phash\":$phash_num,\"bitrate\":$bitrate_num,\"uniqscore\":$uniq_json}")
   if awk -v p="$phash_num" 'BEGIN{exit (p<6?0:1)}'; then REJECTED=$((REJECTED + 1)); elif awk -v s="$ssim_num" 'BEGIN{exit (s>0.995?0:1)}'; then REJECTED=$((REJECTED + 1)); else ACCEPTED=$((ACCEPTED + 1)); fi
   # END REGION AI
 

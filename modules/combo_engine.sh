@@ -175,8 +175,9 @@ generate_run_combos() {
   )
   RUN_COMBOS=()
   local combo vf vf_escaped
+  local re='CUR_VF_EXTRA="([^"]*)"'
   for combo in "${predefined[@]}"; do
-    if [[ $combo =~ CUR_VF_EXTRA="([^"]*)" ]]; then
+    if [[ $combo =~ $re ]]; then
       vf="${BASH_REMATCH[1]}"
       vf_escaped=$(safe_vf "$vf")
       combo="${combo/CUR_VF_EXTRA=\"${vf}\"/CUR_VF_EXTRA=\"${vf_escaped}\"}"

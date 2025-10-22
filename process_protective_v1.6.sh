@@ -5,6 +5,8 @@ set -euo pipefail
 IFS=$'\n\t'
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUTPUT_DIR="${OUTPUT_DIR:-$BASE_DIR/output}"
+mkdir -p "$OUTPUT_DIR"
 source "$BASE_DIR/bootstrap_compat.sh"
 bootstrap_init "${BASH_SOURCE[0]}"
 

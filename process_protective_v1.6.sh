@@ -1451,7 +1451,10 @@ EOF
   echo "ℹ️ clip_start=$CLIP_START duration=$CLIP_DURATION"
   echo "ℹ️ ffmpeg command: $ffmpeg_cmd_preview"
 
-  ffmpeg_exec "${FFMPEG_ARGS[@]}"
+  # REGION AI: safe ffmpeg execution via bash wrapper
+  local FFMPEG_CMD="$ffmpeg_cmd_preview"
+  _ffmpeg_retry "${FFMPEG_RETRY_COUNT:-3}" "${FFMPEG_RETRY_DELAY:-1}" bash -c "$FFMPEG_CMD"
+  # END REGION AI
 
   if [ "$INTRO_ACTIVE" -eq 1 ] && [ -n "$INTRO_SOURCE" ] && [ -n "$INTRO_OUTPUT_PATH" ]; then
     # REGION AI: intro render with resilient audio mapping
@@ -2279,7 +2282,10 @@ EOF
   echo "ℹ️ clip_start=$CLIP_START duration=$CLIP_DURATION"
   echo "ℹ️ ffmpeg command: $ffmpeg_cmd_preview"
 
-  ffmpeg_exec "${FFMPEG_ARGS[@]}"
+  # REGION AI: safe ffmpeg execution via bash wrapper
+  local FFMPEG_CMD="$ffmpeg_cmd_preview"
+  _ffmpeg_retry "${FFMPEG_RETRY_COUNT:-3}" "${FFMPEG_RETRY_DELAY:-1}" bash -c "$FFMPEG_CMD"
+  # END REGION AI
 
   if [ "$INTRO_ACTIVE" -eq 1 ] && [ -n "$INTRO_SOURCE" ] && [ -n "$INTRO_OUTPUT_PATH" ]; then
     # REGION AI: intro render with resilient audio mapping

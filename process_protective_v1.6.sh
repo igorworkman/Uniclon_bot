@@ -1453,7 +1453,11 @@ EOF
 
   # REGION AI: safe ffmpeg execution via bash wrapper
   local FFMPEG_CMD="$ffmpeg_cmd_preview"
-  _ffmpeg_retry "${FFMPEG_RETRY_COUNT:-3}" "${FFMPEG_RETRY_DELAY:-1}" bash -c "$FFMPEG_CMD"
+  bash -c "$FFMPEG_CMD"
+  if [[ $? -ne 0 ]]; then
+    log_error "FFmpeg command failed: $FFMPEG_CMD"
+    exit 2
+  fi
   # END REGION AI
 
   if [ "$INTRO_ACTIVE" -eq 1 ] && [ -n "$INTRO_SOURCE" ] && [ -n "$INTRO_OUTPUT_PATH" ]; then
@@ -2285,7 +2289,11 @@ EOF
 
   # REGION AI: safe ffmpeg execution via bash wrapper
   local FFMPEG_CMD="$ffmpeg_cmd_preview"
-  _ffmpeg_retry "${FFMPEG_RETRY_COUNT:-3}" "${FFMPEG_RETRY_DELAY:-1}" bash -c "$FFMPEG_CMD"
+  bash -c "$FFMPEG_CMD"
+  if [[ $? -ne 0 ]]; then
+    log_error "FFmpeg command failed: $FFMPEG_CMD"
+    exit 2
+  fi
   # END REGION AI
 
   if [ "$INTRO_ACTIVE" -eq 1 ] && [ -n "$INTRO_SOURCE" ] && [ -n "$INTRO_OUTPUT_PATH" ]; then

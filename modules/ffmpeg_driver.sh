@@ -8,6 +8,7 @@ _ffmpeg_retry() {
   local delay="$2"
   shift 2
   exec_with_retry "$attempts" "$delay" "$@"
+  return $?
 }
 
 ffmpeg_exec() {
@@ -24,7 +25,7 @@ ffprobe_exec() {
 
 ffmpeg_supports_filter() {
   local filter="$1"
-  ffmpeg_exec -hide_banner -filters 2>/dev/null | grep -q "$filter"
+  ffmpeg_exec -hide_banner -filters 2>/dev/null | grep -qF "$filter"
 }
 
 ffmpeg_command_preview() {

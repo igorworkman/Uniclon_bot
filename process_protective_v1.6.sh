@@ -5,7 +5,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_DIR="${OUTPUT_DIR:-$BASE_DIR/output}"
+export OUTPUT_DIR="${OUTPUT_DIR:-$BASE_DIR/output}"
 mkdir -p "$OUTPUT_DIR"
 source "$BASE_DIR/bootstrap_compat.sh"
 bootstrap_init "${BASH_SOURCE[0]}"
@@ -22,7 +22,7 @@ source "${MODULES_DIR}/audio_utils.sh"
 # shellcheck source=modules/time_utils.sh
 source "${MODULES_DIR}/time_utils.sh"
 
-echo "[INIT] Modular mode active — legacy blocks disabled"
+echo "[INIT] Modular mode active — cleaned and sandboxed"
 # REGION AI: runtime state arrays
 declare -a RUN_COMBOS=()
 declare -a RUN_COMBO_HISTORY RUN_FILES RUN_BITRATES RUN_FPS RUN_DURATIONS RUN_SIZES RUN_ENCODERS RUN_SOFTWARES RUN_CREATION_TIMES RUN_SEEDS RUN_TARGET_DURS RUN_TARGET_BRS RUN_PROFILES RUN_QT_MAKES RUN_QT_MODELS RUN_QT_SOFTWARES RUN_SSIM RUN_PSNR RUN_PHASH RUN_UNIQ RUN_QPASS RUN_QUALITIES RUN_CREATIVE_MIRROR RUN_CREATIVE_INTRO RUN_CREATIVE_LUT RUN_PREVIEWS
@@ -721,20 +721,18 @@ duplicate_threshold() {
 }
 
 calculate_duplicate_max() {
-  local fps_arr_name="$1"
-  local br_arr_name="$2"
-  local dur_arr_name="$3"
+  local -n fps_arr="$1"
+  local -n br_arr="$2"
+  local -n dur_arr="$3"
   local -a seen_keys=()
   local -a seen_counts=()
   local max_count=0
-  local total=0
-  eval "total=\${#$fps_arr_name[@]}"
+  local total=${#fps_arr[@]}
   local idx=0
   while [ "$idx" -lt "$total" ]; do
-    local fps_val br_val dur_val key
-    eval "fps_val=\${$fps_arr_name[$idx]}"
-    eval "br_val=\${$br_arr_name[$idx]}"
-    eval "dur_val=\${$dur_arr_name[$idx]}"
+    local fps_val="${fps_arr[$idx]}"
+    local br_val="${br_arr[$idx]}"
+    local dur_val="${dur_arr[$idx]}"
     key="${fps_val}|${br_val}|$(duration_bucket "$dur_val")"
     local found=0
     local current=0
@@ -763,13 +761,13 @@ calculate_duplicate_max() {
 
 # REGION AI: variant share calculator
 variant_max_share() {
-  local arr_name="$1" total=0
-  eval "total=\${#$arr_name[@]}"
+  local -n arr="$1"
+  local total=${#arr[@]}
   if [ "$total" -eq 0 ]; then
     echo "0"
     return
   fi
-  eval "printf '%s\n' \"\${$arr_name[@]}\"" | awk -v total="$total" '
+  printf '%s\n' "${arr[@]}" | awk -v total="$total" '
     NF==0 {next}
     {count[$0]++}
     END {
@@ -1019,6 +1017,24 @@ report_template_statistics() {
   done <<<"$stats"
 }
 
+# REGION AI: sandboxed combo context loader
+apply_combo_context() {
+  local combo_string="$1"
+  local combo_dump combo_runner
+  combo_runner="$combo_string"$'\nfor var in CUR_COMBO_LABEL CFPS CNOISE CMIRROR CAUDIO CSHIFT CBR CSOFT CLEVEL CUR_VF_EXTRA CUR_AF_EXTRA; do printf '\''%s\t%s\n'\'' "$var" "${!var}"; done'
+  combo_dump=$(bash -c "$combo_runner") || return 1
+  local line key value
+  while IFS=$'\t' read -r key value; do
+    case "$key" in
+      CUR_COMBO_LABEL|CFPS|CNOISE|CMIRROR|CAUDIO|CSHIFT|CBR|CSOFT|CLEVEL|CUR_VF_EXTRA|CUR_AF_EXTRA)
+        printf -v "$key" '%s' "$value"
+        ;;
+    esac
+  done <<<"$combo_dump"
+  return 0
+}
+# END REGION AI
+
 # REGION AI: uniqueness combo orchestration
 # (moved to modules/combo_engine.sh)
 generate_copy() {
@@ -1036,13 +1052,21 @@ generate_copy() {
     combo_idx=$(rand_int 0 $(( ${#RUN_COMBOS[@]} - 1 )))
     CUR_COMBO_STRING="${RUN_COMBOS[$combo_idx]}"
   fi
-  if [ -n "$CUR_COMBO_STRING" ]; then
-    eval "$CUR_COMBO_STRING"
-    local combo_preview="${CUR_COMBO_LABEL:-$CUR_COMBO_STRING}"
-    echo "[Strategy] Using combo #${copy_index} → ${combo_preview}"
-  fi
   local attempt=0
+  local combo_preview=""
+  local combo_applied=0
   while :; do
+    if [ "$combo_applied" -eq 0 ] && [ -n "$CUR_COMBO_STRING" ]; then
+      if ! apply_combo_context "$CUR_COMBO_STRING"; then
+        echo "[WARN] Combo execution failed: $CUR_COMBO_STRING"
+        combo_applied=-1
+        attempt=$((attempt + 1))
+        continue
+      fi
+      combo_applied=1
+      combo_preview="${CUR_COMBO_LABEL:-$CUR_COMBO_STRING}"
+      echo "[Strategy] Using combo #${copy_index} → ${combo_preview}"
+    fi
     SEED_HEX=$(deterministic_md5 "${SRC}_${copy_index}_соль_${regen_tag}_${attempt}")
     init_rng "$SEED_HEX"
 # REGION AI: reset variant descriptor per attempt
@@ -1832,13 +1856,21 @@ generate_copy() {
     combo_idx=$(rand_int 0 $(( ${#RUN_COMBOS[@]} - 1 )))
     CUR_COMBO_STRING="${RUN_COMBOS[$combo_idx]}"
   fi
-  if [ -n "$CUR_COMBO_STRING" ]; then
-    eval "$CUR_COMBO_STRING"
-    local combo_preview="${CUR_COMBO_LABEL:-$CUR_COMBO_STRING}"
-    echo "[Strategy] Using combo #${copy_index} → ${combo_preview}"
-  fi
   local attempt=0
+  local combo_preview=""
+  local combo_applied=0
   while :; do
+    if [ "$combo_applied" -eq 0 ] && [ -n "$CUR_COMBO_STRING" ]; then
+      if ! apply_combo_context "$CUR_COMBO_STRING"; then
+        echo "[WARN] Combo execution failed: $CUR_COMBO_STRING"
+        combo_applied=-1
+        attempt=$((attempt + 1))
+        continue
+      fi
+      combo_applied=1
+      combo_preview="${CUR_COMBO_LABEL:-$CUR_COMBO_STRING}"
+      echo "[Strategy] Using combo #${copy_index} → ${combo_preview}"
+    fi
     SEED_HEX=$(deterministic_md5 "${SRC}_${copy_index}_соль_${regen_tag}_${attempt}")
     init_rng "$SEED_HEX"
 # REGION AI: reset variant descriptor per attempt

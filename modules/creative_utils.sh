@@ -37,6 +37,8 @@ creative_unwrap_vf() {
     payload="${payload:1:${#payload}-2}"
   fi
   payload=${payload//\'"\'"\'/\'}
+  payload=${payload//\\(/(}
+  payload=${payload//\\)/)}
   printf '%s' "$payload"
 }
 

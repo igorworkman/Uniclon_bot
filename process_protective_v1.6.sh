@@ -42,23 +42,7 @@ set -- "${POSITIONAL_ARGS[@]}"
 : "${AFILTER:=anull}"
 : "${PREVIEW_SS:=00:00:01.000}"
 # END REGION AI
-# REGION AI: audio filter capability detection
-AUDIO_FILTER_PRIMARY="apulsator=mode=sine:freq=0.8"
-AUDIO_FILTER_VARIANT="apulsator=mode=sine:freq=0.9"
-if ! ffmpeg -filters 2>/dev/null | grep -q 'apulsator'; then
-  AUDIO_FILTER_PRIMARY="aecho=0.8:0.9:100:0.3"
-  AUDIO_FILTER_VARIANT="acompressor=threshold=-16dB:ratio=2.4"
-  echo "[Audio] 'apulsator' not supported — fallback to 'aecho'."
-fi
-
-apply_audio_fallback() {
-  # Подменяем неподдерживаемый фильтр apulsator на кросс-платформенные альтернативы.
-  local payload="$1"
-  payload="${payload//apulsator=mode=sine:freq=0.8/${AUDIO_FILTER_PRIMARY}}"
-  payload="${payload//apulsator=mode=sine:freq=0.9/${AUDIO_FILTER_VARIANT}}"
-  printf '%s' "$payload"
-}
-# END REGION AI
+audio_init_filter_caps
 
 PREVIEW_SS_FALLBACK="00:00:01.000"
 # Нормализованное значение времени превью вычисляется позже через clip_start
@@ -182,7 +166,7 @@ COUNT="${2:-1}"
 [[ "$COUNT" =~ ^[0-9]+$ ]] || { echo "❌ count должен быть числом"; exit 1; }
 
 SRC_BITRATE="None"
-SRC_BITRATE_RAW=$(ffprobe -v error -select_streams v:0 -show_entries stream=bit_rate -of csv=p=0 "$SRC" 2>/dev/null || true)
+SRC_BITRATE_RAW=$(ffprobe_exec -v error -select_streams v:0 -show_entries stream=bit_rate -of csv=p=0 "$SRC" 2>/dev/null || true)
 if [ -n "$SRC_BITRATE_RAW" ] && awk -v val="$SRC_BITRATE_RAW" 'BEGIN{val+=0; exit (val>0 ? 0 : 1)}'; then
   SRC_BITRATE=$(awk -v val="$SRC_BITRATE_RAW" 'BEGIN{printf "%.0f", val/1000}')
 fi
@@ -582,60 +566,7 @@ pick_crop_offsets() {
 log_warn() {
   log "⚠️" "$@"
 }
-
-function check_ffmpeg_filter_support() {
-  local filter="$1"
-  ffmpeg -hide_banner -filters 2>/dev/null | grep -q "$filter"
-}
 # END REGION AI
-
-pick_audio_chain() {
-  local roll=$(rand_int 1 100)
-  AUDIO_PROFILE="resample"
-  local filters=("aresample=${AUDIO_SR}")
-  if [ "$roll" -le "$AUDIO_TWEAK_PROB_PERCENT" ]; then
-    AUDIO_PROFILE="asetrate"
-    local factor=$(rand_float 0.995 1.005 6)
-    filters=("asetrate=${AUDIO_SR}*${factor}" "aresample=${AUDIO_SR}")
-  elif [ "$roll" -ge 85 ]; then
-    AUDIO_PROFILE="anull"
-    filters=("anull" "aresample=${AUDIO_SR}")
-  fi
-  local tempo_target="$TEMPO_FACTOR"
-  if [ "$MUSIC_VARIANT" -eq 1 ]; then
-    local tempo_sign=$(rand_int 0 1)
-    local tempo_delta=$(rand_float 0.010 0.030 3)
-    tempo_target=$(awk -v base="$TEMPO_FACTOR" -v sign="$tempo_sign" -v delta="$tempo_delta" '
-BEGIN {
-  base+=0; delta+=0;
-  if (sign == 0) {
-    printf "%.6f", base * (1.0 - delta);
-  } else {
-    printf "%.6f", base * (1.0 + delta);
-  }
-}
-')
-    AUDIO_PROFILE="${AUDIO_PROFILE}+tempo"
-  fi
-  tempo_target=$(awk -v t="${tempo_target:-}" 'BEGIN{
-    if (t == "" || t+0 <= 0) { printf "%.6g", 1.0 } else { printf "%.6g", t+0 }
-  }')
-# REGION AI: safe audio uniqueness chain randomization
-  local safe_volume=$(rand_float 0.980 1.000 4)
-  safe_volume=$(awk -v v="$safe_volume" 'BEGIN{printf "%.4f", v+0}')
-  local safe_rate=$(rand_float 1.0002 1.0008 7)
-  local safe_tempo
-  safe_tempo=$(awk -v base="$tempo_target" -v rate="$safe_rate" 'BEGIN{base+=0;rate+=0;if(rate<=0)rate=1;printf "%.6f", base/rate}')
-  if check_ffmpeg_filter_support "anequalizer"; then
-    AUDIO_FILTER="anequalizer=f=1831:t=q:w=1:g=-0.408"
-  else
-    AUDIO_FILTER="aecho=0.8:0.9:1000:0.3"
-    log_warn "[Audio] 'anequalizer' not supported — fallback to 'aecho'"
-  fi
-  SAFE_AF_CHAIN=$(printf 'aresample=%s:resampler=soxr:precision=28:dither_method=triangular,volume=%s,afftdn=nf=-30,asetrate=%s*%s,aresample=%s,atempo=%s' "$AUDIO_SR" "$safe_volume" "$AUDIO_SR" "$safe_rate" "$AUDIO_SR" "$safe_tempo")
-# END REGION AI
-  AFILTER_CORE=$(IFS=,; echo "${filters[*]}")
-}
 
 collect_music_variants() {
   MUSIC_VARIANT_TRACKS=()
@@ -652,42 +583,6 @@ collect_music_variants() {
   done
 }
 
-collect_intro_clips() {
-  INTRO_CLIPS=()
-  local src_dir="$(cd "$(dirname "$SRC")" && pwd)"
-  local search_dirs=()
-  if [ -d "${src_dir}/intros" ]; then
-    search_dirs+=("${src_dir}/intros")
-  fi
-  if [ -d "${PWD}/intros" ]; then
-    search_dirs+=("${PWD}/intros")
-  fi
-  for dir in "${search_dirs[@]}"; do
-    [ -d "$dir" ] || continue
-    while IFS= read -r -d '' clip; do
-      INTRO_CLIPS+=("$clip")
-    done < <(find "$dir" -maxdepth 1 -type f \( -iname '*.mp4' -o -iname '*.mov' -o -iname '*.mkv' -o -iname '*.webm' \) -print0)
-  done
-}
-
-collect_lut_files() {
-  LUT_FILES=()
-  local src_dir="$(cd "$(dirname "$SRC")" && pwd)"
-  local search_dirs=()
-  if [ -d "${src_dir}/luts" ]; then
-    search_dirs+=("${src_dir}/luts")
-  fi
-  if [ -d "${PWD}/luts" ]; then
-    search_dirs+=("${PWD}/luts")
-  fi
-  for dir in "${search_dirs[@]}"; do
-    [ -d "$dir" ] || continue
-    while IFS= read -r -d '' lut; do
-      LUT_FILES+=("$lut")
-    done < <(find "$dir" -maxdepth 1 -type f -iname '*.cube' -print0)
-  done
-}
-
 pick_music_variant_track() {
   MUSIC_VARIANT_TRACK=""
   local total=${#MUSIC_VARIANT_TRACKS[@]}
@@ -700,7 +595,7 @@ pick_music_variant_track() {
 base="$(basename "$SRC")"
 name="${base%.*}"
 
-ORIG_DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$SRC")
+ORIG_DURATION=$(ffprobe_exec -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$SRC")
 if [ -z "$ORIG_DURATION" ] || [ "$ORIG_DURATION" = "N/A" ]; then
   echo "❌ Не удалось получить длительность входного видео"
   exit 1
@@ -1157,7 +1052,7 @@ compute_metrics_for_copy() {
 # REGION AI: ffmpeg quality metrics analysis
   metrics_log="${CHECK_DIR}/metrics_${compare_name%.*}.log"
   {
-    ffmpeg -hide_banner -i "$source_file" -i "$compare_file" \
+    ffmpeg_exec -hide_banner -i "$source_file" -i "$compare_file" \
       -lavfi "[0:v][1:v]ssim;[0:v][1:v]psnr" -f null - 2>&1 || true
   } | tee "$metrics_log" >/dev/null
   ssim_val=$({ grep -o 'SSIM=[0-9\.]*' "$metrics_log" || true; } | tail -1 | cut -d= -f2)
@@ -1166,7 +1061,7 @@ compute_metrics_for_copy() {
   psnr_val=${psnr_val:-35.0}
   local bitrate_val="None"
   local bitrate_probe=""
-  bitrate_probe=$(ffprobe -v error -select_streams v:0 -show_entries stream=bit_rate -of csv=p=0 "$compare_file" 2>/dev/null || true)
+  bitrate_probe=$(ffprobe_exec -v error -select_streams v:0 -show_entries stream=bit_rate -of csv=p=0 "$compare_file" 2>/dev/null || true)
   if [ -n "$bitrate_probe" ] && awk -v val="$bitrate_probe" 'BEGIN{val+=0; exit (val>0 ? 0 : 1)}'; then
     bitrate_val=$(awk -v val="$bitrate_probe" 'BEGIN{printf "%.0f", val/1000}')
   fi
@@ -1335,10 +1230,10 @@ warn_similar_copies() {
       if [ "${RUN_BITRATES[$i]}" != "${RUN_BITRATES[$j]}" ]; then
         continue
       fi
-      pair_log=$(ffmpeg -v error -i "${OUTPUT_DIR}/${RUN_FILES[$i]}" -i "${OUTPUT_DIR}/${RUN_FILES[$j]}" -lavfi "ssim" -f null - 2>&1 || true)
+      pair_log=$(ffmpeg_exec -v error -i "${OUTPUT_DIR}/${RUN_FILES[$i]}" -i "${OUTPUT_DIR}/${RUN_FILES[$j]}" -lavfi "ssim" -f null - 2>&1 || true)
       pair_ssim=$(printf '%s\n' "$pair_log" | awk -F'All:' '/All:/{gsub(/^[ \t]+/,"",$2); split($2,a," "); print a[1]; exit}')
       [ -n "$pair_ssim" ] || pair_ssim="0.000"
-      psnr_log=$(ffmpeg -v error -i "${OUTPUT_DIR}/${RUN_FILES[$i]}" -i "${OUTPUT_DIR}/${RUN_FILES[$j]}" -lavfi "psnr" -f null - 2>&1 || true)
+      psnr_log=$(ffmpeg_exec -v error -i "${OUTPUT_DIR}/${RUN_FILES[$i]}" -i "${OUTPUT_DIR}/${RUN_FILES[$j]}" -lavfi "psnr" -f null - 2>&1 || true)
       pair_psnr=$(printf '%s\n' "$psnr_log" | awk -F'average:' '/average:/{gsub(/^[ \t]+/,"",$2); split($2,a," "); print a[1]; exit}')
       [ -n "$pair_psnr" ] || pair_psnr="0.00"
       case "$pair_psnr" in
@@ -1491,12 +1386,7 @@ report_template_statistics() {
 }
 
 # REGION AI: uniqueness combo orchestration
-generate_run_combos(){ RUN_COMBOS=("CUR_COMBO_LABEL='fps24_eq_boost' CFPS=30 CNOISE=1 CMIRROR=hflip CAUDIO=asetrate CBR=1.12 CSHIFT=0.07 CSOFT=VN CLEVEL=4.0 CUR_VF_EXTRA=\"fps=24,eq=brightness=0.03:contrast=1.02\" CUR_AF_EXTRA=\"acompressor=threshold=-16dB:ratio=2.4,aresample=44100\"" "CUR_COMBO_LABEL='vflip_curves' CFPS=60 CNOISE=0 CMIRROR=vflip CAUDIO=resample CBR=0.88 CSHIFT=-0.05 CSOFT=CapCut CLEVEL=4.2 CUR_VF_EXTRA=\"vflip,curves=preset=strong_contrast\" CUR_AF_EXTRA=\"apulsator=mode=sine:freq=0.8,atempo=0.99\"" "CUR_COMBO_LABEL='crop_rotate' CFPS=30 CNOISE=0 CMIRROR=none CAUDIO=jitter CBR=1.10 CSHIFT=0.09 CSOFT=LumaFusion CLEVEL=4.0 CUR_VF_EXTRA=\"crop=in_w-20:in_h-20,rotate=0.5*(PI/180):fillcolor=black\" CUR_AF_EXTRA=\"atempo=1.02,treble=g=1.5\"" "CUR_COMBO_LABEL='hflip_noise' CFPS=24 CNOISE=1 CMIRROR=hflip CAUDIO=asetrate CBR=0.90 CSHIFT=-0.08 CSOFT=CapCut CLEVEL=4.0 CUR_VF_EXTRA=\"hflip,noise=alls=5:allf=t+u\" CUR_AF_EXTRA=\"acompressor=threshold=-20dB:ratio=3.0,lowpass=f=12000\"" "CUR_COMBO_LABEL='colorbalance_pop' CFPS=25 CNOISE=0 CMIRROR=hflip CAUDIO=resample CBR=1.15 CSHIFT=0.06 CSOFT=VN CLEVEL=4.2 CUR_VF_EXTRA=\"colorbalance=bs=0.05:rs=-0.05,eq=saturation=1.1\" CUR_AF_EXTRA=\"equalizer=f=1200:t=q:w=1.0:g=-3\"" "CUR_COMBO_LABEL='vignette_gamma' CFPS=30 CNOISE=1 CMIRROR=none CAUDIO=jitter CBR=0.85 CSHIFT=-0.10 CSOFT=LumaFusion CLEVEL=4.0 CUR_VF_EXTRA=\"vignette=PI/5:0.5,eq=gamma=1.03\" CUR_AF_EXTRA=\"crystalizer=i=2\"" "CUR_COMBO_LABEL='rotate_pad' CFPS=60 CNOISE=1 CMIRROR=none CAUDIO=asetrate CBR=1.13 CSHIFT=0.12 CSOFT=CapCut CLEVEL=4.2 CUR_VF_EXTRA=\"rotate=-0.3*(PI/180):fillcolor=black\" CUR_AF_EXTRA=\"highpass=f=200,atempo=0.98\"" "CUR_COMBO_LABEL='unsharp_speed' CFPS=30 CNOISE=0 CMIRROR=none CAUDIO=resample CBR=0.87 CSHIFT=-0.07 CSOFT=VN CLEVEL=4.0 CUR_VF_EXTRA=\"unsharp=3:3:1.5,setpts=PTS*0.98\" CUR_AF_EXTRA=\"chorus=0.6:0.9:55:0.4:0.25:2\"" "CUR_COMBO_LABEL='curves_light' CFPS=30 CNOISE=1 CMIRROR=vflip CAUDIO=jitter CBR=1.05 CSHIFT=0.04 CSOFT=VN CLEVEL=4.0 CUR_VF_EXTRA=\"curves=preset=lighter\" CUR_AF_EXTRA=\"superequalizer=1b=0.8:2b=0.4:3b=0.1:4b=-0.2:5b=-0.4\"" "CUR_COMBO_LABEL='hue_noise' CFPS=24 CNOISE=0 CMIRROR=none CAUDIO=asetrate CBR=0.95 CSHIFT=-0.03 CSOFT=CapCut CLEVEL=4.0 CUR_VF_EXTRA=\"hue=s=0.95,noise=alls=3:allf=t\" CUR_AF_EXTRA=\"aecho=0.7:0.4:30:0.6\""); RUN_COMBO_POS=0; }
-generate_dynamic_combo(){ local ident=$(rand_int 120 999) vf_options=("tblend=average" "edgedetect=mode=colormix:high=0.10:low=0.04" "smartblur=ls=2.5" "eq=brightness=0.02:saturation=1.08" "hue=h=20*PI/180") af_options=("vibrato=f=8:d=0.6" "aphaser=0.7:0.9:0.3:0.7:0.5:0.5" "compand=attacks=0:decays=0.8:points=-45/-45|-15/-3|0/-0.5" "flanger=delay=8:depth=2:regen=0.4:speed=0.3" "chorus=0.7:0.8:40:0.5:0.3:2") mirrors=(none hflip vflip) audios=(asetrate resample jitter) softwares=(CapCut VN LumaFusion) fps_pool=(24 25 30 60) br_pool=(0.85 0.92 1.05 1.12) shift_pool=(-0.08 -0.04 0.05 0.09) level_pool=(4.0 4.2); local vf_idx=$(rand_int 0 $(( ${#vf_options[@]} - 1 ))) af_idx=$(rand_int 0 $(( ${#af_options[@]} - 1 ))) mirror_idx=$(rand_int 0 $(( ${#mirrors[@]} - 1 ))) audio_idx=$(rand_int 0 $(( ${#audios[@]} - 1 ))) soft_idx=$(rand_int 0 $(( ${#softwares[@]} - 1 ))) fps_idx=$(rand_int 0 $(( ${#fps_pool[@]} - 1 ))) br_idx=$(rand_int 0 $(( ${#br_pool[@]} - 1 ))) shift_idx=$(rand_int 0 $(( ${#shift_pool[@]} - 1 ))) level_idx=$(rand_int 0 $(( ${#level_pool[@]} - 1 ))) noise=$(rand_int 0 1); printf "CUR_COMBO_LABEL='auto_%s' CFPS=%s CNOISE=%s CMIRROR=%s CAUDIO=%s CBR=%s CSHIFT=%s CSOFT=%s CLEVEL=%s CUR_VF_EXTRA=\"%s\" CUR_AF_EXTRA=\"%s\"" "$ident" "${fps_pool[$fps_idx]}" "$noise" "${mirrors[$mirror_idx]}" "${audios[$audio_idx]}" "${br_pool[$br_idx]}" "${shift_pool[$shift_idx]}" "${softwares[$soft_idx]}" "${level_pool[$level_idx]}" "${vf_options[$vf_idx]}" "${af_options[$af_idx]}"; }
-compose_vf_chain(){ local base="$1" extra="$2"; [ -z "$extra" ] && { printf '%s' "$base"; return; }; [ -z "$base" ] && { printf '%s' "$extra"; return; }; printf '%s,%s' "$base" "$extra"; }
-# REGION AI: ensure video filters default to yuv420p
-ensure_vf_format(){ local payload="$1"; [ -z "$payload" ] && { printf '%s' "format=yuv420p"; return; }; case ",${payload}," in *",format=yuv420p,"*) printf '%s' "$payload";; *) printf '%s,format=yuv420p' "$payload";; esac }
-# END REGION AI
+# (moved to modules/combo_engine.sh)
 compose_af_chain(){
 # REGION AI: compose audio chain with filter fallback
   local base="$1" extra="$2"
@@ -1521,10 +1411,7 @@ generate_copy() {
   local regen_tag="${2:-0}"
   local CFPS="" CNOISE="" CMIRROR="" CAUDIO="" CSHIFT="" CBR="" CSOFT="" CLEVEL="" CUR_VF_EXTRA="" CUR_AF_EXTRA="" CUR_COMBO_LABEL="" CUR_COMBO_STRING="" regen_combo=""
   local combo_idx=-1
-  if [[ -z "${RUN_COMBOS[*]-}" ]]; then
-    echo "[Init] RUN_COMBOS not set — generating default pool..."
-    generate_run_combos
-  fi
+  combo_engine_autofill
   if [ "$regen_tag" -gt 0 ]; then
     regen_combo=$(next_regen_combo)
     JITTER_RANGE_OVERRIDE=7
@@ -1593,7 +1480,9 @@ EOF
     CLIP_DURATION=$(duration "$CLIP_DURATION" "$clip_duration_fallback" "clip_duration" "copy ${copy_index}")
     TARGET_DURATION="$CLIP_DURATION"
     CLIP_START=$(clip_start "$CLIP_START" "0.000" "clip_start" "copy ${copy_index}")
-    [ -n "$CSHIFT" ] && CLIP_START=$(awk -v s="${CLIP_START:-0}" -v d="$CSHIFT" -v l="$clip_duration_fallback" 'BEGIN{s+=0;d+=0;l+=0;v=s+d;if(v<0)v=0;if(l>0 && v>l-0.2)v=l-0.2;if(v<0)v=0;printf "%.3f",v}')
+    if [ -n "$CSHIFT" ]; then
+      CLIP_START=$(creative_apply_text_shift "$CLIP_START" "$CSHIFT" "$clip_duration_fallback")
+    fi
 # END REGION AI
 
     NOISE=0
@@ -1689,41 +1578,21 @@ EOF
     fi
     AUDIO_BR="${audio_br_val}k"
 
-    local MIRROR_DESC="none" MIRROR_FILTER="" MIRROR_ACTIVE=0
-    if [ "$ENABLE_MIRROR" -eq 1 ]; then
-      MIRROR_ACTIVE=1
-      if [ "$(rand_int 0 1)" -eq 0 ]; then
-        MIRROR_FILTER="hflip"
-      else
-        MIRROR_FILTER="vflip"
-      fi
-      MIRROR_DESC="$MIRROR_FILTER"
-    fi
-    if [ -n "$CMIRROR" ]; then if [ "$CMIRROR" = "none" ]; then MIRROR_ACTIVE=0; MIRROR_FILTER=""; MIRROR_DESC="none"; else MIRROR_ACTIVE=1; MIRROR_FILTER="$CMIRROR"; MIRROR_DESC="$CMIRROR"; fi; fi
+    creative_pick_mirror "$ENABLE_MIRROR" "${CMIRROR:-}"
+    local MIRROR_ACTIVE="${MIRROR_ACTIVE}"
+    local MIRROR_FILTER="${MIRROR_FILTER}"
+    local MIRROR_DESC="${MIRROR_DESC}"
 
-    local LUT_DESC="none" LUT_FILTER="" LUT_ACTIVE=0
-    if [ "$ENABLE_LUT" -eq 1 ]; then
-      LUT_ACTIVE=1
-      if [ ${#LUT_FILES[@]} -gt 0 ]; then
-        local lut_choice
-        lut_choice=$(rand_choice LUT_FILES)
-        LUT_DESC="$(basename "$lut_choice")"
-        LUT_DESC="${LUT_DESC//,/ _}"
-        LUT_FILTER="lut3d=file='$(escape_single_quotes "$lut_choice")':interp=tetrahedral"
-      else
-        LUT_DESC="curves_vintage"
-        LUT_FILTER="curves=preset=vintage"
-      fi
-    fi
+    creative_pick_lut "$ENABLE_LUT" LUT_FILES
+    local LUT_ACTIVE="${LUT_ACTIVE}"
+    local LUT_FILTER="${LUT_FILTER}"
+    local LUT_DESC="${LUT_DESC}"
 
-    local INTRO_ACTIVE=0 INTRO_SOURCE="" INTRO_DURATION="" INTRO_DESC="none"
-    if [ "$ENABLE_INTRO" -eq 1 ] && [ ${#INTRO_CLIPS[@]} -gt 0 ]; then
-      INTRO_ACTIVE=1
-      INTRO_SOURCE=$(rand_choice INTRO_CLIPS)
-      INTRO_DURATION=$(rand_float 1.0 2.0 2)
-      INTRO_DESC="$(basename "$INTRO_SOURCE")"
-      INTRO_DESC="${INTRO_DESC//,/ _}"
-    fi
+    creative_pick_intro "$ENABLE_INTRO" INTRO_CLIPS
+    local INTRO_ACTIVE="${INTRO_ACTIVE}"
+    local INTRO_SOURCE="${INTRO_SOURCE}"
+    local INTRO_DURATION="${INTRO_DURATION}"
+    local INTRO_DESC="${INTRO_DESC}"
 
     combo_key="${FPS}|${BR}|${TARGET_DURATION}"
 
@@ -1901,39 +1770,36 @@ EOF
   # REGION AI: primary ffmpeg command with stable stream mapping
   local audio_input_index=0 audio_stream_present=0
   AUDIO_CODEC="none"
-  if ffprobe -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 "$SRC" >/dev/null 2>&1; then
+  if ffprobe_exec -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 "$SRC" >/dev/null 2>&1; then
     audio_stream_present=1
-    AUDIO_CODEC=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$SRC" 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")
+    AUDIO_CODEC=$(ffprobe_exec -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$SRC" 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")
     AUDIO_CODEC=${AUDIO_CODEC:-none}
   fi
-  AUDIO_CHAIN="$af_payload"
-  if [[ "${AUDIO_CODEC:-none}" == "apac" || "${AUDIO_CODEC:-none}" == "none" ]]; then
-    AUDIO_CHAIN="anullsrc=r=44100:cl=stereo"
-  fi
+  AUDIO_CHAIN=$(audio_guard_chain "$AUDIO_CODEC" "$af_payload")
   if [ -z "${AUDIO_FILTER:-}" ]; then
     AUDIO_FILTER="anull"
   fi
-  FFMPEG_CMD=(
-    ffmpeg -y -hide_banner -loglevel warning -ignore_unknown
+  FFMPEG_ARGS=(
+    -y -hide_banner -loglevel warning -ignore_unknown
     -analyzeduration 200M -probesize 200M
     -ss "$CLIP_START" -i "$SRC"
   )
   if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
-    FFMPEG_CMD+=(-analyzeduration 200M -probesize 200M -ss "$CLIP_START" -i "$MUSIC_VARIANT_TRACK")
+    FFMPEG_ARGS+=(-analyzeduration 200M -probesize 200M -ss "$CLIP_START" -i "$MUSIC_VARIANT_TRACK")
     audio_input_index=1
   elif [ "$audio_stream_present" -eq 0 ]; then
-    FFMPEG_CMD+=(-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100)
+    FFMPEG_ARGS+=(-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100)
     audio_input_index=1
   fi
-  FFMPEG_CMD+=(-map 0:v:0)
+  FFMPEG_ARGS+=(-map 0:v:0)
   if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
-    FFMPEG_CMD+=(-map "${audio_input_index}:a:0?" -shortest)
+    FFMPEG_ARGS+=(-map "${audio_input_index}:a:0?" -shortest)
   elif [ "$audio_stream_present" -eq 1 ]; then
-    FFMPEG_CMD+=(-map "0:a:0?")
+    FFMPEG_ARGS+=(-map "0:a:0?")
   else
-    FFMPEG_CMD+=(-map "${audio_input_index}:a:0" -shortest)
+    FFMPEG_ARGS+=(-map "${audio_input_index}:a:0" -shortest)
   fi
-  FFMPEG_CMD+=(-t "$CLIP_DURATION" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$CODEC_LEVEL" -crf "$CRF"
+  FFMPEG_ARGS+=(-t "$CLIP_DURATION" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$CODEC_LEVEL" -crf "$CRF"
     -r "$FPS" -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k"
     -vf "$vf_payload"
     -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$AUDIO_CHAIN,$AUDIO_FILTER"
@@ -1958,45 +1824,45 @@ EOF
   echo "▶️ [$copy_index/$COUNT] $SRC → $OUT | fps=$FPS br=${BR}k noise=$NOISE crop=${CROP_W}x${CROP_H} duration=${TARGET_DURATION}s audio=${AUDIO_PROFILE} profile=${PROFILE_VALUE} mirror=${MIRROR_DESC} lut=${LUT_DESC} intro=${INTRO_DESC}"
 
   local ffmpeg_cmd_preview
-  ffmpeg_cmd_preview=$(printf '%q ' "${FFMPEG_CMD[@]}")
+  ffmpeg_cmd_preview=$(ffmpeg_command_preview "${FFMPEG_ARGS[@]}")
   ffmpeg_cmd_preview=${ffmpeg_cmd_preview% }
   echo "ℹ️ clip_start=$CLIP_START duration=$CLIP_DURATION"
   echo "ℹ️ ffmpeg command: $ffmpeg_cmd_preview"
 
-  "${FFMPEG_CMD[@]}"
+  ffmpeg_exec "${FFMPEG_ARGS[@]}"
 
   if [ "$INTRO_ACTIVE" -eq 1 ] && [ -n "$INTRO_SOURCE" ] && [ -n "$INTRO_OUTPUT_PATH" ]; then
     # REGION AI: intro render with resilient audio mapping
     local intro_audio_present=0
-    if ffprobe -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 "$INTRO_SOURCE" >/dev/null 2>&1; then
+    if ffprobe_exec -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 "$INTRO_SOURCE" >/dev/null 2>&1; then
       intro_audio_present=1
     fi
-    local intro_cmd=(
-      ffmpeg -y -hide_banner -loglevel warning -ignore_unknown
+    local intro_args=(
+      -y -hide_banner -loglevel warning -ignore_unknown
       -analyzeduration 200M -probesize 200M
       -t "$INTRO_DURATION" -i "$INTRO_SOURCE"
     )
     if [ "$intro_audio_present" -eq 0 ]; then
-      intro_cmd+=(-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -map 0:v:0 -map "1:a:0")
+      intro_args+=(-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -map 0:v:0 -map "1:a:0")
     else
-      intro_cmd+=(-map 0:v:0 -map "0:a:0?")
+      intro_args+=(-map 0:v:0 -map "0:a:0?")
     fi
 
-    intro_cmd+=(
+    intro_args+=(
       -vf "scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1,format=yuv420p"
       -r "$FPS" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$VIDEO_LEVEL" -crf "$CRF"
       -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2
       -af "aresample=${AUDIO_SR},apad,atrim=0:${INTRO_DURATION}" -movflags +faststart "$INTRO_OUTPUT_PATH"
     )
 
-    "${intro_cmd[@]}"
+    ffmpeg_exec "${intro_args[@]}"
     # END REGION AI
     CONCAT_LIST_FILE=$(mktemp "${OUTPUT_DIR}/.intro_concat_XXXXXX.txt")
     {
       printf "file '%s'\n" "$INTRO_OUTPUT_PATH"
       printf "file '%s'\n" "$ENCODE_TARGET"
     } > "$CONCAT_LIST_FILE"
-    ffmpeg -y -hide_banner -loglevel warning -f concat -safe 0 -i "$CONCAT_LIST_FILE" -c copy -movflags +faststart "$FINAL_OUT"
+    ffmpeg_exec -y -hide_banner -loglevel warning -f concat -safe 0 -i "$CONCAT_LIST_FILE" -c copy -movflags +faststart "$FINAL_OUT"
     rm -f "$CONCAT_LIST_FILE" "$INTRO_OUTPUT_PATH"
     rm -f "$ENCODE_TARGET"
     OUT="$FINAL_OUT"
@@ -2049,7 +1915,7 @@ EOF
   FILE_NAME="$(basename "$OUT")"
   local MEDIA_DURATION_RAW=""
   local MEDIA_DURATION_SEC=""
-  MEDIA_DURATION_RAW=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$OUT" 2>/dev/null || true)
+  MEDIA_DURATION_RAW=$(ffprobe_exec -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$OUT" 2>/dev/null || true)
   local PREVIEW_NAME=""
   local PREVIEW_PATH="${PREVIEW_DIR}/${FILE_STEM}.png"
   if [ -n "$MEDIA_DURATION_RAW" ] && [ "$MEDIA_DURATION_RAW" != "N/A" ]; then
@@ -2107,7 +1973,7 @@ EOF
     fi
   fi
 
-  if ffmpeg -y -hide_banner -loglevel error -ss "$preview_seek_value" -i "$OUT" -vframes 1 "$PREVIEW_PATH"; then
+  if ffmpeg_exec -y -hide_banner -loglevel error -ss "$preview_seek_value" -i "$OUT" -vframes 1 "$PREVIEW_PATH"; then
     if [ -s "$PREVIEW_PATH" ]; then
       PREVIEW_NAME="previews/${FILE_STEM}.png"
     else
@@ -2120,7 +1986,7 @@ EOF
   fi
   DURATION_RAW="$MEDIA_DURATION_RAW"
   if [ -z "$DURATION_RAW" ]; then
-    DURATION_RAW=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$OUT")
+    DURATION_RAW=$(ffprobe_exec -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$OUT")
   fi
   DURATION=$(awk -v d="$DURATION_RAW" 'BEGIN{if(d==""||d=="N/A") printf "0"; else printf "%.3f", d}')
   SIZE_BYTES=$(file_size_bytes "$OUT")
@@ -2172,9 +2038,9 @@ EOF
       [ -n "$combo_vf" ] && fallback_vf_extra="${fallback_vf_extra:+$fallback_vf_extra,}$combo_vf"
       [ -n "$combo_af" ] && fallback_af_extra="${fallback_af_extra:+$fallback_af_extra,}$combo_af"
       local fallback_vf_chain
-      fallback_vf_chain=$(compose_vf_chain "$base_vf" "${fallback_vf_extra:+$fallback_vf_extra,}hflip,vignette=PI/4:0.7,rotate=0.5*(PI/180):fillcolor=black")
+      fallback_vf_chain=$(creative_vignette_chain "$base_vf" "$fallback_vf_extra")
       fallback_vf_chain=$(ensure_vf_format "$fallback_vf_chain")
-      ffmpeg -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC" \
+      ffmpeg_exec -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC" \
         -t "$CLIP_DURATION" -c:v libx264 -preset medium -crf 24 \
         -vf "$fallback_vf_chain" \
         -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$(compose_af_chain "$base_af" "$fallback_af_extra")" -movflags +faststart "$OUT"
@@ -2194,7 +2060,7 @@ EOF
   echo "✅ done: $OUT"
 }
 
-[[ -z "${RUN_COMBOS[*]-}" ]] && generate_run_combos
+combo_engine_autofill
 for ((i=1;i<=COUNT;i++)); do
   generate_copy "$i" "$REGEN_ITER"
 done

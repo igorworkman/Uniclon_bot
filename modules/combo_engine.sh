@@ -2,6 +2,55 @@
 
 RUN_COMBO_POS=0
 
+_combo_escape_single_quotes() {
+  local value="$1"
+  value=${value//\'/\'"\'"\'}
+  printf '%s' "$value"
+}
+
+_combo_format_filter_arg() {
+  local arg="$1"
+  if [[ -z "$arg" ]]; then
+    printf '%q' ""
+    return
+  fi
+  if [[ ${arg:0:1} == "'" && ${arg: -1} == "'" ]]; then
+    printf '%s' "$arg"
+    return
+  fi
+  if [[ "$arg" == *"("* || "$arg" == *")"* ]]; then
+    local escaped
+    escaped=$(_combo_escape_single_quotes "$arg")
+    printf "'%s'" "$escaped"
+    return
+  fi
+  printf '%q' "$arg"
+}
+
+ffmpeg_command_preview() {
+  local -a args=("$@")
+  local preview
+  preview=$(printf '%q' ffmpeg)
+  local expect_filter=0
+  local idx arg formatted
+  for ((idx = 0; idx < ${#args[@]}; idx++)); do
+    arg="${args[$idx]}"
+    if (( expect_filter )); then
+      formatted=$(_combo_format_filter_arg "$arg")
+      expect_filter=0
+    else
+      formatted=$(printf '%q' "$arg")
+      case "$arg" in
+        -vf|-af|-filter_complex|-lavfi|-filter_complex_script)
+          expect_filter=1
+          ;;
+      esac
+    fi
+    preview+=" ${formatted}"
+  done
+  printf '%s' "$preview"
+}
+
 ensure_run_combos() {
   local total=${#RUN_COMBOS[@]:-0}
   [ "$RUN_COMBO_POS" -ge "$total" ] && total=0

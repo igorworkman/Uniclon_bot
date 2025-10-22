@@ -9,6 +9,24 @@ if ! declare -F safe_vf >/dev/null 2>&1; then
   unset _creative_utils_root
 fi
 
+safe_vf() {
+  local vf="$1"
+  if [[ -z "$vf" ]]; then
+    printf "''"
+    return
+  fi
+  if [[ ${vf:0:1} == "'" && ${vf: -1} == "'" ]]; then
+    printf '%s' "$vf"
+    return
+  fi
+  local escaped
+  # Экранируем кавычки и скобки, чтобы ffmpeg-фильтры с ( ) не ломали eval
+  escaped=${vf//\'/\'"\'"\'}
+  escaped=${escaped//(/\\(}
+  escaped=${escaped//)/\\)}
+  printf "'%s'" "$escaped"
+}
+
 creative_unwrap_vf() {
   local payload="$1"
   if [ -z "$payload" ]; then

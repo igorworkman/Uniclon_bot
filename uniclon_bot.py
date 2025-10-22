@@ -26,17 +26,11 @@ from aiohttp import ClientError
 load_dotenv()
 
 # REGION AI: local imports
-from config import BOT_TOKEN, BOT_API_BASE
+from config import BOT_TOKEN, BOT_API_BASE, CHECKS_DIR, OUTPUT_DIR
 
 
 BASE_DIR = Path(__file__).resolve().parent
-OUTPUT_DIR = Path("output")
-if not OUTPUT_DIR.is_absolute():
-    OUTPUT_DIR = (BASE_DIR / OUTPUT_DIR).resolve()
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("OUTPUT_DIR", str(OUTPUT_DIR))
-CHECKS_DIR = BASE_DIR / "checks"
-CHECKS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @dataclass

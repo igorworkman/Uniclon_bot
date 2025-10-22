@@ -2,11 +2,28 @@
 
 RUN_COMBO_POS=0
 
+# REGION AI: safe filter quoting
 _combo_escape_single_quotes() {
   local value="$1"
   value=${value//\'/\'"\'"\'}
   printf '%s' "$value"
 }
+
+safe_vf() {
+  local vf="$1"
+  if [[ -z "$vf" ]]; then
+    printf "''"
+    return
+  fi
+  if [[ ${vf:0:1} == "'" && ${vf: -1} == "'" ]]; then
+    printf '%s' "$vf"
+    return
+  fi
+  local escaped
+  escaped=$(_combo_escape_single_quotes "$vf")
+  printf "'%s'" "$escaped"
+}
+# END REGION AI
 
 _combo_format_filter_arg() {
   local arg="$1"
@@ -21,10 +38,9 @@ _combo_format_filter_arg() {
   if [[ "$arg" == *"("* || "$arg" == *")"* \
       || "$arg" == *"scale="* || "$arg" == *"crop="* \
       || "$arg" == *"rotate="* || "$arg" == *"hue="* \
-      || "$arg" == *"vignette="* || "$arg" == *"lut"* ]]; then
-    local escaped
-    escaped=$(_combo_escape_single_quotes "$arg")
-    printf "'%s'" "$escaped"
+      || "$arg" == *"vignette="* || "$arg" == *"lut"* \
+      || "$arg" == *"mirror"* ]]; then
+    printf '%s' "$(safe_vf "$arg")"
     return
   fi
   printf '%q' "$arg"

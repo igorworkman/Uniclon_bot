@@ -18,7 +18,10 @@ _combo_format_filter_arg() {
     printf '%s' "$arg"
     return
   fi
-  if [[ "$arg" == *"("* || "$arg" == *")"* ]]; then
+  if [[ "$arg" == *"("* || "$arg" == *")"* \
+      || "$arg" == *"scale="* || "$arg" == *"crop="* \
+      || "$arg" == *"rotate="* || "$arg" == *"hue="* \
+      || "$arg" == *"vignette="* || "$arg" == *"lut"* ]]; then
     local escaped
     escaped=$(_combo_escape_single_quotes "$arg")
     printf "'%s'" "$escaped"

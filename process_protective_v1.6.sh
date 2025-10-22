@@ -1819,6 +1819,7 @@ done
 report_builder_finalize
 
 report_template_statistics
+
 report_template_statistics() {
   [ -f "$MANIFEST_PATH" ] || return
   local stats
@@ -2630,6 +2631,8 @@ if [ "$REGEN_OCCURRED" -eq 1 ]; then
 fi
 
 report_template_statistics
+
+
 
 run_self_audit_pipeline() {
   local scripts=("collect_meta.sh" "quality_check.sh")

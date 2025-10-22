@@ -4,31 +4,14 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-# REGION AI: runtime logging helper
-log() {
-  local level="$1"
-  shift || true
-  printf '%s: %s\n' "$level" "$*"
-}
-# END REGION AI
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$BASE_DIR/bootstrap_compat.sh"
+bootstrap_init "${BASH_SOURCE[0]}"
 # REGION AI: runtime state arrays
 declare -a RUN_COMBOS=()
 declare -a RUN_COMBO_HISTORY RUN_FILES RUN_BITRATES RUN_FPS RUN_DURATIONS RUN_SIZES RUN_ENCODERS RUN_SOFTWARES RUN_CREATION_TIMES RUN_SEEDS RUN_TARGET_DURS RUN_TARGET_BRS RUN_PROFILES RUN_QT_MAKES RUN_QT_MODELS RUN_QT_SOFTWARES RUN_SSIM RUN_PSNR RUN_PHASH RUN_QPASS RUN_QUALITIES RUN_CREATIVE_MIRROR RUN_CREATIVE_INTRO RUN_CREATIVE_LUT RUN_PREVIEWS
 RUN_COMBO_HISTORY=()
 # END REGION AI
-
-BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CHECK_DIR="${BASE_DIR}/checks"
-LOW_UNIQUENESS_FLAG="${CHECK_DIR}/low_uniqueness.flag"
-
-# REGION AI: default output directories
-OUTPUT_DIR="${OUTPUT_DIR:-output}"
-PREVIEW_DIR="${PREVIEW_DIR:-${OUTPUT_DIR}/previews}"
-# END REGION AI
-
-mkdir -p "$CHECK_DIR"
-mkdir -p "$OUTPUT_DIR" "$PREVIEW_DIR"
-rm -f "$LOW_UNIQUENESS_FLAG"
 
 DEBUG=0
 MUSIC_VARIANT=0
@@ -41,65 +24,11 @@ ENABLE_MIRROR=${ENABLE_MIRROR:-0}
 ENABLE_INTRO=${ENABLE_INTRO:-0}
 ENABLE_LUT=${ENABLE_LUT:-0}
 DEVICE_INFO=1
-POSITIONAL=()
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --debug)
-      DEBUG=1
-      ;;
-    --music-variant)
-      MUSIC_VARIANT=1
-      ;;
-    --profile)
-      [ "${2:-}" ] || { echo "❌ --profile требует значение"; exit 1; }
-      PROFILE=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
-      shift
-      ;;
-    --qt-meta)
-      QT_META=1
-      ;;
-    --no-qt-meta)
-      QT_META=0
-      ;;
-    --strict-clean)
-      STRICT_CLEAN=1
-      QT_META=0
-      ;;
-    --quality)
-      [ "${2:-}" ] || { echo "❌ --quality требует значение"; exit 1; }
-      QUALITY=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
-      case "$QUALITY" in
-        high|std)
-          ;;
-        *)
-          echo "❌ Неизвестное качество: $2"
-          exit 1
-          ;;
-      esac
-      shift
-      ;;
-    --auto-clean)
-      AUTO_CLEAN=1
-      ;;
-    --mirror)
-      ENABLE_MIRROR=1
-      ;;
-    --intro)
-      ENABLE_INTRO=1
-      ;;
-    --lut)
-      ENABLE_LUT=1
-      ;;
-    --no-device-info)
-      DEVICE_INFO=0
-      ;;
-    *)
-      POSITIONAL+=("$1")
-      ;;
-  esac
-  shift
-done
-set -- "${POSITIONAL[@]}"
+DRY_RUN=${DRY_RUN:-0}
+if ! parse_args "$@"; then
+  exit 1
+fi
+set -- "${POSITIONAL_ARGS[@]}"
 
 # REGION AI: runtime fallback defaults
 : "${TARGET_DURATION:=0}"
@@ -132,7 +61,7 @@ apply_audio_fallback() {
 # END REGION AI
 
 PREVIEW_SS_FALLBACK="00:00:01.000"
-# Нормализованное значение времени превью вычисляется позже через normalize_ss_value
+# Нормализованное значение времени превью вычисляется позже через clip_start
 PREVIEW_SS_NORMALIZED=""
 
 if [ "$STRICT_CLEAN" -eq 1 ]; then
@@ -258,7 +187,7 @@ if [ -n "$SRC_BITRATE_RAW" ] && awk -v val="$SRC_BITRATE_RAW" 'BEGIN{val+=0; exi
   SRC_BITRATE=$(awk -v val="$SRC_BITRATE_RAW" 'BEGIN{printf "%.0f", val/1000}')
 fi
 
-mkdir -p "$OUTPUT_DIR"
+ensure_dir "$OUTPUT_DIR"
 
 cleanup_temp_artifacts() {
   local removed=0
@@ -290,6 +219,8 @@ cleanup_temp_artifacts() {
   if [ "$removed" -gt 0 ]; then
     echo "🧹 Auto-clean удалил временные файлы: $removed"
   fi
+
+  clear_temp "$TMP_ROOT"
 }
 
 
@@ -430,325 +361,16 @@ else
   fi
 fi
 
-# helpers
-deterministic_md5() {
-  if command -v md5 >/dev/null 2>&1; then
-    printf "%s" "$1" | md5 | tr -d ' \t\n' | tail -c 32
-  else
-    printf "%s" "$1" | md5sum | awk '{print $1}'
-  fi
-}
-
-RNG_HEX=""
-RNG_POS=0
 CURRENT_COPY_INDEX=0
-
-init_rng() {
-  RNG_HEX="$1"
-  RNG_POS=0
-}
-
-rng_next_chunk() {
-  if [ ${#RNG_HEX} -lt 4 ] || [ $((RNG_POS + 4)) -gt ${#RNG_HEX} ]; then
-    RNG_HEX="$(deterministic_md5 "${RNG_HEX}_${RNG_POS}")"
-    RNG_POS=0
-  fi
-  local chunk="${RNG_HEX:$RNG_POS:4}"
-  RNG_POS=$((RNG_POS + 4))
-  printf "%d" $((16#$chunk))
-}
-
-rand_int() {
-  if [ $# -lt 2 ]; then
-    printf "rand_int requires two arguments\n" >&2
-    return 1
-  fi
-
-  local A="$1"
-  local B="$2"
-  local span raw
-
-  span=$((B - A + 1))
-  raw=$(rng_next_chunk)
-  echo $((A + raw % span))
-}
-
-rand_choice() {
-  local arrname=$1[@]
-  local arr=("${!arrname}")
-  local idx=$(( $(rng_next_chunk) % ${#arr[@]} ))
-  echo "${arr[$idx]}"
-}
-
-rand_float() {
-  local MIN="$1" MAX="$2" SCALE="$3"
-  local raw=$(rng_next_chunk)
-  awk -v min="$MIN" -v max="$MAX" -v r="$raw" -v scale="$SCALE" 'BEGIN {s=r/65535; printf "%.*f", scale, min + s*(max-min)}'
-}
-
-rand_uint32() {
-  local hi=$(rng_next_chunk)
-  local lo=$(rng_next_chunk)
-  echo $(( (hi << 16) | lo ))
-}
-
+ 
 escape_single_quotes() {
   printf "%s" "$1" | sed "s/'/\\\\'/g"
 }
 
-ffmpeg_time_to_seconds() {
-  local raw="$1"
-  awk -v t="$raw" '
-    function fail(){ exit 1 }
-    BEGIN{
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
-      if (t == "" || t ~ /^-/) fail()
-      n=split(t, parts, ":")
-      if (n == 1) {
-        if (t !~ /^[0-9]+(\.[0-9]+)?$/) fail()
-        printf "%.6f", t + 0
-        exit 0
-      }
-      if (n < 2 || n > 3) fail()
-      total = 0
-      for (i = 1; i <= n; i++) {
-        if (parts[i] !~ /^[0-9]+(\.[0-9]+)?$/) fail()
-      }
-      if (n == 2) {
-        total = parts[1] * 60 + parts[2]
-      } else {
-        total = parts[1] * 3600 + parts[2] * 60 + parts[3]
-      }
-      printf "%.6f", total + 0
-    }'
-}
-
-normalize_ss_value() {
-  local raw="$1"
-  local fallback="$2"
-  local label="$3"
-  local context="$4"
-  local sanitized candidate final token_count=0
-
-  sanitized=$(printf '%s' "$raw" | tr -s '[:space:]' ' ')
-  sanitized=${sanitized# }
-  sanitized=${sanitized% }
-
-# REGION AI: tokenize ss candidate safely
-  if [ -n "$sanitized" ]; then
-    local old_ifs="$IFS"
-    local tokens=()
-    IFS=' '
-    read -r -a tokens <<<"$sanitized"
-    IFS="$old_ifs"
-    token_count=${#tokens[@]}
-    if [ $token_count -gt 0 ]; then
-      candidate="${tokens[0]}"
-    fi
-  fi
-# END REGION AI
-
-  local context_prefix=""
-  if [ -n "$context" ]; then
-    context_prefix="[$context] "
-  fi
-
-  if [ -z "$candidate" ]; then
-    echo "⚠️ ${context_prefix}Пустое значение ${label} для -ss, используется ${fallback}" >&2
-    final="$fallback"
-  else
-    if [ $token_count -gt 1 ]; then
-      echo "⚠️ ${context_prefix}Обнаружено несколько значений ${label} для -ss: '${sanitized}'. Используется '${candidate}'" >&2
-    fi
-    if ffmpeg_time_to_seconds "$candidate" >/dev/null 2>&1; then
-      final="$candidate"
-    else
-      echo "⚠️ ${context_prefix}Некорректное значение ${label} для -ss: '${candidate}', используется ${fallback}" >&2
-      final="$fallback"
-    fi
-  fi
-
-  if ! ffmpeg_time_to_seconds "$final" >/dev/null 2>&1; then
-    final="0.000"
-  fi
-
-  printf '%s' "$final"
-}
-
-# REGION AI: duration normalization helper
-normalize_duration_value() {
-  local raw="$1"
-  local fallback="$2"
-  local label="$3"
-  local context="$4"
-  local sanitized candidate final token_count=0
-  local fallback_value fallback_candidate="" fallback_seconds="" candidate_seconds=""
-
-  sanitized=$(printf '%s' "$raw" | tr -s '[:space:]' ' ')
-  sanitized=${sanitized# }
-  sanitized=${sanitized% }
-
-  if [ -n "$sanitized" ]; then
-    local old_ifs="$IFS"
-    local tokens=()
-    IFS=' '
-    read -r -a tokens <<<"$sanitized"
-    IFS="$old_ifs"
-    token_count=${#tokens[@]}
-    if [ $token_count -gt 0 ]; then
-      candidate="${tokens[0]}"
-    fi
-  fi
-
-  fallback_value=$(printf '%s' "$fallback" | tr -s '[:space:]' ' ')
-  fallback_value=${fallback_value# }
-  fallback_value=${fallback_value% }
-  if [ -n "$fallback_value" ]; then
-    local old_fallback_ifs="$IFS"
-    IFS=' '
-    read -r fallback_candidate _ <<<"$fallback_value"
-    IFS="$old_fallback_ifs"
-  fi
-  if ffmpeg_time_to_seconds "$fallback_candidate" >/dev/null 2>&1; then
-    fallback_seconds=$(ffmpeg_time_to_seconds "$fallback_candidate" 2>/dev/null || echo "")
-    if [ -z "$fallback_seconds" ] || ! awk -v v="$fallback_seconds" 'BEGIN{exit (v>0?0:1)}'; then
-      fallback_candidate="0.300"
-    fi
-  else
-    fallback_candidate="0.300"
-  fi
-
-  local context_prefix=""
-  if [ -n "$context" ]; then
-    context_prefix="[$context] "
-  fi
-
-  if [ -z "$candidate" ]; then
-    echo "⚠️ ${context_prefix}Пустое значение ${label} для -t, используется ${fallback_candidate}" >&2
-    final="$fallback_candidate"
-  else
-    if [ $token_count -gt 1 ]; then
-      echo "⚠️ ${context_prefix}Обнаружено несколько значений ${label} для -t: '${sanitized}'. Используется '${candidate}'" >&2
-    fi
-    if ffmpeg_time_to_seconds "$candidate" >/dev/null 2>&1; then
-      candidate_seconds=$(ffmpeg_time_to_seconds "$candidate" 2>/dev/null || echo "")
-      if [ -n "$candidate_seconds" ] && awk -v v="$candidate_seconds" 'BEGIN{exit (v>0?0:1)}'; then
-        final="$candidate"
-      else
-        echo "⚠️ ${context_prefix}Некорректная длительность ${label} для -t: '${candidate}', используется ${fallback_candidate}" >&2
-        final="$fallback_candidate"
-      fi
-    else
-      echo "⚠️ ${context_prefix}Некорректное значение ${label} для -t: '${candidate}', используется ${fallback_candidate}" >&2
-      final="$fallback_candidate"
-    fi
-  fi
-
-  if ! ffmpeg_time_to_seconds "$final" >/dev/null 2>&1; then
-    final="$fallback_candidate"
-  fi
-
-  printf '%s' "$final"
-}
-# END REGION AI
-
-PREVIEW_SS_NORMALIZED=$(normalize_ss_value "$PREVIEW_SS" "$PREVIEW_SS_FALLBACK" "preview_ss" "init")
+PREVIEW_SS_NORMALIZED=$(clip_start "$PREVIEW_SS" "$PREVIEW_SS_FALLBACK" "preview_ss" "init")
 if [ -z "$PREVIEW_SS_NORMALIZED" ]; then
   PREVIEW_SS_NORMALIZED="$PREVIEW_SS_FALLBACK"
 fi
-
-iso_to_epoch() {
-  local iso="$1"
-  if date_supports_d_flag; then
-    date -u -d "$iso" +%s
-  else
-    date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$iso" +%s
-  fi
-}
-
-epoch_to_iso() {
-  local epoch="$1"
-  if date_supports_d_flag; then
-    date -u -d "@$epoch" +"%Y-%m-%dT%H:%M:%SZ"
-  else
-    date -u -r "$epoch" +"%Y-%m-%dT%H:%M:%SZ"
-  fi
-}
-
-jitter_iso_timestamp() {
-  local iso="$1"
-  local minutes=$(rand_int 1 5)
-  local seconds=$((minutes * 60))
-  if [ "$(rand_int 0 1)" -eq 0 ]; then
-    seconds=$(( -seconds ))
-  fi
-  local epoch
-  epoch=$(iso_to_epoch "$iso")
-  epoch=$((epoch + seconds))
-  epoch_to_iso "$epoch"
-}
-
-file_size_bytes() {
-  local size
-  if size=$(stat -c %s "$1" 2>/dev/null); then
-    echo "$size"
-  else
-    stat -f %z "$1"
-  fi
-}
-
-date_supports_d_flag() {
-  date -u -d "1970-01-01" >/dev/null 2>&1
-}
-
-generate_iso_timestamp() {
-  local days_ago seconds_offset
-  days_ago=$(rand_int 3 14)
-  seconds_offset=$(rand_int 0 86399)
-  if date_supports_d_flag; then
-    date -u -d "${days_ago} days ago + ${seconds_offset} seconds" +"%Y-%m-%dT%H:%M:%SZ"
-  else
-    date -u -v -"${days_ago}"d -v +"${seconds_offset}"S +"%Y-%m-%dT%H:%M:%SZ"
-  fi
-}
-
-date_supports_v_flag() {
-  date -v-1d +%Y >/dev/null 2>&1
-}
-
-format_past_timestamp() {
-  local fmt="$1"
-  local days="$2"
-  local hours="$3"
-  local minutes="$4"
-  local seconds="$5"
-
-  if date_supports_v_flag; then
-    date -v-"${days}"d -v-"${hours}"H -v-"${minutes}"M -v-"${seconds}"S +"$fmt"
-    return
-  fi
-
-  if date_supports_d_flag; then
-    local spec="-${days} days -${hours} hours -${minutes} minutes -${seconds} seconds"
-    date -u -d "$spec" +"$fmt"
-    return
-  fi
-
-  PY_FMT="$fmt" PY_DAYS="$days" PY_HOURS="$hours" PY_MINUTES="$minutes" PY_SECONDS="$seconds" python3 - <<'PY'
-import datetime
-import os
-
-fmt = os.environ['PY_FMT']
-days = int(os.environ['PY_DAYS'])
-hours = int(os.environ['PY_HOURS'])
-minutes = int(os.environ['PY_MINUTES'])
-seconds = int(os.environ['PY_SECONDS'])
-dt = datetime.datetime.utcnow() - datetime.timedelta(
-    days=days, hours=hours, minutes=minutes, seconds=seconds
-)
-print(dt.strftime(fmt))
-PY
-}
 
 prepare_output_name() {
   while :; do
@@ -770,20 +392,6 @@ prepare_output_name() {
   done
   FILE_STEM="${OUT_NAME%.*}"
   FILE_EXT="${OUT_NAME##*.}"
-}
-
-touch_randomize_mtime() {
-  local target="$1"
-  [ -f "$target" ] || return
-  local days hours minutes seconds touch_stamp
-  days=$(rand_int 2 9)
-  hours=$(rand_int 0 23)
-  minutes=$(rand_int 0 59)
-  seconds=$(rand_int 0 59)
-  touch_stamp=$(format_past_timestamp "%Y%m%d%H%M.%S" "$days" "$hours" "$minutes" "$seconds")
-  if [ -n "$touch_stamp" ]; then
-    touch -t "$touch_stamp" "$target" 2>/dev/null || true
-  fi
 }
 
 rand_description() {
@@ -1982,9 +1590,9 @@ EOF
     local clip_duration_fallback="$TARGET_DURATION"
     compute_clip_window "$TARGET_DURATION"
 # REGION AI: sanitize clip window timings
-    CLIP_DURATION=$(normalize_duration_value "$CLIP_DURATION" "$clip_duration_fallback" "clip_duration" "copy ${copy_index}")
+    CLIP_DURATION=$(duration "$CLIP_DURATION" "$clip_duration_fallback" "clip_duration" "copy ${copy_index}")
     TARGET_DURATION="$CLIP_DURATION"
-    CLIP_START=$(normalize_ss_value "$CLIP_START" "0.000" "clip_start" "copy ${copy_index}")
+    CLIP_START=$(clip_start "$CLIP_START" "0.000" "clip_start" "copy ${copy_index}")
     [ -n "$CSHIFT" ] && CLIP_START=$(awk -v s="${CLIP_START:-0}" -v d="$CSHIFT" -v l="$clip_duration_fallback" 'BEGIN{s+=0;d+=0;l+=0;v=s+d;if(v<0)v=0;if(l>0 && v>l-0.2)v=l-0.2;if(v<0)v=0;printf "%.3f",v}')
 # END REGION AI
 

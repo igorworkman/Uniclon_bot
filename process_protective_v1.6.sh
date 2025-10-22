@@ -7,6 +7,20 @@ IFS=$'\n\t'
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$BASE_DIR/bootstrap_compat.sh"
 bootstrap_init "${BASH_SOURCE[0]}"
+
+MODULES_DIR="${BASE_DIR}/modules"
+# shellcheck source=modules/combo_engine.sh
+source "${MODULES_DIR}/combo_engine.sh"
+# shellcheck source=modules/creative_utils.sh
+source "${MODULES_DIR}/creative_utils.sh"
+# shellcheck source=modules/ffmpeg_driver.sh
+source "${MODULES_DIR}/ffmpeg_driver.sh"
+# shellcheck source=modules/audio_utils.sh
+source "${MODULES_DIR}/audio_utils.sh"
+# shellcheck source=modules/time_utils.sh
+source "${MODULES_DIR}/time_utils.sh"
+
+echo "[INIT] Modular mode active — legacy blocks disabled"
 # REGION AI: runtime state arrays
 declare -a RUN_COMBOS=()
 declare -a RUN_COMBO_HISTORY RUN_FILES RUN_BITRATES RUN_FPS RUN_DURATIONS RUN_SIZES RUN_ENCODERS RUN_SOFTWARES RUN_CREATION_TIMES RUN_SEEDS RUN_TARGET_DURS RUN_TARGET_BRS RUN_PROFILES RUN_QT_MAKES RUN_QT_MODELS RUN_QT_SOFTWARES RUN_SSIM RUN_PSNR RUN_PHASH RUN_UNIQ RUN_QPASS RUN_QUALITIES RUN_CREATIVE_MIRROR RUN_CREATIVE_INTRO RUN_CREATIVE_LUT RUN_PREVIEWS
@@ -683,10 +697,6 @@ pick_software_encoder() {
   done
 }
 
-ensure_run_combos(){ local total=${#RUN_COMBOS[@]:-0};[ "$RUN_COMBO_POS" -ge "$total" ] && total=0;[ "$total" -ge 8 ] && return;RUN_COMBOS=("CFPS=30 CNOISE=1 CMIRROR=hflip CAUDIO=asetrate CBR=1.12 CSHIFT=0.07 CSOFT=VN CLEVEL=4.0" "CFPS=60 CNOISE=0 CMIRROR=none CAUDIO=resample CBR=0.88 CSHIFT=-0.05 CSOFT=CapCut CLEVEL=4.2" "CFPS=30 CNOISE=0 CMIRROR=vflip CAUDIO=jitter CBR=1.10 CSHIFT=0.09 CSOFT=LumaFusion CLEVEL=4.0" "CFPS=24 CNOISE=1 CMIRROR=none CAUDIO=asetrate CBR=0.90 CSHIFT=-0.08 CSOFT=CapCut CLEVEL=4.0" "CFPS=25 CNOISE=0 CMIRROR=hflip CAUDIO=resample CBR=1.15 CSHIFT=0.06 CSOFT=VN CLEVEL=4.2" "CFPS=30 CNOISE=1 CMIRROR=none CAUDIO=jitter CBR=0.85 CSHIFT=-0.10 CSOFT=LumaFusion CLEVEL=4.0" "CFPS=60 CNOISE=1 CMIRROR=none CAUDIO=asetrate CBR=1.13 CSHIFT=0.12 CSOFT=CapCut CLEVEL=4.2" "CFPS=30 CNOISE=0 CMIRROR=none CAUDIO=resample CBR=0.87 CSHIFT=-0.07 CSOFT=VN CLEVEL=4.0");RUN_COMBO_POS=0;}
-
-next_regen_combo(){ ensure_run_combos;if [ "$RUN_COMBO_POS" -lt "${#RUN_COMBOS[@]}" ]; then printf '%s' "${RUN_COMBOS[$RUN_COMBO_POS]}";RUN_COMBO_POS=$((RUN_COMBO_POS+1));else printf '';fi;}
-
 REGEN_ITER=0
 REGEN_OCCURRED=0
 LOW_UNIQUENESS_TRIGGERED=0
@@ -1009,25 +1019,6 @@ report_template_statistics() {
 
 # REGION AI: uniqueness combo orchestration
 # (moved to modules/combo_engine.sh)
-compose_af_chain(){
-# REGION AI: compose audio chain with filter fallback
-  local base="$1" extra="$2"
-  base="$(apply_audio_fallback "$base")"
-  extra="$(apply_audio_fallback "$extra")"
-  if [ -z "$extra" ]; then
-    printf '%s' "$base"
-    return
-  fi
-  if [ -z "$base" ]; then
-    printf '%s' "$extra"
-    return
-  fi
-  printf '%s,%s' "$extra" "$base"
-# END REGION AI
-}
-auto_expand_run_combos(){ local total=${#RUN_PHASH[@]}; [ "$total" -lt 3 ] && return; [ "${#RUN_COMBOS[@]}" -ge 16 ] && return; local sum=0 count=0 idx; for idx in "${RUN_PHASH[@]}"; do [ -z "$idx" ] || [ "$idx" = "NA" ] || [ "$idx" = "N/A" ] || [ "$idx" = "None" ] && continue; sum=$(awk -v acc="$sum" -v val="$idx" 'BEGIN{acc+=0;val+=0;printf "%.6f",acc+val}'); count=$((count+1)); done; [ "$count" -lt 3 ] && return; local avg=$(awk -v acc="$sum" -v c="$count" 'BEGIN{if(c<=0){print 0}else{printf "%.3f",acc/c}}'); awk -v a="$avg" 'BEGIN{exit (a<5?0:1)}' || return; local new_combo=$(generate_dynamic_combo); [ -z "$new_combo" ] && return; RUN_COMBOS+=("$new_combo"); local CUR_COMBO_LABEL="" CUR_VF_EXTRA="" CUR_AF_EXTRA="" CFPS="" CNOISE="" CMIRROR="" CAUDIO="" CSHIFT="" CBR="" CSOFT="" CLEVEL=""; eval "$new_combo"; local label="${CUR_COMBO_LABEL:-auto}"; echo "[Strategy] Auto-added combo → ${label}"; }
-# END REGION AI
-
 generate_copy() {
   local copy_index="$1"
   local regen_tag="${2:-0}"
@@ -1823,46 +1814,6 @@ done
 report_builder_finalize
 
 report_template_statistics
-
-report_template_statistics() {
-  [ -f "$MANIFEST_PATH" ] || return
-  local stats
-  stats=$(awk -F',' 'NR>1 && NF>=4 {key=$3"|"$2"|"$4; count[key]++} END{for(k in count) if(count[k]>1) printf "%s %d\n",k,count[k];}' "$MANIFEST_PATH")
-  if [ -z "$stats" ]; then
-    echo "ℹ️ Совпадений шаблонов не обнаружено"
-    return
-  fi
-  echo "ℹ️ Статистика совпадений manifest:"
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    local count="${line##* }"
-    local combo="${line% $count}"
-    local IFS='|'
-    read -r fps_val br_val dur_val <<<"$combo"
-    echo "ℹ️ Повтор: fps=$fps_val bitrate=$br_val duration=$dur_val — ${count} копий"
-  done <<<"$stats"
-}
-
-# REGION AI: uniqueness combo orchestration
-# (moved to modules/combo_engine.sh)
-compose_af_chain(){
-# REGION AI: compose audio chain with filter fallback
-  local base="$1" extra="$2"
-  base="$(apply_audio_fallback "$base")"
-  extra="$(apply_audio_fallback "$extra")"
-  if [ -z "$extra" ]; then
-    printf '%s' "$base"
-    return
-  fi
-  if [ -z "$base" ]; then
-    printf '%s' "$extra"
-    return
-  fi
-  printf '%s,%s' "$extra" "$base"
-# END REGION AI
-}
-auto_expand_run_combos(){ local total=${#RUN_PHASH[@]}; [ "$total" -lt 3 ] && return; [ "${#RUN_COMBOS[@]}" -ge 16 ] && return; local sum=0 count=0 idx; for idx in "${RUN_PHASH[@]}"; do [ -z "$idx" ] || [ "$idx" = "NA" ] || [ "$idx" = "N/A" ] || [ "$idx" = "None" ] && continue; sum=$(awk -v acc="$sum" -v val="$idx" 'BEGIN{acc+=0;val+=0;printf "%.6f",acc+val}'); count=$((count+1)); done; [ "$count" -lt 3 ] && return; local avg=$(awk -v acc="$sum" -v c="$count" 'BEGIN{if(c<=0){print 0}else{printf "%.3f",acc/c}}'); awk -v a="$avg" 'BEGIN{exit (a<5?0:1)}' || return; local new_combo=$(generate_dynamic_combo); [ -z "$new_combo" ] && return; RUN_COMBOS+=("$new_combo"); local CUR_COMBO_LABEL="" CUR_VF_EXTRA="" CUR_AF_EXTRA="" CFPS="" CNOISE="" CMIRROR="" CAUDIO="" CSHIFT="" CBR="" CSOFT="" CLEVEL=""; eval "$new_combo"; local label="${CUR_COMBO_LABEL:-auto}"; echo "[Strategy] Auto-added combo → ${label}"; }
-# END REGION AI
 
 generate_copy() {
   local copy_index="$1"

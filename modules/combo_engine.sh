@@ -21,6 +21,8 @@ safe_vf() {
   fi
   local escaped
   escaped=$(_combo_escape_single_quotes "$vf")
+  escaped=${escaped//(/\\(}
+  escaped=${escaped//)/\\)}
   printf "'%s'" "$escaped"
 }
 # END REGION AI
@@ -159,7 +161,7 @@ auto_expand_run_combos() {
 }
 
 generate_run_combos() {
-  RUN_COMBOS=(
+  local -a predefined=(
     "CUR_COMBO_LABEL='fps24_eq_boost' CFPS=30 CNOISE=1 CMIRROR=hflip CAUDIO=asetrate CBR=1.12 CSHIFT=0.07 CSOFT=VN CLEVEL=4.0 CUR_VF_EXTRA=\\\"fps=24,eq=brightness=0.03:contrast=1.02\\\" CUR_AF_EXTRA=\\\"acompressor=threshold=-16dB:ratio=2.4,aresample=44100\\\""
     "CUR_COMBO_LABEL='vflip_curves' CFPS=60 CNOISE=0 CMIRROR=vflip CAUDIO=resample CBR=0.88 CSHIFT=-0.05 CSOFT=CapCut CLEVEL=4.2 CUR_VF_EXTRA=\\\"vflip,curves=preset=strong_contrast\\\" CUR_AF_EXTRA=\\\"apulsator=mode=sine:freq=0.8,atempo=0.99\\\""
     "CUR_COMBO_LABEL='crop_rotate' CFPS=30 CNOISE=0 CMIRROR=none CAUDIO=jitter CBR=1.10 CSHIFT=0.09 CSOFT=LumaFusion CLEVEL=4.0 CUR_VF_EXTRA=\\\"crop=in_w-20:in_h-20,rotate=0.5*(PI/180):fillcolor=black\\\" CUR_AF_EXTRA=\\\"atempo=1.02,treble=g=1.5\\\""
@@ -171,6 +173,16 @@ generate_run_combos() {
     "CUR_COMBO_LABEL='curves_light' CFPS=30 CNOISE=1 CMIRROR=vflip CAUDIO=jitter CBR=1.05 CSHIFT=0.04 CSOFT=VN CLEVEL=4.0 CUR_VF_EXTRA=\\\"curves=preset=lighter\\\" CUR_AF_EXTRA=\\\"superequalizer=1b=0.8:2b=0.4:3b=0.1:4b=-0.2:5b=-0.4\\\""
     "CUR_COMBO_LABEL='hue_noise' CFPS=24 CNOISE=0 CMIRROR=none CAUDIO=asetrate CBR=0.95 CSHIFT=-0.03 CSOFT=CapCut CLEVEL=4.0 CUR_VF_EXTRA=\\\"hue=s=0.95,noise=alls=3:allf=t\\\" CUR_AF_EXTRA=\\\"aecho=0.7:0.4:30:0.6\\\""
   )
+  RUN_COMBOS=()
+  local combo vf vf_escaped
+  for combo in "${predefined[@]}"; do
+    if [[ $combo =~ CUR_VF_EXTRA="([^"]*)" ]]; then
+      vf="${BASH_REMATCH[1]}"
+      vf_escaped=$(safe_vf "$vf")
+      combo="${combo/CUR_VF_EXTRA=\"${vf}\"/CUR_VF_EXTRA=\"${vf_escaped}\"}"
+    fi
+    RUN_COMBOS+=("$combo")
+  done
   RUN_COMBO_POS=0
 }
 

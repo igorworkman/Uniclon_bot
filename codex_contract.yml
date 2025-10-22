@@ -37,6 +37,23 @@ modules:
       - normalize_duration_value
       - normalize_ss_value
       - timestamp_offset
+    fallback_manager.sh:
+      - fallback_can_retry
+      - fallback_low_uniqueness
+      - fallback_should_similarity_regen
+      - fallback_try_regen_quality
+    manifest.sh:
+      - manifest_init
+      - manifest_write_entry
+      - write_manifest
+    metrics.sh:
+      - metrics_compute_copy_metrics
+      - metrics_compute_phash_diff
+    report_builder.sh:
+      - build_report
+      - report_builder_finalize
+      - report_builder_register_copy
+      - report_builder_reset
   utils:
     helpers.sh:
       - clamp

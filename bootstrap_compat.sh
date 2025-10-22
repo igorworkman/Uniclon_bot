@@ -12,3 +12,11 @@ bootstrap_init() {
 uuid_gen_short() {
   uuid_gen | cut -c1-8
 }
+
+build_report() {
+  report_builder_finalize "$@"
+}
+
+write_manifest() {
+  manifest_write_entry "$@"
+}

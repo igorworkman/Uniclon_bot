@@ -2,6 +2,7 @@
 import asyncio
 import csv
 import logging
+import os
 import shlex
 import time
 from datetime import datetime
@@ -25,10 +26,15 @@ from aiohttp import ClientError
 load_dotenv()
 
 # REGION AI: local imports
-from config import BOT_TOKEN, BOT_API_BASE, OUTPUT_DIR
+from config import BOT_TOKEN, BOT_API_BASE
 
 
 BASE_DIR = Path(__file__).resolve().parent
+OUTPUT_DIR = Path("output")
+if not OUTPUT_DIR.is_absolute():
+    OUTPUT_DIR = (BASE_DIR / OUTPUT_DIR).resolve()
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("OUTPUT_DIR", str(OUTPUT_DIR))
 CHECKS_DIR = BASE_DIR / "checks"
 CHECKS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -62,11 +68,15 @@ async def run_shell(command: str, *, cwd: Optional[Path] = None) -> Tuple[int, s
     """Run shell command and capture output without raising on non-zero exit."""
 
     logger = logging.getLogger("uniclon.audit")
+    env = os.environ.copy()
+    env.setdefault("OUTPUT_DIR", str(OUTPUT_DIR))
+
     proc = await asyncio.create_subprocess_shell(
         command,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         cwd=str(cwd) if cwd else None,
+        env=env,
     )
 
     output_parts: List[str] = []

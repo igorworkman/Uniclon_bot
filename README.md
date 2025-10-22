@@ -1,61 +1,121 @@
-# Mini Video Uniquizer (macOS/Linux)
+# 🧬 Uniclon — Интеллектуальный видеоуникализатор нового поколения
 
-Fast starter kit to build your own *video uniquizer* without a bot.  
-**Pipeline**: emulate bot-like transform → strip metadata → controlled transcode → subtle visual/audio tweaks → dynamic watermark → manifest.
+Uniclon — это автономный Telegram-бот и CLI-инструмент для продвинутой уникализации видео.
+Он создан как ответ на современные антидубликатные алгоритмы TikTok, Instagram (Meta) и других платформ.
 
-> ⚠️ Use only on content you have rights to distribute. No script can guarantee 100% immunity from takedowns/complaints.
+🎯 **Миссия проекта:** сделать видео *технически уникальным* и правдоподобным, чтобы оно воспринималось платформами как оригинальное, а не как копия.
 
-## Quick Start (macOS)
+---
 
-1. Install FFmpeg (if not installed):
-   ```bash
-   brew install ffmpeg
-   ```
-2. Unzip this kit and `cd` into the folder.
-3. Make scripts executable:
-   ```bash
-   chmod +x process_protective.sh check_quality.sh run.sh
-   ```
-4. Drop your `.mp4`/`.mov` files into this folder.
-5. Run **batch**:
-   ```bash
-   ./run.sh
-   ```
-   or process one file:
-   ```bash
-   ./process_protective.sh input.mov
-   ```
-6. Outputs: `*_final.mp4` + `manifest.csv`.  
-   Optional quality check (if you also have `*_bot.*` pairs):
-   ```bash
-   ./check_quality.sh
-   ```
+## 🧠 Почему появился Uniclon
 
-## Tuning Quality
-Open `process_protective.sh` and adjust:
-- `TARGET_BITRATE="3000k"` → raise to `3500k`/`4000k` for higher quality.
-- `NOISE_LEVEL=1` → keep small to avoid visible artifacts.
-- `RANDOM_CROP_PX=2..4` → micro-crop/pad to alter pixel layout.
-- `WATERMARK_OPACITY=0.08..0.12` → nearly invisible UID tag.
+В 2024–2025 годах TikTok и Meta усилили анализ загружаемого видео.  
+Их системы проверяют:
+- EXIF и metadata (модель камеры, encoder, creation_time, software tag),
+- битрейт и кодек-профиль,
+- шаблоны совпадений по hash и pHash,
+- признаки массового репоста (идентичные файлы, таймштампы, software tags),
+- доверенные источники (видео из TikTok / CapCut получают приоритет).
 
-## Parallel Batch (Python)
-`process_cli.py` runs multiple files in parallel:
+🎯 Uniclon создавался именно как решение для **контент-мейкеров, агентств и автоматизированных сетей**, которым нужно:
+- масштабно постить видео без банов за дубликаты;
+- сохранять естественный вид файлов;
+- менять технические отпечатки: bitrate, resolution, duration, EXIF и “software tags”.
+
+---
+
+## ⚙️ Ключевые особенности Uniclon
+
+- 🧩 **Модульная система (v1.6+)**  
+  Каждая стадия обработки — отдельный модуль (`modules/*.sh`), отвечающий за фильтры, метаданные, отчётность и fallback-логику.
+
+- 🎛 **RUN_COMBOS Engine**  
+  Генератор динамических комбинаций фильтров, создающий уникальные визуальные и аудио-профили при каждом запуске.
+
+- 🧠 **Content & Metadata Shield**  
+  Имитация реальных EXIF-тегов, случайное варьирование битрейта, encoder-тегов и временных меток.
+
+- 🎬 **Безупречная ffmpeg-интеграция**  
+  Модуль `combo_engine.sh` внедряет безопасное экранирование фильтров (`safe_vf`, `safe_eval`), предотвращая ошибки при сложных выражениях.
+
+- 📊 **Метрики и отчётность**  
+  После каждого рендера формируются:
+  - `SSIM`, `PSNR`, `pHash`, `UniqScore`
+  - HTML/JSON отчёты (`report_builder.sh`)
+
+- 🔒 **Локальная безопасность**  
+  Все операции выполняются локально — видео не покидает вашу машину.
+
+---
+
+## 📂 Архитектура проекта (v1.6 Modular Split)
+
+```
+Uniclon_bot/
+├── bot.py
+├── executor.py
+├── handlers.py
+├── process_protective_v1.6.sh
+├── modules/
+│   ├── core_init.sh
+│   ├── rng_utils.sh
+│   ├── time_utils.sh
+│   ├── file_ops.sh
+│   ├── ffmpeg_driver.sh
+│   ├── audio_utils.sh
+│   ├── creative_utils.sh
+│   ├── combo_engine.sh
+│   ├── metrics.sh
+│   ├── manifest.sh
+│   ├── report_builder.sh
+│   └── fallback_manager.sh
+├── utils/
+│   ├── logger.sh
+│   ├── helpers.sh
+│   ├── safe_exec.sh
+├── tools/
+│   ├── verify_modular_env.sh
+│   ├── uniclon_audit.sh
+│   └── verify_report.log
+└── codex/
+    ├── codex_rules.md
+    └── codex_contract.yml
+```
+
+---
+
+## 🧬 Технологии и подходы
+
+- **ffmpeg advanced pipelines** — модульная сборка фильтров и постобработки  
+- **AI-driven combo generator** — динамический подбор фильтров и параметров  
+- **Metadata faker** — создание правдоподобных EXIF/Software-тегов  
+- **C2PA-bypass layer** — имитация нативных источников контента  
+- **pHash rotation** — контроль перцептивных хэшей и уровня схожести
+
+---
+
+## 🚀 Почему Uniclon — лучший уникализатор видео 2025 года
+
+Uniclon — не просто скрипт. Это инженерная экосистема, которая соединяет
+машинную уникализацию, мета-анализ и ffmpeg-оптимизацию в единый поток.
+
+💡 Он делает именно то, чего ждёт алгоритм TikTok — *естественное отличие*:
+новые кадры, уникальные теги, корректный кодек, реалистичные метаданные.
+
+🧠 **Каждый рендер — новая цифровая личность видео.**
+
+---
+
+## 🛠 Запуск
+
 ```bash
-python3 process_cli.py --jobs 4
+python3 uniclon_bot.py
+# или CLI-режим:
+./process_protective_v1.6.sh input.mp4 3
 ```
 
-## Optional: Docker (build locally)
-This is a minimal example; ensure your base image has ffmpeg.
-```
-FROM ubuntu:22.04
-RUN apt-get update && apt-get install -y ffmpeg python3 && rm -rf /var/lib/apt/lists/*
-WORKDIR /app
-COPY . /app
-RUN chmod +x process_protective.sh check_quality.sh run.sh
-CMD ["bash", "-lc", "./run.sh"]
-```
+---
 
-## Notes
-- The pipeline **does not** bypass legal rights or platform ToS.
-- Advanced platforms may still detect content via audio/visual fingerprints or human review.
-- For large-scale ops, rotate parameters (FPS, noise, crop), keep `manifest.csv`, and test small batches first (SSIM/PSNR).
+## 📜 Лицензия
+
+© 2025 Uniclon Labs. Все права защищены.

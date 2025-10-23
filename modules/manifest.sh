@@ -192,10 +192,13 @@ write_manifest() {
 
 # REGION AI: fallback CUR_VF_EXTRA quoting fix
 manifest__fallback_vf_extra() {
-  local CUR_VF_EXTRA="fps=24,eq=brightness=0.03:contrast=1.02"
-  local CUR_VF_EXTRA_SAFE="${CUR_VF_EXTRA//(/\(}"
-  CUR_VF_EXTRA_SAFE="${CUR_VF_EXTRA_SAFE//)/\)}"
-  CUR_VF_EXTRA="$CUR_VF_EXTRA_SAFE"
+  local CUR_VF_EXTRA="${1:-fps=24,eq=brightness=0.03:contrast=1.02}"
+  if [[ ${CUR_VF_EXTRA:0:1} == "'" && ${CUR_VF_EXTRA: -1} == "'" && ${#CUR_VF_EXTRA} -ge 2 ]]; then
+    CUR_VF_EXTRA="${CUR_VF_EXTRA:1:${#CUR_VF_EXTRA}-2}"
+  fi
+  CUR_VF_EXTRA="${CUR_VF_EXTRA//\'"\'"\'/\'}"
+  CUR_VF_EXTRA="${CUR_VF_EXTRA//(/\(}"
+  CUR_VF_EXTRA="${CUR_VF_EXTRA//)/\)}"
   printf '%s' "$CUR_VF_EXTRA"
 }
 # END REGION AI

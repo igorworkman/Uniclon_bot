@@ -47,7 +47,15 @@ apply_combo_context() {
     if [[ -n "$_combo_value" && ${_combo_value:0:1} == '"' && ${_combo_value: -1} == '"' ]]; then
       _combo_value="${_combo_value:1:${#_combo_value}-2}"
       printf -v "$_combo_field" '%s' "$_combo_value"
+      continue
     fi
+    if [ "$_combo_field" = "CUR_VF_EXTRA" ] && [ -n "$_combo_value" ] && \
+       declare -F manifest__fallback_vf_extra >/dev/null 2>&1; then
+      _combo_value="$(manifest__fallback_vf_extra "$_combo_value")"
+      printf -v "$_combo_field" '%s' "$_combo_value"
+      continue
+    fi
+    printf -v "$_combo_field" '%s' "$_combo_value"
   done
   return 0
 }

@@ -276,7 +276,7 @@ auto_expand_run_combos() {
 
 generate_run_combos() {
   local -a predefined=(
-    "CUR_COMBO_LABEL='fps24_eq_boost' CFPS=30 CNOISE=1 CMIRROR=hflip CAUDIO=asetrate CBR=1.12 CSHIFT=0.07 CSOFT=VN CLEVEL=4.0 CUR_VF_EXTRA=\\\"fps=24,eq=brightness=0.03:contrast=1.02\\\" CUR_AF_EXTRA=\"acompressor=threshold=-16dB:ratio=2.4,aresample=44100\""
+    "CUR_COMBO_LABEL='fps24_eq_boost' CFPS=30 CNOISE=1 CMIRROR=hflip CAUDIO=asetrate CBR=1.12 CSHIFT=0.07 CSOFT=VN CLEVEL=4.0 CUR_VF_EXTRA=\"fps=24,eq=brightness=0.03:contrast=1.02\" CUR_AF_EXTRA=\"acompressor=threshold=-16dB:ratio=2.4,aresample=44100\""
     "CUR_COMBO_LABEL='vflip_curves' CFPS=60 CNOISE=0 CMIRROR=vflip CAUDIO=resample CBR=0.88 CSHIFT=-0.05 CSOFT=CapCut CLEVEL=4.2 CUR_VF_EXTRA=\\\"vflip,curves=preset=strong_contrast\\\" CUR_AF_EXTRA=\"apulsator=mode=sine:freq=0.8,atempo=0.99\""
     "CUR_COMBO_LABEL='crop_rotate' CFPS=30 CNOISE=0 CMIRROR=none CAUDIO=jitter CBR=1.10 CSHIFT=0.09 CSOFT=LumaFusion CLEVEL=4.0 CUR_VF_EXTRA=\"crop=in_w-20:in_h-20,rotate=0.5*(PI/180):fillcolor=black\" CUR_AF_EXTRA=\"atempo=1.02,treble=g=1.5\""
     "CUR_COMBO_LABEL='hflip_noise' CFPS=24 CNOISE=1 CMIRROR=hflip CAUDIO=asetrate CBR=0.90 CSHIFT=-0.08 CSOFT=CapCut CLEVEL=4.0 CUR_VF_EXTRA=\\\"hflip,noise=alls=5:allf=t+u\\\" CUR_AF_EXTRA=\"acompressor=threshold=-20dB:ratio=3.0,lowpass=f=12000\""

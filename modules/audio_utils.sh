@@ -48,14 +48,32 @@ BEGIN {
 ')
     AUDIO_PROFILE="${AUDIO_PROFILE}+tempo"
   fi
+  # fix: ensure tempo filters keep numeric defaults
+  # REGION AI: guard tempo fallbacks
   tempo_target=$(awk -v t="${tempo_target:-}" 'BEGIN{
-    if (t == "" || t+0 <= 0) { printf "%.6g", 1.0 } else { printf "%.6g", t+0 }
+    if (t == "" || t + 0 <= 0) {
+      printf "%.6f", 1.0;
+    } else {
+      printf "%.6f", t + 0;
+    }
   }')
+  # END REGION AI
   local safe_volume=$(rand_float 0.980 1.000 4)
   safe_volume=$(awk -v v="$safe_volume" 'BEGIN{printf "%.4f", v+0}')
   local safe_rate=$(rand_float 1.0002 1.0008 7)
   local safe_tempo
-  safe_tempo=$(awk -v base="$tempo_target" -v rate="$safe_rate" 'BEGIN{base+=0;rate+=0;if(rate<=0)rate=1;printf "%.6f", base/rate}')
+  # fix: ensure tempo filters keep numeric defaults
+  # REGION AI: guard safe tempo fallbacks
+  safe_tempo=$(awk -v base="${tempo_target:-}" -v rate="${safe_rate:-}" 'BEGIN{
+    if (base == "" || base + 0 <= 0) {
+      base = 1.0;
+    }
+    if (rate == "" || rate + 0 <= 0) {
+      rate = 1.0;
+    }
+    printf "%.6f", (base + 0) / (rate + 0);
+  }')
+  # END REGION AI
   if ffmpeg_supports_filter "anequalizer"; then
     AUDIO_FILTER="anequalizer=f=1831:t=q:w=1:g=-0.408"
   else
@@ -139,6 +157,7 @@ compose_af_chain() {
   local base="$1" extra="$2"
   base="$(apply_audio_fallback "$base")"
   extra="$(apply_audio_fallback "$extra")"
+  # REGION AI: safe filter concatenation
   if [ -z "$extra" ]; then
     printf '%s' "$base"
     return
@@ -148,4 +167,5 @@ compose_af_chain() {
     return
   fi
   printf '%s,%s' "$extra" "$base"
+  # END REGION AI
 }

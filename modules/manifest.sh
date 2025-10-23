@@ -191,17 +191,9 @@ write_manifest() {
 }
 
 # REGION AI: fallback CUR_VF_EXTRA quoting fix
-build_filter() {
-  local base="$1"
-  base="${base//(/\\(}"
-  base="${base//)/\\)}"
-  echo "$base"
-}
-
 manifest__fallback_vf_extra() {
   local CUR_VF_EXTRA
   CUR_VF_EXTRA="fps=24,eq=brightness=0.03:contrast=1.02"
-  CUR_VF_EXTRA="$(build_filter "$CUR_VF_EXTRA")"
   printf '%s' "$CUR_VF_EXTRA"
 }
 # END REGION AI

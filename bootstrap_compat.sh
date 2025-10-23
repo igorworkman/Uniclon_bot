@@ -10,12 +10,14 @@ fi
 ensure_script_permissions() {
   local modules_dir="${BASE_DIR}/modules"
   if compgen -G "${modules_dir}/"'*.sh' >/dev/null; then
-    chmod +x "${modules_dir}"/*.sh
+    chmod +x "${modules_dir}"/*.sh 2>/dev/null || \
+      echo "bootstrap_compat: unable to update module script permissions" >&2
   fi
 
   local main_script="${BASE_DIR}/process_protective_v1.6.sh"
   if [ -f "${main_script}" ]; then
-    chmod +x "${main_script}"
+    chmod +x "${main_script}" 2>/dev/null || \
+      echo "bootstrap_compat: unable to update main script permissions" >&2
   fi
 }
 

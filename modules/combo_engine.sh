@@ -126,6 +126,16 @@ safe_vf() {
   escaped=${escaped//)/\\)}
   printf "'%s'" "$escaped"
 }
+
+_combo_protect_vf_parens() {
+  local combo="$1"
+  [[ "$combo" == *"CUR_VF_EXTRA"* ]] || { printf '%s' "$combo"; return; }
+  combo+=$'\n# Escape parentheses to prevent syntax errors in bash -c\n'
+  combo+=$'CUR_VF_EXTRA_SAFE="${CUR_VF_EXTRA//(/\\(}"\n'
+  combo+=$'CUR_VF_EXTRA_SAFE="${CUR_VF_EXTRA_SAFE//)/\\)}"\n'
+  combo+=$'CUR_VF_EXTRA="$CUR_VF_EXTRA_SAFE"'
+  printf '%s' "$combo"
+}
 # END REGION AI
 
 _combo_format_filter_arg() {
@@ -233,10 +243,13 @@ generate_dynamic_combo() {
   local shift_idx=$(rand_int 0 $(( ${#shift_pool[@]} - 1 )))
   local level_idx=$(rand_int 0 $(( ${#level_pool[@]} - 1 )))
   local noise=$(rand_int 0 1)
-  printf "CUR_COMBO_LABEL='auto_%s' CFPS=%s CNOISE=%s CMIRROR=%s CAUDIO=%s CBR=%s CSHIFT=%s CSOFT=%s CLEVEL=%s CUR_VF_EXTRA=\\\"%s\\\" CUR_AF_EXTRA=\\\"%s\\\"" \
+  local combo
+  combo=$(printf "CUR_COMBO_LABEL='auto_%s' CFPS=%s CNOISE=%s CMIRROR=%s CAUDIO=%s CBR=%s CSHIFT=%s CSOFT=%s CLEVEL=%s CUR_VF_EXTRA=\\\"%s\\\" CUR_AF_EXTRA=\\\"%s\\\"" \
     "$ident" "${fps_pool[$fps_idx]}" "$noise" "${mirrors[$mirror_idx]}" "${audios[$audio_idx]}" \
     "${br_pool[$br_idx]}" "${shift_pool[$shift_idx]}" "${softwares[$soft_idx]}" "${level_pool[$level_idx]}" \
-    "${vf_options[$vf_idx]}" "${af_options[$af_idx]}"
+    "${vf_options[$vf_idx]}" "${af_options[$af_idx]}")
+  combo=$(_combo_protect_vf_parens "$combo")
+  printf '%s' "$combo"
 }
 
 auto_expand_run_combos() {
@@ -282,6 +295,7 @@ generate_run_combos() {
       vf_escaped=$(safe_vf "$vf")
       combo="${combo/CUR_VF_EXTRA=\"${vf}\"/CUR_VF_EXTRA=\"${vf_escaped}\"}"
     fi
+    combo=$(_combo_protect_vf_parens "$combo")
     RUN_COMBOS+=("$combo")
   done
   RUN_COMBO_POS=0

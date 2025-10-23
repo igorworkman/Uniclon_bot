@@ -191,12 +191,28 @@ write_manifest() {
 }
 
 # REGION AI: fallback CUR_VF_EXTRA quoting fix
+escape_filter() {
+  local input="$1"
+  if [ -z "$input" ]; then
+    printf ''
+    return
+  fi
+  if [ "${input:0:1}" = '"' ] && [ "${input: -1}" = '"' ]; then
+    input="${input:1:-1}"
+  elif [ "${input:0:1}" = "'" ] && [ "${input: -1}" = "'" ]; then
+    input="${input:1:-1}"
+  fi
+  input="${input//\(/(}"
+  input="${input//\)/)}"
+  input="${input//(/\(}"
+  input="${input//)/\)}"
+  printf '%s' "$input"
+}
+
 manifest__fallback_vf_extra() {
   local CUR_VF_EXTRA
   CUR_VF_EXTRA="fps=24,eq=brightness=0.03:contrast=1.02"
-  local CUR_VF_EXTRA_SAFE="${CUR_VF_EXTRA//(/\(}"
-  CUR_VF_EXTRA_SAFE="${CUR_VF_EXTRA_SAFE//)/\)}"
-  CUR_VF_EXTRA="$CUR_VF_EXTRA_SAFE"
+  CUR_VF_EXTRA=$(escape_filter "$CUR_VF_EXTRA")
   printf '%s' "$CUR_VF_EXTRA"
 }
 # END REGION AI

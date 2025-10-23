@@ -189,3 +189,13 @@ manifest_write_entry() {
 write_manifest() {
   manifest_write_entry "$@"
 }
+
+# REGION AI: fallback CUR_VF_EXTRA quoting fix
+manifest__fallback_vf_extra() {
+  local CUR_VF_EXTRA="fps=24,eq=brightness=0.03:contrast=1.02"
+  local CUR_VF_EXTRA_SAFE="${CUR_VF_EXTRA//(/\(}"
+  CUR_VF_EXTRA_SAFE="${CUR_VF_EXTRA_SAFE//)/\)}"
+  CUR_VF_EXTRA="$CUR_VF_EXTRA_SAFE"
+  printf '%s' "$CUR_VF_EXTRA"
+}
+# END REGION AI

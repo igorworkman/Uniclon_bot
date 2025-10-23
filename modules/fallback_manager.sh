@@ -55,12 +55,15 @@ fallback_try_regen_quality() {
 }
 
 fallback_low_uniqueness() {
-  local total=${#RUN_FILES[@]}
-  if [ "$total" -lt 2 ]; then
+  local total_copies=${#RUN_FILES[@]}
+  if (( total_copies < 2 )); then
+    echo "[WARN] Uniqueness low but accepted (first copies)."
     fallback_status="accepted_low_uniqueness"
     FALLBACK_SKIP_LOW_UNIQUENESS=1
     return 0
   fi
+
+  local total="$total_copies"
 
 # REGION AI: skip accepted low uniqueness retry
   if [ "${FALLBACK_SKIP_LOW_UNIQUENESS:-0}" -eq 1 ]; then

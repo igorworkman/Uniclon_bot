@@ -750,8 +750,6 @@ apply_combo_context() {
   local combo_string="$1"
   local combo_dump="" combo_script="" status=0 var
   combo_script=$(mktemp "${TMP_ROOT:-/tmp}/combo_ctx.XXXXXX") || return 1
-  combo_string="${combo_string//(/\(}"
-  combo_string="${combo_string//)/\)}"
   {
     printf 'set -euo pipefail\n'
     declare -f

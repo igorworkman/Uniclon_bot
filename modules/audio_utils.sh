@@ -65,13 +65,9 @@ BEGIN {
   # fix: ensure tempo filters keep numeric defaults
   # REGION AI: guard safe tempo fallbacks
   safe_tempo=$(awk -v base="${tempo_target:-}" -v rate="${safe_rate:-}" 'BEGIN{
-    if (base == "" || base + 0 <= 0) {
-      base = 1.0;
-    }
-    if (rate == "" || rate + 0 <= 0) {
-      rate = 1.0;
-    }
-    printf "%.6f", (base + 0) / (rate + 0);
+    if (base == "" || base + 0 <= 0) { base = 1.0 }
+    if (rate == "" || rate + 0 <= 0) { rate = 1.0 }
+    printf "%.6f", (base + 0) / (rate + 0)
   }')
   # END REGION AI
   if ffmpeg_supports_filter "anequalizer"; then
@@ -102,6 +98,11 @@ audio_apply_combo_mode() {
   local sample_rate="${3:-$AUDIO_SR}"
   local chain="${AFILTER_CORE:-}"
   local profile="${AUDIO_PROFILE:-resample}"
+  # REGION AI: tempo default for combo chains
+  if [ -z "$tempo" ]; then
+    tempo="1.0"
+  fi
+  # END REGION AI
 
   case "${mode:-}" in
     asetrate)

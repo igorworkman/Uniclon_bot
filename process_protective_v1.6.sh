@@ -10,20 +10,6 @@ mkdir -p "$OUTPUT_DIR"
 source "$BASE_DIR/bootstrap_compat.sh"
 bootstrap_init "${BASH_SOURCE[0]}"
 
-MODULES_DIR="${BASE_DIR}/modules"
-# shellcheck source=modules/combo_engine.sh
-source "${MODULES_DIR}/combo_engine.sh"
-# shellcheck source=modules/creative_utils.sh
-source "${MODULES_DIR}/creative_utils.sh"
-# shellcheck source=modules/ffmpeg_driver.sh
-source "${MODULES_DIR}/ffmpeg_driver.sh"
-# shellcheck source=modules/audio_utils.sh
-source "${MODULES_DIR}/audio_utils.sh"
-# shellcheck source=modules/time_utils.sh
-source "${MODULES_DIR}/time_utils.sh"
-# shellcheck source=modules/fallback_manager.sh
-source "${MODULES_DIR}/fallback_manager.sh"
-
 echo "[INIT] Modular mode active — cleaned and sandboxed"
 echo "[INIT] Modular cleanup complete — orchestrator verified"
 # REGION AI: runtime state arrays
@@ -1456,7 +1442,7 @@ EOF
     fi
     break
   done
-  handle_fallback_status
+  fallback_handle_status "$fallback_attempts" 2
   # END REGION AI
 
   RUN_SSIM+=("$metrics_ssim")

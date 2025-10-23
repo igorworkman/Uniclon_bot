@@ -470,7 +470,7 @@ declare -a RUN_TARGET_DURS=()
 declare -a RUN_TARGET_BRS=()
 declare -a RUN_COMBO_HISTORY=()
 declare -a RUN_PROFILES=()
-declare -a RUN_QUALITIES=()
+declare -a RUN_QUALITIES=() RUN_FALLBACK_REASON=() RUN_COMBO_USED=() RUN_ATTEMPTS=()
 declare -a RUN_QT_MAKES=()
 declare -a RUN_QT_MODELS=()
 declare -a RUN_QT_SOFTWARES=()
@@ -496,6 +496,27 @@ declare -a RUN_VARIANT_KEYS=()
 USED_VARIANT_KEYS_LIST=""
 CURRENT_VARIANT_KEY=""
 # END REGION AI
+
+sanitize_audio_filters() {
+  local chain="${1:-}"
+  chain=$(printf '%s' "$chain" | sed -E 's/(^|,)atempo=(,|$)/\1/g')
+  chain=$(printf '%s' "$chain" | sed -E 's/(^|,)anull(,|$)/\1/g')
+  chain=$(printf '%s' "$chain" | sed -E 's/,{2,}/,/g')
+  chain="${chain#,}"
+  chain="${chain%,}"
+  [ -z "$chain" ] && chain="anull"
+  printf '%s' "$chain"
+}
+
+next_combo() {
+  local payload
+  payload=$(next_regen_combo)
+  if [ -z "$payload" ]; then
+    RUN_COMBO_POS=0
+    payload=$(next_regen_combo)
+  fi
+  printf '%s' "$payload"
+}
 
 pick_software_encoder() {
   local profile_key="${1:-default}" attempt=0
@@ -939,6 +960,11 @@ EOF
   if [ -z "${AUDIO_FILTER:-}" ]; then
     AUDIO_FILTER="anull"
   fi
+  local combined_audio_filters="$AUDIO_CHAIN"
+  if [ -n "$AUDIO_FILTER" ]; then
+    combined_audio_filters="${combined_audio_filters:+$combined_audio_filters,}$AUDIO_FILTER"
+  fi
+  combined_audio_filters=$(sanitize_audio_filters "$combined_audio_filters")
   FFMPEG_ARGS=(
     -y -hide_banner -loglevel warning -ignore_unknown
     -analyzeduration 200M -probesize 200M
@@ -962,7 +988,7 @@ EOF
   FFMPEG_ARGS+=(-t "$CLIP_DURATION" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$CODEC_LEVEL" -crf "$CRF"
     -r "$FPS" -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k"
     -vf "$vf_payload"
-    -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$AUDIO_CHAIN,$AUDIO_FILTER"
+    -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$combined_audio_filters"
     -movflags +faststart
     -map_metadata -1
     -metadata major_brand="$MAJOR_BRAND_TAG"
@@ -1188,43 +1214,65 @@ EOF
 
   # REGION AI: similarity fallback with reinforced effects
   local base_vf="$VF" base_af="$AFILTER" base_af_extra="${CUR_AF_EXTRA:-}"
-  local metrics metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq fallback_attempts=0
+  local metrics metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq
+  local fallback_attempts=0 max_uniqueness_retry="${MAX_RETRY:-3}"
+  local uniqueness_verdict="OK" manager_output="" reason_line="" fallback_reason_entry=""
+  local combo_used_label="${combo_preview:-${CUR_COMBO_STRING:-base}}"
   while :; do
     metrics=$(metrics_compute_copy_metrics "$SRC" "$OUT"); IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
-    if fallback_should_similarity_regen "$metrics_ssim" "$metrics_phash"; then
-      if fallback_can_retry "$fallback_attempts" 2; then
-        echo "[Fallback] Copy $copy_index too similar — regenerating..."
-        fallback_attempts=$((fallback_attempts + 1))
-        local combo_payload="" combo_vf="" combo_af=""
-        if [ "${#RUN_COMBOS[@]}" -gt 0 ]; then combo_payload="${RUN_COMBOS[$((RANDOM % ${#RUN_COMBOS[@]}))]}"; fi
-        # Escape parentheses before execution to prevent syntax errors
-        if [[ "$combo_payload" == *"("* || "$combo_payload" == *")"* ]]; then
-          combo_payload="${combo_payload//(/\(}"
-          combo_payload="${combo_payload//)/\)}"
-        fi
-
-        # Now safely execute combo_payload
-        if [ -n "$combo_payload" ]; then
-          read -r combo_vf combo_af < <(bash -c "$combo_payload; printf '%s %s' \"\${CUR_VF_EXTRA:-}\" \"\${CUR_AF_EXTRA:-}\"")
-        fi
-        local fallback_vf_extra="" fallback_af_extra="$base_af_extra"
-        [ -n "$combo_vf" ] && fallback_vf_extra="${fallback_vf_extra:+$fallback_vf_extra,}$combo_vf"
-        [ -n "$combo_af" ] && fallback_af_extra="${fallback_af_extra:+$fallback_af_extra,}$combo_af"
-        local fallback_vf_chain
-        fallback_vf_chain=$(creative_vignette_chain "$base_vf" "$fallback_vf_extra")
-        fallback_vf_chain=$(ensure_vf_format "$fallback_vf_chain")
-        ffmpeg_exec -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC" \
-          -t "$CLIP_DURATION" -c:v libx264 -preset medium -crf 24 \
-          -vf "$fallback_vf_chain" \
-          -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$(compose_af_chain "$base_af" "$fallback_af_extra")" -movflags +faststart "$OUT"
-        continue
-      else
+    manager_output=$("$BASE_DIR/modules/fallback_manager.sh" "$metrics_ssim" "$metrics_phash" "$metrics_delta")
+    printf '%s\n' "$manager_output"
+    uniqueness_verdict=$(printf '%s' "$manager_output" | head -n1)
+    reason_line=$(printf '%s' "$manager_output" | sed -n '2p')
+    if [ "$uniqueness_verdict" = "RETRY" ]; then
+      fallback_attempts=$((fallback_attempts + 1))
+      if [ "$fallback_attempts" -ge "$max_uniqueness_retry" ]; then
+        uniqueness_verdict="ACCEPT_WARN"
+        fallback_reason_entry="$reason_line"
         break
       fi
+      local combo_payload="" combo_vf="" combo_af="" escaped_combo=""
+      combo_payload=$(next_combo)
+      if [ -z "$combo_payload" ]; then
+        uniqueness_verdict="ACCEPT_WARN"
+        fallback_reason_entry="$reason_line"
+        break
+      fi
+      echo "[Fallback] Copy $copy_index too similar — regenerating with $combo_payload"
+      combo_used_label="$combo_payload"
+      escaped_combo="$combo_payload"
+      if [[ "$escaped_combo" == *"("* || "$escaped_combo" == *")"* ]]; then
+        escaped_combo="${escaped_combo//(/\(}"
+        escaped_combo="${escaped_combo//)/\)}"
+      fi
+      read -r combo_vf combo_af < <(bash -c "$escaped_combo; printf '%s %s' \"\${CUR_VF_EXTRA:-}\" \"\${CUR_AF_EXTRA:-}\"")
+      local fallback_vf_extra="" fallback_af_extra="$base_af_extra"
+      [ -n "$combo_vf" ] && fallback_vf_extra="${fallback_vf_extra:+$fallback_vf_extra,}$combo_vf"
+      [ -n "$combo_af" ] && fallback_af_extra="${fallback_af_extra:+$fallback_af_extra,}$combo_af"
+      local fallback_vf_chain
+      fallback_vf_chain=$(creative_vignette_chain "$base_vf" "$fallback_vf_extra")
+      fallback_vf_chain=$(ensure_vf_format "$fallback_vf_chain")
+      local fallback_af_chain
+      fallback_af_chain=$(compose_af_chain "$base_af" "$fallback_af_extra")
+      fallback_af_chain=$(sanitize_audio_filters "$fallback_af_chain")
+      ffmpeg_exec -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC" \
+        -t "$CLIP_DURATION" -c:v libx264 -preset medium -crf 24 \
+        -vf "$fallback_vf_chain" \
+        -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$fallback_af_chain" -movflags +faststart "$OUT"
+      continue
+    fi
+    if [ "$uniqueness_verdict" = "ACCEPT_WARN" ]; then
+      fallback_reason_entry="$reason_line"
     fi
     break
   done
-  fallback_handle_status "$fallback_attempts" 2
+  local uniqueness_attempts=$((fallback_attempts + 1))
+  RUN_FALLBACK_REASON+=("$fallback_reason_entry")
+  RUN_COMBO_USED+=("$combo_used_label")
+  RUN_ATTEMPTS+=("$uniqueness_attempts")
+  if [ "$uniqueness_verdict" = "ACCEPT_WARN" ]; then
+    echo "⚠️ Copy $copy_index accepted with low uniqueness after $uniqueness_attempts attempts"
+  fi
   # END REGION AI
 
   RUN_SSIM+=("$metrics_ssim")

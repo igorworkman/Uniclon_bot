@@ -19,6 +19,16 @@ fallback_should_similarity_regen() {
   return 1
 }
 
+fallback_uniqueness_status() {
+  local ssim_val="$1"
+  local phash_val="$2"
+  if fallback_should_similarity_regen "$ssim_val" "$phash_val"; then
+    printf 'RETRY'
+  else
+    printf 'OK'
+  fi
+}
+
 fallback_can_retry() {
   local attempts="$1"
   local max_attempts="${2:-2}"
@@ -196,3 +206,17 @@ fallback_process_cycle() {
   fi
   return 1
 }
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  ssim_val="${1:-0}"
+  phash_val="${2:-0}"
+  delta_br="${3:-0}"
+  status="$(fallback_uniqueness_status "$ssim_val" "$phash_val")"
+  reason="unique_ok"
+  if [ "$status" = "RETRY" ]; then
+    reason="low_unique"
+  fi
+  printf '%s\n' "$status"
+  printf 'reason=%s;ssim=%s;phash=%s;dbr=%s\n' "$reason" "$ssim_val" "$phash_val" "$delta_br"
+  exit 0
+fi

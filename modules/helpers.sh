@@ -40,6 +40,15 @@ apply_combo_context() {
         ;;
     esac
   done <<<"$combo_dump"
+
+  local _combo_field
+  for _combo_field in CUR_VF_EXTRA CUR_AF_EXTRA; do
+    local _combo_value="${!_combo_field}"
+    if [[ -n "$_combo_value" && ${_combo_value:0:1} == '"' && ${_combo_value: -1} == '"' ]]; then
+      _combo_value="${_combo_value:1:${#_combo_value}-2}"
+      printf -v "$_combo_field" '%s' "$_combo_value"
+    fi
+  done
   return 0
 }
 

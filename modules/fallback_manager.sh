@@ -47,7 +47,9 @@ fallback_try_regen_quality() {
 fallback_low_uniqueness() {
   local total=${#RUN_FILES[@]}
   if [ "$total" -lt 2 ]; then
-    return 1
+    fallback_status="accepted_low_uniqueness"
+    FALLBACK_SKIP_LOW_UNIQUENESS=1
+    return 0
   fi
 
 # REGION AI: skip accepted low uniqueness retry

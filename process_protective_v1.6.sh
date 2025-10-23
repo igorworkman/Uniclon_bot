@@ -5,6 +5,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+chmod +x "$BASE_DIR"/modules/*.sh 2>/dev/null || true
 export OUTPUT_DIR="${OUTPUT_DIR:-$BASE_DIR/output}"
 mkdir -p "$OUTPUT_DIR"
 source "$BASE_DIR/bootstrap_compat.sh"
@@ -1215,11 +1216,32 @@ EOF
   # REGION AI: similarity fallback with reinforced effects
   local base_vf="$VF" base_af="$AFILTER" base_af_extra="${CUR_AF_EXTRA:-}"
   local metrics metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq
-  local fallback_attempts=0 max_uniqueness_retry="${MAX_RETRY:-3}"
+  local fallback_attempts=0
+  local max_uniqueness_retry_raw="${MAX_RETRY:-$MAX_REGEN_ATTEMPTS}"
+  local max_uniqueness_retry
+  if [[ "$max_uniqueness_retry_raw" =~ ^[0-9]+$ ]]; then
+    max_uniqueness_retry="$max_uniqueness_retry_raw"
+  else
+    max_uniqueness_retry="$MAX_REGEN_ATTEMPTS"
+  fi
+  if (( max_uniqueness_retry < 1 )); then
+    max_uniqueness_retry=1
+  fi
+  local total_copies_context=${#RUN_FILES[@]}
+  local uniqueness_guard=0
+  if (( total_copies_context < 2 )); then
+    uniqueness_guard=1
+  fi
   local uniqueness_verdict="OK" manager_output="" reason_line="" fallback_reason_entry=""
   local combo_used_label="${combo_preview:-${CUR_COMBO_STRING:-base}}"
   while :; do
     metrics=$(metrics_compute_copy_metrics "$SRC" "$OUT"); IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
+    if (( uniqueness_guard )); then
+      echo "[WARN] Uniqueness low but accepted (first copies)."
+      fallback_reason_entry="first_copies"
+      uniqueness_verdict="OK"
+      break
+    fi
     manager_output=$("$BASE_DIR/modules/fallback_manager.sh" "$metrics_ssim" "$metrics_phash" "$metrics_delta")
     printf '%s\n' "$manager_output"
     uniqueness_verdict=$(printf '%s' "$manager_output" | head -n1)
@@ -1227,8 +1249,9 @@ EOF
     if [ "$uniqueness_verdict" = "RETRY" ]; then
       fallback_attempts=$((fallback_attempts + 1))
       if [ "$fallback_attempts" -ge "$max_uniqueness_retry" ]; then
+        echo "[WARN] Max regeneration attempts reached for copy $copy_index — accepting result."
         uniqueness_verdict="ACCEPT_WARN"
-        fallback_reason_entry="$reason_line"
+        fallback_reason_entry="${reason_line:-max_regen_reached}"
         break
       fi
       local combo_payload="" combo_vf="" combo_af="" escaped_combo=""
@@ -1261,7 +1284,7 @@ EOF
         -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$fallback_af_chain" -movflags +faststart "$OUT"
       continue
     fi
-    if [ "$uniqueness_verdict" = "ACCEPT_WARN" ]; then
+    if [ "$uniqueness_verdict" = "ACCEPT_WARN" ] && [ -z "$fallback_reason_entry" ]; then
       fallback_reason_entry="$reason_line"
     fi
     break

@@ -1269,6 +1269,9 @@ EOF
         escaped_combo="${escaped_combo//)/\)}"
       fi
       read -r combo_vf combo_af < <(bash -c "$escaped_combo; printf '%s %s' \"\${CUR_VF_EXTRA:-}\" \"\${CUR_AF_EXTRA:-}\"")
+      if [ -n "$combo_vf" ] && declare -F manifest__fallback_vf_extra >/dev/null 2>&1; then
+        combo_vf=$(manifest__fallback_vf_extra "$combo_vf")
+      fi
       local fallback_vf_extra="" fallback_af_extra="$base_af_extra"
       [ -n "$combo_vf" ] && fallback_vf_extra="${fallback_vf_extra:+$fallback_vf_extra,}$combo_vf"
       [ -n "$combo_af" ] && fallback_af_extra="${fallback_af_extra:+$fallback_af_extra,}$combo_af"

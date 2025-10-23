@@ -5,7 +5,7 @@ MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation
 
 manifest__escape_csv_field() {
   local value="$1"
-  value="${value//"/""}"
+  value="${value//\"/\"\"}"
   value="${value//$'\n'/\\n}"
   printf '"%s"' "$value"
 }

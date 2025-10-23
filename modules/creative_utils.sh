@@ -19,9 +19,11 @@ safe_vf() {
     printf '%s' "$vf"
     return
   fi
-  local escaped
+  local normalized="$vf" escaped
+  normalized="${normalized//\\(/(}"
+  normalized="${normalized//\\)/)}"
+  escaped=${normalized//\'/\'"\'"\'}
   # Экранируем кавычки и скобки, чтобы ffmpeg-фильтры с ( ) не ломали eval
-  escaped=${vf//\'/\'"\'"\'}
   escaped=${escaped//(/\\(}
   escaped=${escaped//)/\\)}
   printf "'%s'" "$escaped"

@@ -30,6 +30,9 @@ echo "[INIT] Modular cleanup complete — orchestrator verified"
 declare -a RUN_COMBOS=()
 declare -a RUN_COMBO_HISTORY RUN_FILES RUN_BITRATES RUN_FPS RUN_DURATIONS RUN_SIZES RUN_ENCODERS RUN_SOFTWARES RUN_CREATION_TIMES RUN_SEEDS RUN_TARGET_DURS RUN_TARGET_BRS RUN_PROFILES RUN_QT_MAKES RUN_QT_MODELS RUN_QT_SOFTWARES RUN_SSIM RUN_PSNR RUN_PHASH RUN_UNIQ RUN_QPASS RUN_QUALITIES RUN_CREATIVE_MIRROR RUN_CREATIVE_INTRO RUN_CREATIVE_LUT RUN_PREVIEWS
 RUN_COMBO_HISTORY=()
+# REGION AI: fallback status tracker
+fallback_status=""
+# END REGION AI
 # END REGION AI
 
 DEBUG=0
@@ -1594,26 +1597,32 @@ EOF
       if fallback_can_retry "$fallback_attempts" 2; then
         echo "[Fallback] Copy $copy_index too similar — regenerating..."
         fallback_attempts=$((fallback_attempts + 1))
-      local combo_payload="" combo_vf="" combo_af=""
-      if [ "${#RUN_COMBOS[@]}" -gt 0 ]; then combo_payload="${RUN_COMBOS[$((RANDOM % ${#RUN_COMBOS[@]}))]}"; fi
-      if [ -n "$combo_payload" ]; then read -r combo_vf combo_af < <(bash -c "$combo_payload; printf '%s %s' \"\${CUR_VF_EXTRA:-}\" \"\${CUR_AF_EXTRA:-}\""); fi
-      local fallback_vf_extra="" fallback_af_extra="$base_af_extra"
-      [ -n "$combo_vf" ] && fallback_vf_extra="${fallback_vf_extra:+$fallback_vf_extra,}$combo_vf"
-      [ -n "$combo_af" ] && fallback_af_extra="${fallback_af_extra:+$fallback_af_extra,}$combo_af"
-      local fallback_vf_chain
-      fallback_vf_chain=$(creative_vignette_chain "$base_vf" "$fallback_vf_extra")
-      fallback_vf_chain=$(ensure_vf_format "$fallback_vf_chain")
-      ffmpeg_exec -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC" \
-        -t "$CLIP_DURATION" -c:v libx264 -preset medium -crf 24 \
-        -vf "$fallback_vf_chain" \
-        -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$(compose_af_chain "$base_af" "$fallback_af_extra")" -movflags +faststart "$OUT"
-      continue
+        local combo_payload="" combo_vf="" combo_af=""
+        if [ "${#RUN_COMBOS[@]}" -gt 0 ]; then combo_payload="${RUN_COMBOS[$((RANDOM % ${#RUN_COMBOS[@]}))]}"; fi
+        if [ -n "$combo_payload" ]; then read -r combo_vf combo_af < <(bash -c "$combo_payload; printf '%s %s' \"\${CUR_VF_EXTRA:-}\" \"\${CUR_AF_EXTRA:-}\""); fi
+        local fallback_vf_extra="" fallback_af_extra="$base_af_extra"
+        [ -n "$combo_vf" ] && fallback_vf_extra="${fallback_vf_extra:+$fallback_vf_extra,}$combo_vf"
+        [ -n "$combo_af" ] && fallback_af_extra="${fallback_af_extra:+$fallback_af_extra,}$combo_af"
+        local fallback_vf_chain
+        fallback_vf_chain=$(creative_vignette_chain "$base_vf" "$fallback_vf_extra")
+        fallback_vf_chain=$(ensure_vf_format "$fallback_vf_chain")
+        ffmpeg_exec -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC" \
+          -t "$CLIP_DURATION" -c:v libx264 -preset medium -crf 24 \
+          -vf "$fallback_vf_chain" \
+          -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$(compose_af_chain "$base_af" "$fallback_af_extra")" -movflags +faststart "$OUT"
+        continue
       else
-        echo "[Warning] Max fallback attempts reached — accepting copy with warning."
+        break
       fi
     fi
     break
   done
+  if [ "$fallback_attempts" -ge 2 ]; then
+    if [ "${fallback_status:-}" != "accepted_low_uniqueness" ]; then
+      echo "[Warning] Max fallback attempts reached — accepting copy with reduced uniqueness."
+    fi
+    fallback_status="accepted_low_uniqueness"
+  fi
   # END REGION AI
 
   RUN_SSIM+=("$metrics_ssim")
@@ -1641,6 +1650,12 @@ while fallback_low_uniqueness; do
     break
   fi
 done
+if [ "$fallback_attempts" -ge 2 ]; then
+  if [ "${fallback_status:-}" != "accepted_low_uniqueness" ]; then
+    echo "[Warning] Max fallback attempts reached — accepting copy with reduced uniqueness."
+  fi
+  fallback_status="accepted_low_uniqueness"
+fi
 
 quality_round=0
 quality_pass_all=false
@@ -1704,6 +1719,12 @@ while :; do
       break
     fi
   done
+  if [ "$fallback_attempts" -ge 2 ]; then
+    if [ "${fallback_status:-}" != "accepted_low_uniqueness" ]; then
+      echo "[Warning] Max fallback attempts reached — accepting copy with reduced uniqueness."
+    fi
+    fallback_status="accepted_low_uniqueness"
+  fi
   if [ "$fallback_happened" -eq 1 ]; then
     continue
   fi

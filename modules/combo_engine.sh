@@ -269,11 +269,11 @@ generate_run_combos() {
   local -a predefined=(
     "CUR_COMBO_LABEL='fps24_eq_boost' CFPS=30 CNOISE=1 CMIRROR=hflip CAUDIO=asetrate CBR=1.12 CSHIFT=0.07 CSOFT=VN CLEVEL=4.0 CUR_VF_EXTRA=fps=24,eq=brightness=0.03:contrast=1.02 CUR_AF_EXTRA=acompressor=threshold=-16dB:ratio=2.4,aresample=44100"
     "CUR_COMBO_LABEL='vflip_curves' CFPS=60 CNOISE=0 CMIRROR=vflip CAUDIO=resample CBR=0.88 CSHIFT=-0.05 CSOFT=CapCut CLEVEL=4.2 CUR_VF_EXTRA=vflip,curves=preset=strong_contrast CUR_AF_EXTRA=apulsator=mode=sine:freq=0.8,atempo=0.99"
-    "CUR_COMBO_LABEL='crop_rotate' CFPS=30 CNOISE=0 CMIRROR=none CAUDIO=jitter CBR=1.10 CSHIFT=0.09 CSOFT=LumaFusion CLEVEL=4.0 CUR_VF_EXTRA=crop=in_w-20:in_h-20,rotate=0.5*(PI/180):fillcolor=black CUR_AF_EXTRA=atempo=1.02,treble=g=1.5"
+    "CUR_COMBO_LABEL='crop_rotate' CFPS=30 CNOISE=0 CMIRROR=none CAUDIO=jitter CBR=1.10 CSHIFT=0.09 CSOFT=LumaFusion CLEVEL=4.0 CUR_VF_EXTRA='crop=in_w-20:in_h-20,rotate=0.5*(PI/180):fillcolor=black' CUR_AF_EXTRA=atempo=1.02,treble=g=1.5"
     "CUR_COMBO_LABEL='hflip_noise' CFPS=24 CNOISE=1 CMIRROR=hflip CAUDIO=asetrate CBR=0.90 CSHIFT=-0.08 CSOFT=CapCut CLEVEL=4.0 CUR_VF_EXTRA=hflip,noise=alls=5:allf=t+u CUR_AF_EXTRA=acompressor=threshold=-20dB:ratio=3.0,lowpass=f=12000"
     "CUR_COMBO_LABEL='colorbalance_pop' CFPS=25 CNOISE=0 CMIRROR=hflip CAUDIO=resample CBR=1.15 CSHIFT=0.06 CSOFT=VN CLEVEL=4.2 CUR_VF_EXTRA=colorbalance=bs=0.05:rs=-0.05,eq=saturation=1.1 CUR_AF_EXTRA=equalizer=f=1200:t=q:w=1.0:g=-3"
     "CUR_COMBO_LABEL='vignette_gamma' CFPS=30 CNOISE=1 CMIRROR=none CAUDIO=jitter CBR=0.85 CSHIFT=-0.10 CSOFT=LumaFusion CLEVEL=4.0 CUR_VF_EXTRA=vignette=PI/5:0.5,eq=gamma=1.03 CUR_AF_EXTRA=crystalizer=i=2"
-    "CUR_COMBO_LABEL='rotate_pad' CFPS=60 CNOISE=1 CMIRROR=none CAUDIO=asetrate CBR=1.13 CSHIFT=0.12 CSOFT=CapCut CLEVEL=4.2 CUR_VF_EXTRA=rotate=-0.3*(PI/180):fillcolor=black CUR_AF_EXTRA=highpass=f=200,atempo=0.98"
+    "CUR_COMBO_LABEL='rotate_pad' CFPS=60 CNOISE=1 CMIRROR=none CAUDIO=asetrate CBR=1.13 CSHIFT=0.12 CSOFT=CapCut CLEVEL=4.2 CUR_VF_EXTRA='rotate=-0.3*(PI/180):fillcolor=black' CUR_AF_EXTRA=highpass=f=200,atempo=0.98"
     "CUR_COMBO_LABEL='unsharp_speed' CFPS=30 CNOISE=0 CMIRROR=none CAUDIO=resample CBR=0.87 CSHIFT=-0.07 CSOFT=VN CLEVEL=4.0 CUR_VF_EXTRA=unsharp=3:3:1.5,setpts=PTS*0.98 CUR_AF_EXTRA=chorus=0.6:0.9:55:0.4:0.25:2"
     "CUR_COMBO_LABEL='curves_light' CFPS=30 CNOISE=1 CMIRROR=vflip CAUDIO=jitter CBR=1.05 CSHIFT=0.04 CSOFT=VN CLEVEL=4.0 CUR_VF_EXTRA=curves=preset=lighter CUR_AF_EXTRA=superequalizer=1b=0.8:2b=0.4:3b=0.1:4b=-0.2:5b=-0.4"
     "CUR_COMBO_LABEL='hue_noise' CFPS=24 CNOISE=0 CMIRROR=none CAUDIO=asetrate CBR=0.95 CSHIFT=-0.03 CSOFT=CapCut CLEVEL=4.0 CUR_VF_EXTRA=hue=s=0.95,noise=alls=3:allf=t CUR_AF_EXTRA=aecho=0.7:0.4:30:0.6"

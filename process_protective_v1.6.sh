@@ -1599,7 +1599,16 @@ EOF
         fallback_attempts=$((fallback_attempts + 1))
         local combo_payload="" combo_vf="" combo_af=""
         if [ "${#RUN_COMBOS[@]}" -gt 0 ]; then combo_payload="${RUN_COMBOS[$((RANDOM % ${#RUN_COMBOS[@]}))]}"; fi
-        if [ -n "$combo_payload" ]; then read -r combo_vf combo_af < <(bash -c "$combo_payload; printf '%s %s' \"\${CUR_VF_EXTRA:-}\" \"\${CUR_AF_EXTRA:-}\""); fi
+        # Escape parentheses before execution to prevent syntax errors
+        if [[ "$combo_payload" == *"("* || "$combo_payload" == *")"* ]]; then
+          combo_payload="${combo_payload//(/\(}"
+          combo_payload="${combo_payload//)/\)}"
+        fi
+
+        # Now safely execute combo_payload
+        if [ -n "$combo_payload" ]; then
+          read -r combo_vf combo_af < <(bash -c "$combo_payload; printf '%s %s' \"\${CUR_VF_EXTRA:-}\" \"\${CUR_AF_EXTRA:-}\"")
+        fi
         local fallback_vf_extra="" fallback_af_extra="$base_af_extra"
         [ -n "$combo_vf" ] && fallback_vf_extra="${fallback_vf_extra:+$fallback_vf_extra,}$combo_vf"
         [ -n "$combo_af" ] && fallback_af_extra="${fallback_af_extra:+$fallback_af_extra,}$combo_af"

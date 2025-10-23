@@ -751,6 +751,7 @@ apply_combo_context() {
   local combo_dump="" combo_script="" status=0 var
   combo_script=$(mktemp "${TMP_ROOT:-/tmp}/combo_ctx.XXXXXX") || return 1
   {
+    # Combo scripts are emitted without extra escaping to keep filter syntax intact.
     printf 'set -euo pipefail\n'
     declare -f
     while IFS= read -r var; do

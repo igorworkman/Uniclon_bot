@@ -2,6 +2,107 @@
 
 RUN_COMBO_POS=0
 
+# REGION Orchestrator state helpers (shared via sourcing)
+combo_key_seen() {
+  local key="$1" existing
+  if [ -z "${USED_SOFT_ENC_KEYS_LIST:-}" ]; then
+    return 1
+  fi
+  while IFS= read -r existing; do
+    [ -z "$existing" ] && continue
+    if [ "$existing" = "$key" ]; then
+      return 0
+    fi
+  done <<EOF
+${USED_SOFT_ENC_KEYS_LIST}
+EOF
+  return 1
+}
+
+mark_combo_key() {
+  local key="$1"
+  : "${USED_SOFT_ENC_KEYS_LIST:=}"
+  if combo_key_seen "$key"; then
+    return
+  fi
+  if [ -z "$USED_SOFT_ENC_KEYS_LIST" ]; then
+    USED_SOFT_ENC_KEYS_LIST="$key"
+  else
+    USED_SOFT_ENC_KEYS_LIST="${USED_SOFT_ENC_KEYS_LIST}"$'\n'"$key"
+  fi
+}
+
+unmark_combo_key() {
+  local key="$1" existing new_list=""
+  if [ -z "${USED_SOFT_ENC_KEYS_LIST:-}" ]; then
+    echo "⚠️ Нет сохранённых soft encoder ключей для удаления ($key)"
+    return
+  fi
+  while IFS= read -r existing; do
+    [ -z "$existing" ] && continue
+    if [ "$existing" != "$key" ]; then
+      if [ -z "$new_list" ]; then
+        new_list="$existing"
+      else
+        new_list="${new_list}"$'\n'"$existing"
+      fi
+    fi
+  done <<EOF
+${USED_SOFT_ENC_KEYS_LIST}
+EOF
+  USED_SOFT_ENC_KEYS_LIST="$new_list"
+}
+
+variant_key_seen() {
+  local key="$1" existing
+  if [ -z "${USED_VARIANT_KEYS_LIST:-}" ]; then
+    return 1
+  fi
+  while IFS= read -r existing; do
+    [ -z "$existing" ] && continue
+    if [ "$existing" = "$key" ]; then
+      return 0
+    fi
+  done <<EOF
+${USED_VARIANT_KEYS_LIST}
+EOF
+  return 1
+}
+
+mark_variant_key() {
+  local key="$1"
+  : "${USED_VARIANT_KEYS_LIST:=}"
+  if variant_key_seen "$key"; then
+    return
+  fi
+  if [ -z "$USED_VARIANT_KEYS_LIST" ]; then
+    USED_VARIANT_KEYS_LIST="$key"
+  else
+    USED_VARIANT_KEYS_LIST="${USED_VARIANT_KEYS_LIST}"$'\n'"$key"
+  fi
+}
+
+unmark_variant_key() {
+  local key="$1" existing new_list=""
+  if [ -z "${USED_VARIANT_KEYS_LIST:-}" ]; then
+    return
+  fi
+  while IFS= read -r existing; do
+    [ -z "$existing" ] && continue
+    if [ "$existing" != "$key" ]; then
+      if [ -z "$new_list" ]; then
+        new_list="$existing"
+      else
+        new_list="${new_list}"$'\n'"$existing"
+      fi
+    fi
+  done <<EOF
+${USED_VARIANT_KEYS_LIST}
+EOF
+  USED_VARIANT_KEYS_LIST="$new_list"
+}
+# END REGION
+
 # REGION AI: safe filter quoting
 _combo_escape_single_quotes() {
   local value="$1"

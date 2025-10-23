@@ -41,6 +41,17 @@ if TYPE_CHECKING:
 router = Router()
 logger = logging.getLogger(__name__)
 
+
+async def finalize_video(message: Message, output_path: Path) -> None:
+    """Send processed video with a document fallback."""
+
+    caption = output_path.name
+    try:
+        await message.answer_video(video=FSInputFile(output_path), caption=caption)
+    except Exception:
+        logger.exception("Failed to send video %s; fallback to document", output_path)
+        await message.answer_document(document=FSInputFile(output_path), caption=caption)
+
 _task_queue: Optional["UserTaskQueue"] = None
 _user_profiles: Dict[int, str] = {}
 _user_quality: Dict[int, str] = {}
@@ -870,11 +881,7 @@ async def _run_and_send(
 
     if not archive_sent:
         for p in new_files:
-            try:
-                await message.answer_video(video=FSInputFile(p), caption=p.name)
-            except Exception:
-                logger.exception("Failed to send video %s; fallback to document", p)
-                await message.answer_document(document=FSInputFile(p), caption=p.name)
+            await finalize_video(message, p)
             sent += 1
 
     if save_preview and preview_files:

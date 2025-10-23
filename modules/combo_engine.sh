@@ -296,8 +296,6 @@ generate_run_combos() {
       combo="${combo/CUR_VF_EXTRA=\"${vf}\"/CUR_VF_EXTRA=\"${vf_escaped}\"}"
     fi
     combo=$(_combo_protect_vf_parens "$combo")
-    combo="${combo//(/\(}"
-    combo="${combo//)/\)}"
     RUN_COMBOS+=("$combo")
   done
   RUN_COMBO_POS=0

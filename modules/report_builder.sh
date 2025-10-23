@@ -130,3 +130,23 @@ report_builder_finalize() {
 build_report() {
   report_builder_finalize "$@"
 }
+
+report_builder_template_statistics() {
+  local manifest_path="$1"
+  [ -f "$manifest_path" ] || return
+  local stats
+  stats=$(awk -F',' 'NR>1 && NF>=4 {key=$3"|"$2"|"$4; count[key]++} END{for(k in count) if(count[k]>1) printf "%s %d\n",k,count[k];}' "$manifest_path")
+  if [ -z "$stats" ]; then
+    echo "ℹ️ Совпадений шаблонов не обнаружено"
+    return
+  fi
+  echo "ℹ️ Статистика совпадений manifest:"
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    local count="${line##* }"
+    local combo="${line% $count}"
+    local IFS='|'
+    read -r fps_val br_val dur_val <<<"$combo"
+    echo "ℹ️ Повтор: fps=$fps_val bitrate=$br_val duration=$dur_val — ${count} копий"
+  done <<<"$stats"
+}

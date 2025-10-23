@@ -50,6 +50,13 @@ fallback_low_uniqueness() {
     return 1
   fi
 
+# REGION AI: skip accepted low uniqueness retry
+  if [ "${FALLBACK_SKIP_LOW_UNIQUENESS:-0}" -eq 1 ]; then
+    FALLBACK_SKIP_LOW_UNIQUENESS=0
+    return 1
+  fi
+# END REGION AI
+
   local idx low_ssim=0 low_phash=0 high_similarity=0
   local -a candidates=()
 
@@ -115,15 +122,24 @@ fallback_low_uniqueness() {
   local -a regen_indices=()
   while IFS='|' read -r _score raw_idx; do
     [ -z "$raw_idx" ] && continue
+# REGION AI: skip zero index candidate
+    if [ "$raw_idx" = "0" ]; then
+      continue
+    fi
+# END REGION AI
     regen_indices+=("$raw_idx")
     if [ "${#regen_indices[@]}" -ge "$regen_count" ]; then
       break
     fi
   done <<<"$selection"
 
+# REGION AI: accept uniqueness when only zero candidate
   if [ "${#regen_indices[@]}" -eq 0 ]; then
-    return 1
+    fallback_status="accepted_low_uniqueness"
+    FALLBACK_SKIP_LOW_UNIQUENESS=1
+    return 0
   fi
+# END REGION AI
 
   echo "⚠️ Low uniqueness fallback triggered. Перегенерация копий: ${#regen_indices[@]}"
   LOW_UNIQUENESS_TRIGGERED=1

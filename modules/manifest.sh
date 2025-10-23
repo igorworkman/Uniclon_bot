@@ -192,8 +192,10 @@ write_manifest() {
 
 # REGION AI: fallback CUR_VF_EXTRA quoting fix
 manifest__fallback_vf_extra() {
-  local CUR_VF_EXTRA
+  local CUR_VF_EXTRA CUR_AF_EXTRA=""
   CUR_VF_EXTRA="fps=24,eq=brightness=0.03:contrast=1.02"
+  CUR_VF_EXTRA="${CUR_VF_EXTRA//\"/\\\"}"
+  CUR_AF_EXTRA="${CUR_AF_EXTRA//\"/\\\"}"
   printf '%s' "$CUR_VF_EXTRA"
 }
 # END REGION AI

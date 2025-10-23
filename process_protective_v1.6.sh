@@ -32,6 +32,15 @@ declare -a RUN_COMBO_HISTORY RUN_FILES RUN_BITRATES RUN_FPS RUN_DURATIONS RUN_SI
 RUN_COMBO_HISTORY=()
 # REGION AI: fallback status tracker
 fallback_status=""
+
+handle_fallback_status() {
+  if [ "$fallback_attempts" -ge 2 ]; then
+    if [ "${fallback_status:-}" != "accepted_low_uniqueness" ]; then
+      echo "[Warning] Max fallback attempts reached — accepting copy with reduced uniqueness."
+    fi
+    fallback_status="accepted_low_uniqueness"
+  fi
+}
 # END REGION AI
 # END REGION AI
 
@@ -1626,12 +1635,7 @@ EOF
     fi
     break
   done
-  if [ "$fallback_attempts" -ge 2 ]; then
-    if [ "${fallback_status:-}" != "accepted_low_uniqueness" ]; then
-      echo "[Warning] Max fallback attempts reached — accepting copy with reduced uniqueness."
-    fi
-    fallback_status="accepted_low_uniqueness"
-  fi
+  handle_fallback_status
   # END REGION AI
 
   RUN_SSIM+=("$metrics_ssim")
@@ -1659,12 +1663,7 @@ while fallback_low_uniqueness; do
     break
   fi
 done
-if [ "$fallback_attempts" -ge 2 ]; then
-  if [ "${fallback_status:-}" != "accepted_low_uniqueness" ]; then
-    echo "[Warning] Max fallback attempts reached — accepting copy with reduced uniqueness."
-  fi
-  fallback_status="accepted_low_uniqueness"
-fi
+handle_fallback_status
 
 quality_round=0
 quality_pass_all=false
@@ -1728,12 +1727,7 @@ while :; do
       break
     fi
   done
-  if [ "$fallback_attempts" -ge 2 ]; then
-    if [ "${fallback_status:-}" != "accepted_low_uniqueness" ]; then
-      echo "[Warning] Max fallback attempts reached — accepting copy with reduced uniqueness."
-    fi
-    fallback_status="accepted_low_uniqueness"
-  fi
+  handle_fallback_status
   if [ "$fallback_happened" -eq 1 ]; then
     continue
   fi

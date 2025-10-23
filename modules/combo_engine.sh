@@ -249,8 +249,6 @@ generate_dynamic_combo() {
     "${br_pool[$br_idx]}" "${shift_pool[$shift_idx]}" "${softwares[$soft_idx]}" "${level_pool[$level_idx]}" \
     "${vf_options[$vf_idx]}" "${af_options[$af_idx]}")
   combo=$(_combo_protect_vf_parens "$combo")
-  combo="${combo//(/\(}"
-  combo="${combo//)/\)}"
   printf '%s' "$combo"
 }
 

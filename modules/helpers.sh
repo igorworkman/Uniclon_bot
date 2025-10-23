@@ -4,12 +4,6 @@ apply_combo_context() {
   local combo_string="$1"
   local combo_dump="" combo_script="" status=0 var
   local combo_print="$combo_string"
-  if [[ "$combo_string" == *"CUR_VF_EXTRA"* ]]; then
-    combo_print="${combo_print//\\(/(}"
-    combo_print="${combo_print//\\)/)}"
-    combo_print="${combo_print//(/\\(}"
-    combo_print="${combo_print//)/\\)}"
-  fi
   combo_script=$(mktemp "${TMP_ROOT:-/tmp}/combo_ctx.XXXXXX") || return 1
   {
     printf 'set -euo pipefail\n'

@@ -190,22 +190,11 @@ escape_single_quotes() {
   printf "%s" "$1" | sed "s/'/\\\\'/g"
 }
 
-escape_filter() {
-  local input="${1:-}"
-  if [ -z "$input" ]; then
-    printf ''
-    return
-  fi
-  if [ "${input:0:1}" = '"' ] && [ "${input: -1}" = '"' ]; then
-    input="${input:1:-1}"
-  elif [ "${input:0:1}" = "'" ] && [ "${input: -1}" = "'" ]; then
-    input="${input:1:-1}"
-  fi
-  input="${input//\(/(}"
-  input="${input//\)/)}"
-  input="${input//(/\(}"
-  input="${input//)/\)}"
-  printf '%s' "$input"
+build_filter() {
+  local base="${1:-}"
+  base="${base//(/\\(}"
+  base="${base//)/\\)}"
+  echo "$base"
 }
 
 PREVIEW_SS_NORMALIZED=$(clip_start "$PREVIEW_SS" "$PREVIEW_SS_FALLBACK" "preview_ss" "init")
@@ -635,6 +624,8 @@ generate_copy() {
       fi
       combo_applied=1
       combo_preview="${CUR_COMBO_LABEL:-$CUR_COMBO_STRING}"
+      CUR_VF_EXTRA="$(build_filter "${CUR_VF_EXTRA:-}")"
+      CUR_AF_EXTRA="$(build_filter "${CUR_AF_EXTRA:-}")"
       echo "[Strategy] Using combo #${copy_index} → ${combo_preview}"
     fi
     SEED_HEX=$(deterministic_md5 "${SRC}_${copy_index}_соль_${regen_tag}_${attempt}")
@@ -1282,8 +1273,8 @@ EOF
       echo "[Fallback] Copy $copy_index too similar — regenerating with $combo_payload"
       combo_used_label="$combo_payload"
       read -r combo_vf combo_af < <(bash -c "$combo_payload; printf '%s %s' \"\${CUR_VF_EXTRA:-}\" \"\${CUR_AF_EXTRA:-}\"")
-      combo_vf=$(escape_filter "$combo_vf")
-      combo_af=$(escape_filter "$combo_af")
+      combo_vf="$(build_filter "$combo_vf")"
+      combo_af="$(build_filter "$combo_af")"
       local fallback_vf_extra="" fallback_af_extra="$base_af_extra"
       [ -n "$combo_vf" ] && fallback_vf_extra="${fallback_vf_extra:+$fallback_vf_extra,}$combo_vf"
       [ -n "$combo_af" ] && fallback_af_extra="${fallback_af_extra:+$fallback_af_extra,}$combo_af"

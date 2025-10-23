@@ -3,6 +3,13 @@
 
 MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model,qt_software,ssim,psnr,phash,quality_pass,quality,fallback_reason,combo_used,attempts,creative_mirror,creative_intro,creative_lut,preview"
 
+manifest__escape_csv_field() {
+  local value="$1"
+  value="${value//"/""}"
+  value="${value//$'\n'/\\n}"
+  printf '"%s"' "$value"
+}
+
 manifest__legacy_upgrade() {
   local manifest_path="$1"
   if ! head -n1 "$manifest_path" | grep -q "target_duration"; then
@@ -173,7 +180,9 @@ manifest_write_entry() {
   local validated_flag="$3"
   local regen_flag="$4"
   local line
-  line="${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]},${RUN_QT_MAKES[$idx]},${RUN_QT_MODELS[$idx]},${RUN_QT_SOFTWARES[$idx]},${RUN_SSIM[$idx]},${RUN_PSNR[$idx]},${RUN_PHASH[$idx]},${RUN_QPASS[$idx]},${RUN_QUALITIES[$idx]},${RUN_FALLBACK_REASON[$idx]},${RUN_COMBO_USED[$idx]},${RUN_ATTEMPTS[$idx]},${RUN_CREATIVE_MIRROR[$idx]},${RUN_CREATIVE_INTRO[$idx]},${RUN_CREATIVE_LUT[$idx]},${RUN_PREVIEWS[$idx]}"
+  local combo_field
+  combo_field=$(manifest__escape_csv_field "${RUN_COMBO_USED[$idx]}")
+  line="${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]},${RUN_QT_MAKES[$idx]},${RUN_QT_MODELS[$idx]},${RUN_QT_SOFTWARES[$idx]},${RUN_SSIM[$idx]},${RUN_PSNR[$idx]},${RUN_PHASH[$idx]},${RUN_QPASS[$idx]},${RUN_QUALITIES[$idx]},${RUN_FALLBACK_REASON[$idx]},${combo_field},${RUN_ATTEMPTS[$idx]},${RUN_CREATIVE_MIRROR[$idx]},${RUN_CREATIVE_INTRO[$idx]},${RUN_CREATIVE_LUT[$idx]},${RUN_PREVIEWS[$idx]}"
   echo "$line" >> "$manifest_path"
 }
 

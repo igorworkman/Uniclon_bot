@@ -158,8 +158,11 @@ manifest__rewrite_with_header() {
 
 manifest__escape_csv_field() {
   local value="$1"
-  local escaped="${value//"/""}"
-  if [[ "$escaped" == *","* || "$escaped" == *"\""* || "$escaped" == *$'\n'* ]]; then
+  local dq='"'
+  local escaped
+  escaped=${value//$dq/$dq$dq}
+  local newline=$'\n'
+  if [[ $escaped == *,* || $escaped == *$dq* || $escaped == *$newline* ]]; then
     printf '"%s"' "$escaped"
   else
     printf '%s' "$escaped"

@@ -5,6 +5,8 @@ apply_combo_context() {
   local combo_dump="" combo_script="" status=0 var
   local combo_print="$combo_string"
   if [[ "$combo_string" == *"CUR_VF_EXTRA"* ]]; then
+    combo_print="${combo_print//\\(/(}"
+    combo_print="${combo_print//\\)/)}"
     combo_print="${combo_print//(/\\(}"
     combo_print="${combo_print//)/\\)}"
   fi

@@ -3,6 +3,11 @@
 apply_combo_context() {
   local combo_string="$1"
   local combo_dump="" combo_script="" status=0 var
+  local combo_print="$combo_string"
+  if [[ "$combo_string" == *"CUR_VF_EXTRA"* ]]; then
+    combo_print="${combo_print//(/\\(}"
+    combo_print="${combo_print//)/\\)}"
+  fi
   combo_script=$(mktemp "${TMP_ROOT:-/tmp}/combo_ctx.XXXXXX") || return 1
   {
     printf 'set -euo pipefail\n'
@@ -18,7 +23,7 @@ apply_combo_context() {
         declare -p "$var"
       fi
     done < <(compgen -A variable)
-    printf '%s\n' "$combo_string"
+    printf '%s\n' "$combo_print"
     printf '%s\n' "for var in CUR_COMBO_LABEL CFPS CNOISE CMIRROR CAUDIO CSHIFT CBR CSOFT CLEVEL CUR_VF_EXTRA CUR_AF_EXTRA; do printf '%s\\t%s\\n' \"\$var\" \"\${!var}\"; done"
   } >"$combo_script"
   combo_dump=$(bash --noprofile --norc "$combo_script")

@@ -918,10 +918,30 @@ report_template_statistics() {
 # REGION AI: sandboxed combo context loader
 apply_combo_context() {
   local combo_string="$1"
-  local combo_dump combo_runner
-  combo_runner="$combo_string"$'\nfor var in CUR_COMBO_LABEL CFPS CNOISE CMIRROR CAUDIO CSHIFT CBR CSOFT CLEVEL CUR_VF_EXTRA CUR_AF_EXTRA; do printf '\''%s\t%s\n'\'' "$var" "${!var}"; done'
-  combo_dump=$(bash -c "$combo_runner") || return 1
-  local line key value
+  local combo_dump="" combo_script="" status=0 var
+  combo_script=$(mktemp "${TMP_ROOT:-/tmp}/combo_ctx.XXXXXX") || return 1
+  {
+    printf 'set -euo pipefail\n'
+    declare -f
+    while IFS= read -r var; do
+      case "$var" in
+        BASHOPTS|BASHPID|BASH_ARGC|BASH_ARGV|BASH_LINENO|BASH_SOURCE|BASH_VERSINFO|DIRSTACK|EUID|FUNCNAME|GROUPS|LINENO|PIPESTATUS|PPID|RANDOM|SECONDS|SHELLOPTS|UID)
+          continue
+          ;;
+      esac
+      [[ "$var" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
+      if declare -p "$var" >/dev/null 2>&1; then
+        declare -p "$var"
+      fi
+    done < <(compgen -A variable)
+    printf '%s\n' "$combo_string"
+    printf '%s\n' "for var in CUR_COMBO_LABEL CFPS CNOISE CMIRROR CAUDIO CSHIFT CBR CSOFT CLEVEL CUR_VF_EXTRA CUR_AF_EXTRA; do printf '%s\\t%s\\n' \"\$var\" \"\${!var}\"; done"
+  } >"$combo_script"
+  combo_dump=$(bash --noprofile --norc "$combo_script")
+  status=$?
+  rm -f "$combo_script"
+  (( status == 0 )) || return 1
+  local key value
   while IFS=$'\t' read -r key value; do
     case "$key" in
       CUR_COMBO_LABEL|CFPS|CNOISE|CMIRROR|CAUDIO|CSHIFT|CBR|CSOFT|CLEVEL|CUR_VF_EXTRA|CUR_AF_EXTRA)

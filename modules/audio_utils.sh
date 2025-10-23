@@ -66,6 +66,57 @@ BEGIN {
   AFILTER_CORE=$(IFS=,; echo "${filters[*]}")
 }
 
+audio_random_jitter_chain() {
+  local sample_rate="${1:-$AUDIO_SR}" chance
+  chance=$(rand_int 0 2)
+  if [ "$chance" -ne 0 ]; then
+    printf 'anull'
+    return
+  fi
+  local jitter_scale
+  jitter_scale=$(rand_int 0 5)
+  printf 'asetrate=%s*1.%d,aresample=%s' "$sample_rate" "$jitter_scale" "$sample_rate"
+}
+
+audio_apply_combo_mode() {
+  local mode="$1"
+  local tempo="${2:-$TEMPO_FACTOR}"
+  local sample_rate="${3:-$AUDIO_SR}"
+  local chain="${AFILTER_CORE:-}"
+  local profile="${AUDIO_PROFILE:-resample}"
+
+  case "${mode:-}" in
+    asetrate)
+      chain=$(printf 'asetrate=%s*1.01,aresample=%s' "$sample_rate" "$sample_rate")
+      profile="asetrate"
+      ;;
+    resample)
+      chain=$(printf 'aresample=%s,atempo=%s' "$sample_rate" "$tempo")
+      profile="resample"
+      ;;
+    ""|none|anull)
+      ;;
+    *)
+      chain=$(printf 'anull,aresample=%s,%s,atempo=%s' "$sample_rate" "$AUDIO_FILTER_PRIMARY" "$tempo")
+      profile="anull+jitter"
+      ;;
+  esac
+
+  local jitter_chain
+  jitter_chain=$(audio_random_jitter_chain "$sample_rate")
+  if [ -n "$jitter_chain" ] && [ "$jitter_chain" != "anull" ]; then
+    chain=$(compose_af_chain "$chain" "$jitter_chain")
+    profile="${profile}+jitter"
+  fi
+
+  if [ -z "$chain" ]; then
+    chain=$(printf 'aresample=%s,atempo=1.0' "$sample_rate")
+  fi
+
+  AFILTER="$(apply_audio_fallback "$chain")"
+  AUDIO_PROFILE="$profile"
+}
+
 audio_codec_requires_silence() {
   local codec="$1"
   case "${codec:-none}" in

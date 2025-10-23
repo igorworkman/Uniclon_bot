@@ -146,3 +146,35 @@ fallback_low_uniqueness() {
 
   return 0
 }
+
+fallback_handle_status() {
+  local attempts="$1"
+  local max_attempts="${2:-2}"
+  if [ "$attempts" -ge "$max_attempts" ]; then
+    if [ "${fallback_status:-}" != "accepted_low_uniqueness" ]; then
+      echo "[Warning] Max fallback attempts reached — accepting copy with reduced uniqueness."
+    fi
+    fallback_status="accepted_low_uniqueness"
+  fi
+}
+
+fallback_process_cycle() {
+  local max_attempts="${1:-2}"
+  ensure_run_combos
+  local triggered=0
+  while fallback_low_uniqueness; do
+    triggered=1
+    fallback_attempts=$((fallback_attempts + 1))
+    if [ "$fallback_attempts" -ge "$max_attempts" ]; then
+      break
+    fi
+  done
+  fallback_handle_status "$fallback_attempts" "$max_attempts"
+  if [ "$triggered" -eq 0 ]; then
+    return 1
+  fi
+  if fallback_can_retry "$fallback_attempts" "$max_attempts"; then
+    return 0
+  fi
+  return 1
+}

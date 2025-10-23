@@ -153,3 +153,111 @@ manifest_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encodin
 PY
   printf '%s|%s|%s|%s|%s|%s' "$ssim_val" "$psnr_val" "$phash_val" "$bitrate_val" "$delta_bitrate" "$uniq_score"
 }
+
+metrics_quality_check() {
+  QUALITY_ISSUES=()
+  QUALITY_COPY_IDS=()
+  RUN_QPASS=()
+  local idx
+  for idx in "${!RUN_FILES[@]}"; do
+    local copy_path="${OUTPUT_DIR}/${RUN_FILES[$idx]}"
+    local ssim_val="${RUN_SSIM[$idx]:-}"
+    local psnr_val="${RUN_PSNR[$idx]:-}"
+    local phash_val="${RUN_PHASH[$idx]:-NA}"
+    if [ -z "$ssim_val" ] || [ "$ssim_val" = "NA" ] || [ "$ssim_val" = "N/A" ] || [ -z "$psnr_val" ] || [ "$psnr_val" = "NA" ] || [ "$psnr_val" = "N/A" ]; then
+      local metrics
+      metrics=$(metrics_compute_copy_metrics "$SRC" "$copy_path")
+      local metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq
+      IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
+      ssim_val="$metrics_ssim"
+      psnr_val="$metrics_psnr"
+      phash_val="$metrics_phash"
+      RUN_SSIM[$idx]="$ssim_val"
+      RUN_PSNR[$idx]="$psnr_val"
+      RUN_PHASH[$idx]="$phash_val"
+      RUN_UNIQ[$idx]="$metrics_uniq"
+      if [ -n "$metrics_bitrate" ] && [ "$metrics_bitrate" != "None" ]; then
+        RUN_BITRATES[$idx]="$metrics_bitrate"
+      fi
+    fi
+    local dur_delta
+    dur_delta=$(awk -v o="$ORIG_DURATION" -v c="${RUN_DURATIONS[$idx]}" 'BEGIN{o+=0;c+=0;diff=o-c;if(diff<0) diff=-diff;printf "%.3f",diff}')
+    local br_delta
+    br_delta=$(awk -v t="${RUN_TARGET_BRS[$idx]}" -v b="${RUN_BITRATES[$idx]}" 'BEGIN{t+=0;b+=0;diff=t-b;if(diff<0) diff=-diff;printf "%.0f",diff}')
+    local pass=true
+    if ! awk -v s="$ssim_val" 'BEGIN{exit (s>=0.95?0:1)}'; then pass=false; fi
+    if ! awk -v p="$psnr_val" 'BEGIN{exit (p>=34?0:1)}'; then pass=false; fi
+    if ! awk -v d="$dur_delta" 'BEGIN{exit (d<=0.50?0:1)}'; then pass=false; fi
+    if ! awk -v b="$br_delta" 'BEGIN{exit (b<=800?0:1)}'; then pass=false; fi
+    if [ "$pass" = true ]; then
+      RUN_QPASS+=("true")
+    else
+      RUN_QPASS+=("false")
+      QUALITY_ISSUES+=("$idx")
+      QUALITY_COPY_IDS+=("$((idx + 1))")
+      echo "⚠️ Подозрительное качество ${RUN_FILES[$idx]} (ssim=$ssim_val psnr=$psnr_val phash=$phash_val Δdur=$dur_delta Δbr=$br_delta)"
+    fi
+  done
+}
+
+metrics_warn_similar_copies() {
+  local total=${#RUN_FILES[@]}
+  [ "$total" -lt 2 ] && return
+  local i j pair_ssim pair_psnr pair_log psnr_log
+  local -a warnings=()
+  for ((i=0;i<total;i++)); do
+    for ((j=i+1;j<total;j++)); do
+      if [ "${RUN_FPS[$i]}" != "${RUN_FPS[$j]}" ]; then
+        continue
+      fi
+      if [ "${RUN_BITRATES[$i]}" != "${RUN_BITRATES[$j]}" ]; then
+        continue
+      fi
+      pair_log=$(ffmpeg_exec -v error -i "${OUTPUT_DIR}/${RUN_FILES[$i]}" -i "${OUTPUT_DIR}/${RUN_FILES[$j]}" -lavfi "ssim" -f null - 2>&1 || true)
+      pair_ssim=$(printf '%s\n' "$pair_log" | awk -F'All:' '/All:/{gsub(/^[ \t]+/,"",$2); split($2,a," "); print a[1]; exit}')
+      [ -n "$pair_ssim" ] || pair_ssim="0.000"
+      psnr_log=$(ffmpeg_exec -v error -i "${OUTPUT_DIR}/${RUN_FILES[$i]}" -i "${OUTPUT_DIR}/${RUN_FILES[$j]}" -lavfi "psnr" -f null - 2>&1 || true)
+      pair_psnr=$(printf '%s\n' "$psnr_log" | awk -F'average:' '/average:/{gsub(/^[ \t]+/,"",$2); split($2,a," "); print a[1]; exit}')
+      [ -n "$pair_psnr" ] || pair_psnr="0.00"
+      case "$pair_psnr" in
+        inf|Inf|INF|nan|NaN|NA)
+          pair_psnr="99.99"
+          ;;
+      esac
+      if awk -v s="$pair_ssim" -v p="$pair_psnr" 'BEGIN{exit (s>=0.985 && p>=45?0:1)}'; then
+        warnings+=("v$((i + 1)) и v$((j + 1)) (SSIM=$pair_ssim PSNR=$pair_psnr)")
+      fi
+    done
+  done
+  if [ "${#warnings[@]}" -gt 0 ]; then
+    local message="⚠️ Копии "
+    local idx
+    for idx in "${!warnings[@]}"; do
+      if [ "$idx" -gt 0 ]; then
+        message+="; "
+      fi
+      message+="${warnings[$idx]}"
+    done
+    message+=" слишком похожи. Перегенерация рекомендована."
+    echo "$message"
+  fi
+}
+
+metrics_log_uniqueness_summary() {
+  local ok=0 bad=0 idx delta ph s t a
+  for idx in "${!RUN_FILES[@]}"; do
+    ph="${RUN_PHASH[$idx]:-0}"
+    s="${RUN_SSIM[$idx]:-0}"
+    t="${RUN_TARGET_BRS[$idx]:-0}"
+    a="${RUN_BITRATES[$idx]:-0}"
+    delta=$(awk -v tt="$t" -v aa="$a" 'BEGIN{tt+=0;aa+=0;if(tt<=0){print 0;exit} diff=aa-tt;if(diff<0)diff=-diff;printf "%.3f",(diff/tt)*100}')
+    if awk -v p="$ph" 'BEGIN{p+=0; exit (p>=6?0:1)}'; then
+      ok=$((ok+1))
+    elif awk -v ss="$s" -v dd="$delta" 'BEGIN{ss+=0;dd+=0; exit (ss<0.995 && dd>=10?0:1)}'; then
+      ok=$((ok+1))
+    else
+      bad=$((bad+1))
+    fi
+  done
+  echo "ℹ️ Итог уникальности: принято $ok, отклонено $bad (порог ΔpHash>=6 или SSIM<0.995 и Δbitrate≥10%)."
+}

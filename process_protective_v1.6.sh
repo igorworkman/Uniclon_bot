@@ -32,15 +32,6 @@ declare -a RUN_COMBO_HISTORY RUN_FILES RUN_BITRATES RUN_FPS RUN_DURATIONS RUN_SI
 RUN_COMBO_HISTORY=()
 # REGION AI: fallback status tracker
 fallback_status=""
-
-handle_fallback_status() {
-  if [ "$fallback_attempts" -ge 2 ]; then
-    if [ "${fallback_status:-}" != "accepted_low_uniqueness" ]; then
-      echo "[Warning] Max fallback attempts reached — accepting copy with reduced uniqueness."
-    fi
-    fallback_status="accepted_low_uniqueness"
-  fi
-}
 # END REGION AI
 # END REGION AI
 
@@ -203,41 +194,6 @@ if [ -n "$SRC_BITRATE_RAW" ] && awk -v val="$SRC_BITRATE_RAW" 'BEGIN{val+=0; exi
 fi
 
 ensure_dir "$OUTPUT_DIR"
-
-cleanup_temp_artifacts() {
-  local removed=0
-  local -a patterns=("*.tmp" "*.log" "*.txt" "*.info" "*.wav" "*.m4a" "*.aac" "*.mp3" "*.mov" "*.MOV")
-  local dir pattern file
-
-  for dir in "." "$OUTPUT_DIR"; do
-    [ -d "$dir" ] || continue
-    for pattern in "${patterns[@]}"; do
-      while IFS= read -r -d '' file; do
-        if [ "$dir" = "$OUTPUT_DIR" ] && [[ "$file" == *.mp4 ]]; then
-          continue
-        fi
-        if rm -f "$file" 2>/dev/null; then
-          removed=$((removed + 1))
-        fi
-      done < <(find "$dir" -maxdepth 1 -type f -name "$pattern" -print0)
-    done
-  done
-
-  for dir in "logs" "${OUTPUT_DIR}/logs"; do
-    if [ -d "$dir" ]; then
-      if rm -rf "$dir" 2>/dev/null; then
-        removed=$((removed + 1))
-      fi
-    fi
-  done
-
-  if [ "$removed" -gt 0 ]; then
-    echo "🧹 Auto-clean удалил временные файлы: $removed"
-  fi
-
-  clear_temp "$TMP_ROOT"
-}
-
 
 manifest_init "$MANIFEST_PATH"
 
@@ -803,130 +759,6 @@ remove_indices_for_regen() {
   fi
 }
 
-compute_phash_diff() {
-  metrics_compute_phash_diff "$@"
-}
-
-compute_metrics_for_copy() {
-  metrics_compute_copy_metrics "$@"
-}
-
-quality_check() {
-  QUALITY_ISSUES=()
-  QUALITY_COPY_IDS=()
-  RUN_QPASS=()
-  local idx
-  for idx in "${!RUN_FILES[@]}"; do
-    local copy_path="${OUTPUT_DIR}/${RUN_FILES[$idx]}"
-    local ssim_val="${RUN_SSIM[$idx]:-}"
-    local psnr_val="${RUN_PSNR[$idx]:-}"
-    local phash_val="${RUN_PHASH[$idx]:-NA}"
-    if [ -z "$ssim_val" ] || [ "$ssim_val" = "NA" ] || [ "$ssim_val" = "N/A" ] || [ -z "$psnr_val" ] || [ "$psnr_val" = "NA" ] || [ "$psnr_val" = "N/A" ]; then
-      local metrics
-      metrics=$(compute_metrics_for_copy "$SRC" "$copy_path")
-      local metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq
-      IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
-      ssim_val="$metrics_ssim"
-      psnr_val="$metrics_psnr"
-      phash_val="$metrics_phash"
-      RUN_SSIM[$idx]="$ssim_val"
-      RUN_PSNR[$idx]="$psnr_val"
-      RUN_PHASH[$idx]="$phash_val"
-      RUN_UNIQ[$idx]="$metrics_uniq"
-      if [ -n "$metrics_bitrate" ] && [ "$metrics_bitrate" != "None" ]; then
-        RUN_BITRATES[$idx]="$metrics_bitrate"
-      fi
-    fi
-    local dur_delta
-    dur_delta=$(awk -v o="$ORIG_DURATION" -v c="${RUN_DURATIONS[$idx]}" 'BEGIN{o+=0;c+=0;diff=o-c;if(diff<0) diff=-diff;printf "%.3f",diff}')
-    local br_delta
-    br_delta=$(awk -v t="${RUN_TARGET_BRS[$idx]}" -v b="${RUN_BITRATES[$idx]}" 'BEGIN{t+=0;b+=0;diff=t-b;if(diff<0) diff=-diff;printf "%.0f",diff}')
-    local pass=true
-    if ! awk -v s="$ssim_val" 'BEGIN{exit (s>=0.95?0:1)}'; then pass=false; fi
-    if ! awk -v p="$psnr_val" 'BEGIN{exit (p>=34?0:1)}'; then pass=false; fi
-    if ! awk -v d="$dur_delta" 'BEGIN{exit (d<=0.50?0:1)}'; then pass=false; fi
-    if ! awk -v b="$br_delta" 'BEGIN{exit (b<=800?0:1)}'; then pass=false; fi
-    if [ "$pass" = true ]; then
-      RUN_QPASS+=("true")
-    else
-      RUN_QPASS+=("false")
-      QUALITY_ISSUES+=("$idx")
-      QUALITY_COPY_IDS+=("$((idx + 1))")
-      echo "⚠️ Подозрительное качество ${RUN_FILES[$idx]} (ssim=$ssim_val psnr=$psnr_val phash=$phash_val Δdur=$dur_delta Δbr=$br_delta)"
-    fi
-  done
-}
-
-# REGION AI: safe quality fallback driver
-_try_regen_quality() {
-  fallback_try_regen_quality "$@"
-}
-# END REGION AI
-
-warn_similar_copies() {
-  local total=${#RUN_FILES[@]}
-  [ "$total" -lt 2 ] && return
-  local i j pair_ssim pair_psnr pair_log psnr_log
-  local -a warnings=()
-  for ((i=0;i<total;i++)); do
-    for ((j=i+1;j<total;j++)); do
-      if [ "${RUN_FPS[$i]}" != "${RUN_FPS[$j]}" ]; then
-        continue
-      fi
-      if [ "${RUN_BITRATES[$i]}" != "${RUN_BITRATES[$j]}" ]; then
-        continue
-      fi
-      pair_log=$(ffmpeg_exec -v error -i "${OUTPUT_DIR}/${RUN_FILES[$i]}" -i "${OUTPUT_DIR}/${RUN_FILES[$j]}" -lavfi "ssim" -f null - 2>&1 || true)
-      pair_ssim=$(printf '%s\n' "$pair_log" | awk -F'All:' '/All:/{gsub(/^[ \t]+/,"",$2); split($2,a," "); print a[1]; exit}')
-      [ -n "$pair_ssim" ] || pair_ssim="0.000"
-      psnr_log=$(ffmpeg_exec -v error -i "${OUTPUT_DIR}/${RUN_FILES[$i]}" -i "${OUTPUT_DIR}/${RUN_FILES[$j]}" -lavfi "psnr" -f null - 2>&1 || true)
-      pair_psnr=$(printf '%s\n' "$psnr_log" | awk -F'average:' '/average:/{gsub(/^[ \t]+/,"",$2); split($2,a," "); print a[1]; exit}')
-      [ -n "$pair_psnr" ] || pair_psnr="0.00"
-      case "$pair_psnr" in
-        inf|Inf|INF|nan|NaN|NA)
-          pair_psnr="99.99"
-          ;;
-      esac
-      if awk -v s="$pair_ssim" -v p="$pair_psnr" 'BEGIN{exit (s>=0.985 && p>=45?0:1)}'; then
-        warnings+=("v$((i + 1)) и v$((j + 1)) (SSIM=$pair_ssim PSNR=$pair_psnr)")
-      fi
-    done
-  done
-  if [ "${#warnings[@]}" -gt 0 ]; then
-    local message="⚠️ Копии "
-    local idx
-    for idx in "${!warnings[@]}"; do
-      if [ "$idx" -gt 0 ]; then
-        message+="; "
-      fi
-      message+="${warnings[$idx]}"
-    done
-    message+=" слишком похожи. Перегенерация рекомендована."
-    echo "$message"
-  fi
-}
-
-log_uniqueness_summary(){ local ok=0 bad=0 idx delta ph s t a;for idx in "${!RUN_FILES[@]}"; do ph="${RUN_PHASH[$idx]:-0}";s="${RUN_SSIM[$idx]:-0}";t="${RUN_TARGET_BRS[$idx]:-0}";a="${RUN_BITRATES[$idx]:-0}";delta=$(awk -v tt="$t" -v aa="$a" 'BEGIN{tt+=0;aa+=0;if(tt<=0){print 0;exit} diff=aa-tt;if(diff<0)diff=-diff;printf "%.3f",(diff/tt)*100}');if awk -v p="$ph" 'BEGIN{p+=0; exit (p>=6?0:1)}'; then ok=$((ok+1));elif awk -v ss="$s" -v dd="$delta" 'BEGIN{ss+=0;dd+=0; exit (ss<0.995 && dd>=10?0:1)}'; then ok=$((ok+1));else bad=$((bad+1));fi;done;echo "ℹ️ Итог уникальности: принято $ok, отклонено $bad (порог ΔpHash>=6 или SSIM<0.995 и Δbitrate≥10%).";}
-
-report_template_statistics() {
-  [ -f "$MANIFEST_PATH" ] || return
-  local stats
-  stats=$(awk -F',' 'NR>1 && NF>=4 {key=$3"|"$2"|"$4; count[key]++} END{for(k in count) if(count[k]>1) printf "%s %d\n",k,count[k];}' "$MANIFEST_PATH")
-  if [ -z "$stats" ]; then
-    echo "ℹ️ Совпадений шаблонов не обнаружено"
-    return
-  fi
-  echo "ℹ️ Статистика совпадений manifest:"
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    local count="${line##* }"
-    local combo="${line% $count}"
-    local IFS='|'
-    read -r fps_val br_val dur_val <<<"$combo"
-    echo "ℹ️ Повтор: fps=$fps_val bitrate=$br_val duration=$dur_val — ${count} копий"
-  done <<<"$stats"
-}
-
 # REGION AI: sandboxed combo context loader
 apply_combo_context() {
   local combo_string="$1"
@@ -1086,26 +918,14 @@ EOF
       AUDIO_SR=$(rand_choice AUDIO_SR_OPTIONS)
     fi
     pick_audio_chain
-    if [ -n "$CAUDIO" ]; then if [ "$CAUDIO" = "asetrate" ]; then AFILTER="asetrate=${AUDIO_SR}*1.01,aresample=${AUDIO_SR}"; AUDIO_PROFILE="asetrate"; elif [ "$CAUDIO" = "resample" ]; then AFILTER="aresample=${AUDIO_SR},atempo=${TEMPO_FACTOR}"; AUDIO_PROFILE="resample"; else AFILTER="anull,aresample=${AUDIO_SR},apulsator=mode=sine:freq=0.9,atempo=${TEMPO_FACTOR}"; AUDIO_PROFILE="anull+jitter"; fi; fi
-
-    local jitter_filters=()
-    if (( RANDOM % 3 == 0 )); then
-      jitter_filters=("asetrate=${AUDIO_SR}*1.$((RANDOM%6))" "aresample=${AUDIO_SR}")
-      AUDIO_PROFILE="${AUDIO_PROFILE}+jitter"
-    else
-      jitter_filters=("anull")
-    fi
-    local jitter_chain="$(IFS=,; echo "${jitter_filters[*]}")"
-    if [ "$jitter_chain" = "anull" ]; then
-      AFILTER="$AFILTER_CORE"
-    elif [ -n "${AFILTER_CORE:-}" ]; then
-      AFILTER="${jitter_chain},${AFILTER_CORE}"
-    else
-      AFILTER="$jitter_chain"
-    fi
-
+    AFILTER="${AFILTER_CORE:-}"
+    audio_apply_combo_mode "${CAUDIO:-}" "$TEMPO_FACTOR"
     if [ -z "${AFILTER:-}" ]; then
-      AFILTER="aresample=${AUDIO_SR},atempo=1.0"
+      if [ -n "${AFILTER_CORE:-}" ]; then
+        AFILTER="${AFILTER_CORE}"
+      else
+        AFILTER="aresample=${AUDIO_SR},atempo=1.0"
+      fi
     fi
 
 # REGION AI: enforce variant uniqueness signature
@@ -1113,7 +933,7 @@ EOF
     crop_signature=$(printf "%sx%s@%s,%s" "$CROP_W" "$CROP_H" "$CROP_X" "$CROP_Y")
     local duration_signature
     duration_signature=$(awk -v d="$CLIP_DURATION" 'BEGIN{d+=0; printf "%.3f", d}')
-    local jitter_signature="$jitter_chain"
+    local jitter_signature="$AFILTER"
     if [ -n "$jitter_signature" ]; then
       jitter_signature=$(deterministic_md5 "$jitter_signature")
     fi
@@ -1339,11 +1159,14 @@ EOF
   # REGION AI: primary ffmpeg command with stable stream mapping
   local audio_input_index=0 audio_stream_present=0
   AUDIO_CODEC="none"
-  if ffprobe_exec -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 "$SRC" >/dev/null 2>&1; then
+  local audio_info=""
+  if audio_info=$(ffmpeg_audio_stream_info "$SRC"); then
     audio_stream_present=1
-    AUDIO_CODEC=$(ffprobe_exec -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$SRC" 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")
-    AUDIO_CODEC=${AUDIO_CODEC:-none}
   fi
+  if [ -n "$audio_info" ]; then
+    AUDIO_CODEC="$audio_info"
+  fi
+  AUDIO_CODEC=${AUDIO_CODEC:-none}
   AUDIO_CHAIN=$(audio_guard_chain "$AUDIO_CODEC" "$af_payload")
   if [ -z "${AUDIO_FILTER:-}" ]; then
     AUDIO_FILTER="anull"
@@ -1410,7 +1233,7 @@ EOF
   if [ "$INTRO_ACTIVE" -eq 1 ] && [ -n "$INTRO_SOURCE" ] && [ -n "$INTRO_OUTPUT_PATH" ]; then
     # REGION AI: intro render with resilient audio mapping
     local intro_audio_present=0
-    if ffprobe_exec -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 "$INTRO_SOURCE" >/dev/null 2>&1; then
+    if ffmpeg_audio_stream_info "$INTRO_SOURCE" >/dev/null 2>&1; then
       intro_audio_present=1
     fi
     local intro_args=(
@@ -1491,20 +1314,18 @@ EOF
   FILE_NAME="$(basename "$OUT")"
   local MEDIA_DURATION_RAW=""
   local MEDIA_DURATION_SEC=""
-  MEDIA_DURATION_RAW=$(ffprobe_exec -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$OUT" 2>/dev/null || true)
+  MEDIA_DURATION_RAW=$(ffmpeg_media_duration_raw "$OUT")
+  MEDIA_DURATION_SEC=$(ffmpeg_media_duration_seconds "$OUT" 2>/dev/null || true)
   local PREVIEW_NAME=""
   local PREVIEW_PATH="${PREVIEW_DIR}/${FILE_STEM}.png"
   if [ -n "$MEDIA_DURATION_RAW" ] && [ "$MEDIA_DURATION_RAW" != "N/A" ]; then
-    MEDIA_DURATION_SEC=$(awk -v d="$MEDIA_DURATION_RAW" 'BEGIN{if(d==""||d=="N/A"){exit 1}; d+=0; if(d<0) d=0; printf "%.6f", d}' 2>/dev/null || printf "")
     if [ -z "$MEDIA_DURATION_SEC" ]; then
       echo "⚠️ Не удалось преобразовать длительность $FILE_NAME (${MEDIA_DURATION_RAW}) для проверки превью"
-      MEDIA_DURATION_SEC=""
     fi
   else
-    if [ -z "$MEDIA_DURATION_RAW" ] || [ "$MEDIA_DURATION_RAW" = "N/A" ]; then
-      echo "⚠️ Не удалось определить длительность $FILE_NAME перед генерацией превью"
-    fi
+    echo "⚠️ Не удалось определить длительность $FILE_NAME перед генерацией превью"
     MEDIA_DURATION_RAW=""
+    MEDIA_DURATION_SEC=""
   fi
 
   local preview_seek_value="$PREVIEW_SS_NORMALIZED"
@@ -1601,7 +1422,7 @@ EOF
   local base_vf="$VF" base_af="$AFILTER" base_af_extra="${CUR_AF_EXTRA:-}"
   local metrics metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq fallback_attempts=0
   while :; do
-    metrics=$(compute_metrics_for_copy "$SRC" "$OUT"); IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
+    metrics=$(metrics_compute_copy_metrics "$SRC" "$OUT"); IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
     if fallback_should_similarity_regen "$metrics_ssim" "$metrics_phash"; then
       if fallback_can_retry "$fallback_attempts" 2; then
         echo "[Fallback] Copy $copy_index too similar — regenerating..."
@@ -1655,15 +1476,9 @@ done
 auto_expand_run_combos
 
 fallback_attempts=0
-ensure_run_combos
-while fallback_low_uniqueness; do
+while fallback_process_cycle 2; do
   auto_expand_run_combos
-  fallback_attempts=$((fallback_attempts + 1))
-  if [ "$fallback_attempts" -ge 2 ]; then
-    break
-  fi
 done
-handle_fallback_status
 
 quality_round=0
 quality_pass_all=false
@@ -1718,17 +1533,7 @@ while :; do
     done
   done
 
-  fallback_happened=0
-  ensure_run_combos
-  while fallback_low_uniqueness; do
-    fallback_happened=1
-    fallback_attempts=$((fallback_attempts + 1))
-    if [ "$fallback_attempts" -ge 2 ]; then
-      break
-    fi
-  done
-  handle_fallback_status
-  if [ "$fallback_happened" -eq 1 ]; then
+  if fallback_process_cycle 2; then
     continue
   fi
 
@@ -1737,7 +1542,7 @@ while :; do
     validated_flag=false
   fi
 
-  quality_check
+  metrics_quality_check
   if [ "${#QUALITY_ISSUES[@]}" -eq 0 ]; then
     quality_pass_all=true
     break
@@ -1747,21 +1552,21 @@ while :; do
     break
   fi
   quality_round=$((quality_round + 1))
-  _try_regen_quality
+  fallback_try_regen_quality
 done
 
 if [ "$quality_pass_all" != true ]; then
-  quality_check
+  metrics_quality_check
 fi
 
-warn_similar_copies; log_uniqueness_summary
+metrics_warn_similar_copies; metrics_log_uniqueness_summary
 
 regen_flag=false
 if [ "$REGEN_OCCURRED" -eq 1 ]; then
   regen_flag=true
 fi
 
-report_template_statistics
+report_builder_template_statistics "$MANIFEST_PATH"
 
 
 

@@ -190,6 +190,24 @@ escape_single_quotes() {
   printf "%s" "$1" | sed "s/'/\\\\'/g"
 }
 
+escape_filter() {
+  local input="${1:-}"
+  if [ -z "$input" ]; then
+    printf ''
+    return
+  fi
+  if [ "${input:0:1}" = '"' ] && [ "${input: -1}" = '"' ]; then
+    input="${input:1:-1}"
+  elif [ "${input:0:1}" = "'" ] && [ "${input: -1}" = "'" ]; then
+    input="${input:1:-1}"
+  fi
+  input="${input//\(/(}"
+  input="${input//\)/)}"
+  input="${input//(/\(}"
+  input="${input//)/\)}"
+  printf '%s' "$input"
+}
+
 PREVIEW_SS_NORMALIZED=$(clip_start "$PREVIEW_SS" "$PREVIEW_SS_FALLBACK" "preview_ss" "init")
 if [ -z "$PREVIEW_SS_NORMALIZED" ]; then
   PREVIEW_SS_NORMALIZED="$PREVIEW_SS_FALLBACK"
@@ -1254,7 +1272,7 @@ EOF
         fallback_reason_entry="${reason_line:-max_regen_reached}"
         break
       fi
-      local combo_payload="" combo_vf="" combo_af="" escaped_combo=""
+      local combo_payload="" combo_vf="" combo_af=""
       combo_payload=$(next_combo)
       if [ -z "$combo_payload" ]; then
         uniqueness_verdict="ACCEPT_WARN"
@@ -1263,12 +1281,9 @@ EOF
       fi
       echo "[Fallback] Copy $copy_index too similar — regenerating with $combo_payload"
       combo_used_label="$combo_payload"
-      escaped_combo="$combo_payload"
-      if [[ "$escaped_combo" == *"("* || "$escaped_combo" == *")"* ]]; then
-        escaped_combo="${escaped_combo//(/\(}"
-        escaped_combo="${escaped_combo//)/\)}"
-      fi
-      read -r combo_vf combo_af < <(bash -c "$escaped_combo; printf '%s %s' \"\${CUR_VF_EXTRA:-}\" \"\${CUR_AF_EXTRA:-}\"")
+      read -r combo_vf combo_af < <(bash -c "$combo_payload; printf '%s %s' \"\${CUR_VF_EXTRA:-}\" \"\${CUR_AF_EXTRA:-}\"")
+      combo_vf=$(escape_filter "$combo_vf")
+      combo_af=$(escape_filter "$combo_af")
       local fallback_vf_extra="" fallback_af_extra="$base_af_extra"
       [ -n "$combo_vf" ] && fallback_vf_extra="${fallback_vf_extra:+$fallback_vf_extra,}$combo_vf"
       [ -n "$combo_af" ] && fallback_af_extra="${fallback_af_extra:+$fallback_af_extra,}$combo_af"

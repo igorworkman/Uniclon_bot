@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import time
@@ -31,6 +32,7 @@ from utils import (
 )
 from downloader import download_telegram_file
 from executor import run_script_with_logs, list_new_mp4s, probe_video_duration
+from services.video_processor import run_protective_process
 # END REGION AI
 from locales import get_text
 
@@ -723,6 +725,30 @@ async def _run_and_send(
     except Exception:
         await message.answer("Произошла ошибка при обработке. Попробуйте ещё раз.")
         raise
+
+    temporary_error = rc != 0 and (
+        "RETRY" in logs_text or "UniqScore=0.0" in logs_text
+    )
+    if temporary_error:
+        logger.warning(
+            "Temporary failure detected for %s; invoking safe retry", input_path.name
+        )
+        await message.answer("⚠️ Обнаружена временная ошибка, повторяем попытку…")
+        retry_ok = await asyncio.to_thread(
+            run_protective_process,
+            input_path.name,
+            copies,
+        )
+        suffix = "[retry via run_protective_process {}]"
+        if retry_ok:
+            rc = 0
+            logs_text = (logs_text + "\n" if logs_text else "") + suffix.format("succeeded")
+            logger.info("Retry via run_protective_process succeeded for %s", input_path.name)
+        else:
+            logs_text = (logs_text + "\n" if logs_text else "") + suffix.format("failed")
+            logger.warning(
+                "Retry via run_protective_process failed for %s", input_path.name
+            )
 
     if "⚠️ Обнаружены слишком похожие копии" in logs_text:
         await message.answer("⚠️ Обнаружены слишком похожие копии, выполняется перегенерация…")

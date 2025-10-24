@@ -1,13 +1,38 @@
 import logging
 import subprocess
 import time
-from config import BASE_DIR
+from typing import List
+
+from config import BASE_DIR, PLATFORM_PRESETS
 
 logger = logging.getLogger(__name__)
 _SCRIPT_PATH = (BASE_DIR / "process_protective_v1.6.sh").resolve()
 
 
-def run_protective_process(filename: str, copies: int) -> bool:
+def _build_profile_args(profile: str) -> List[str]:
+    normalized = (profile or "").strip().lower()
+    if normalized in {"", "default"}:
+        return []
+
+    valid_profiles = set(PLATFORM_PRESETS.keys())
+    if normalized in valid_profiles:
+        return ["--profile", normalized]
+
+    logger.warning("Unknown profile '%s'; invoking retry without --profile", normalized)
+    return []
+
+
+def _build_quality_args(quality: str) -> List[str]:
+    normalized = (quality or "").strip().lower()
+    if normalized in {"high", "std"}:
+        return ["--quality", normalized]
+
+    if normalized:
+        logger.warning("Unknown quality '%s'; defaulting retry to std", normalized)
+    return ["--quality", "std"]
+
+
+def run_protective_process(filename: str, copies: int, profile: str = "", quality: str = "") -> bool:
     if copies < 1:
         raise ValueError("copies must be >= 1")
     if not _SCRIPT_PATH.exists():
@@ -19,7 +44,13 @@ def run_protective_process(filename: str, copies: int) -> bool:
             _SCRIPT_PATH.chmod(mode | 0o111)
     except OSError:
         logger.debug("Failed to ensure executable for %s", _SCRIPT_PATH, exc_info=True)
-    cmd = ["./process_protective_v1.6.sh", filename, str(int(copies))]
+    cmd = [
+        "./process_protective_v1.6.sh",
+        filename,
+        str(int(copies)),
+        *_build_profile_args(profile),
+        *_build_quality_args(quality),
+    ]
     for attempt in range(2):
         try:
             proc = subprocess.run(cmd, cwd=str(BASE_DIR), capture_output=True, text=True, check=False)

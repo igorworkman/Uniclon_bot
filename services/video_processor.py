@@ -1,10 +1,17 @@
 import logging
 import subprocess
 import time
+from pathlib import Path
+
 from config import BASE_DIR
 
 logger = logging.getLogger(__name__)
-_SCRIPT_PATH = (BASE_DIR / "process_protective_v1.6.sh").resolve()
+
+# REGION AI: protective script paths
+PROJECT_DIR = Path("/Users/teddy/Documents/Uniclon_bot")
+OUTPUT_DIR = PROJECT_DIR / "output"
+_SCRIPT_PATH = (PROJECT_DIR / "process_protective_v1.6.sh").resolve()
+# END REGION AI
 
 
 # REGION AI: synchronous protective runner
@@ -16,6 +23,10 @@ def run_protective_process(
 ) -> bool:
     if copies < 1:
         raise ValueError("copies must be >= 1")
+    full_path = (BASE_DIR / filename).resolve()
+    if not full_path.exists():
+        logger.error("❌ Файл не найден: %s", full_path)
+        return False
     if not _SCRIPT_PATH.exists():
         logger.error("❌ Script not found: %s", _SCRIPT_PATH)
         return False
@@ -25,12 +36,12 @@ def run_protective_process(
             _SCRIPT_PATH.chmod(mode | 0o111)
     except OSError:
         logger.debug("Failed to ensure executable for %s", _SCRIPT_PATH, exc_info=True)
-    cmd = ["./process_protective_v1.6.sh", filename, str(int(copies))]
+    cmd = ["./process_protective_v1.6.sh", str(full_path), str(int(copies))]
     start_ts = time.monotonic()
     try:
         proc = subprocess.run(
             cmd,
-            cwd=str(BASE_DIR),
+            cwd=str(PROJECT_DIR),
             capture_output=True,
             text=True,
             check=False,
@@ -43,18 +54,18 @@ def run_protective_process(
         return False
     duration = time.monotonic() - start_ts
     stdout, stderr = proc.stdout or "", proc.stderr or ""
+    if proc.returncode != 0:
+        logger.error(
+            "⚠️ Скрипт завершился с кодом %s: %s",
+            proc.returncode,
+            (stderr or stdout).strip() or "no output",
+        )
+        return False
     if stdout:
         logger.info("process_protective stdout:\n%s", stdout.rstrip())
     if stderr:
         logger.warning("process_protective stderr:\n%s", stderr.rstrip())
-    if proc.returncode == 0:
-        logger.info("✅ Script completed successfully: %s (%.2fs)", filename, duration)
-        return True
-    logger.error(
-        "❌ process_protective_v1.6.sh failed (code %s, %.2fs):\n%s",
-        proc.returncode,
-        duration,
-        stderr or stdout,
-    )
-    return False
+    logger.info("✅ Скрипт успешно завершён: %s (%.2fs)", full_path, duration)
+    logger.info("📂 Готовые файлы доступны в %s", OUTPUT_DIR)
+    return True
 # END REGION AI

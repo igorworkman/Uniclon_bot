@@ -667,19 +667,34 @@ async def _enqueue_processing(
             save_preview,
         )
 
-    # REGION AI: linear execution
-    await task()
-    return
-    # END REGION AI
-
+    # REGION AI: linear execution with per-user guard
     if queue is None:
         await task()
         return
 
+    existing_tasks = []
+    try:
+        existing_tasks = await queue.get_user_tasks(user_id)
+    except AttributeError:
+        existing_tasks = []
+
+    completion = asyncio.Event()
+    task_error: Optional[BaseException] = None
+
+    async def queued_task() -> None:
+        nonlocal task_error
+        try:
+            await task()
+        except BaseException as exc:  # noqa: BLE001
+            task_error = exc
+            raise
+        finally:
+            completion.set()
+
     try:
         await queue.enqueue(
             user_id,
-            task,
+            queued_task,
             input_path.name,
             profile=profile or None,
             copies=copies,
@@ -690,8 +705,15 @@ async def _enqueue_processing(
         await task()
         return
 
-    logger.info("Task queued for user=%s", user_id)
-    await message.answer("Видео поставлено в очередь. Ожидайте обработки…")
+    if existing_tasks:
+        logger.info("Task queued for user=%s", user_id)
+        await message.answer("Видео поставлено в очередь. Ожидайте обработки…")
+
+    await completion.wait()
+    if task_error is not None:
+        raise task_error
+    return
+    # END REGION AI
 
 
 async def _run_and_send(

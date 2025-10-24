@@ -734,11 +734,12 @@ async def _run_and_send(
             "Temporary failure detected for %s; invoking safe retry", input_path.name
         )
         await message.answer("⚠️ Обнаружена временная ошибка, повторяем попытку…")
-        retry_ok = await asyncio.to_thread(
-            run_protective_process,
+        # REGION AI: synchronous protective retry
+        retry_ok = run_protective_process(
             input_path.name,
             copies,
         )
+        # END REGION AI
         suffix = "[retry via run_protective_process {}]"
         if retry_ok:
             rc = 0

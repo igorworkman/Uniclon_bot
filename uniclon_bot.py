@@ -13,7 +13,7 @@ from typing import Awaitable, Callable, Dict, Iterable, List, Optional, Sequence
 
 from dotenv import load_dotenv
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -626,7 +626,7 @@ def make_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     dp.message.register(handle_clean_command, Command("clean"))
-    dp.message.register(handle_video)
+    dp.message.register(handle_video, F.video)
     return dp
 
 

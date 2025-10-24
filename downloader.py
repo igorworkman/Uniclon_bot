@@ -1,13 +1,13 @@
 
-import asyncio
 from pathlib import Path
 
 import aiohttp
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message
 
 
+# fix: добавлен HTTPS fallback для скачивания файлов из Telegram
+# REGION AI: download_telegram_file fallback
 async def download_telegram_file(bot: Bot, message: Message, dest_path: Path) -> Path:
     """Скачивает Video или Document(.mp4) в dest_path, пытается сохранить имя файла."""
     if message.video:
@@ -25,25 +25,15 @@ async def download_telegram_file(bot: Bot, message: Message, dest_path: Path) ->
     dest_path = dest_path.with_name(original_name)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
-    try:
-        tg_file = await bot.get_file(file_id)
-        await bot.download_file(tg_file.file_path, destination=dest_path)
-        return dest_path
-    except TelegramBadRequest as error:
-        error_text = str(error).lower()
-        if "wrong file_id" not in error_text and "temporarily unavailable" not in error_text:
-            raise
-
-    await asyncio.sleep(1)
     tg_file = await bot.get_file(file_id)
-    file_url = f"https://api.telegram.org/file/bot{bot.token}/{tg_file.file_path}"
     try:
+        await bot.download_file(tg_file.file_path, destination=dest_path)
+    except Exception:
+        url = f"https://api.telegram.org/file/bot{bot.token}/{tg_file.file_path}"
         async with aiohttp.ClientSession() as session:
-            async with session.get(file_url) as resp:
-                if resp.status != 200:
-                    raise RuntimeError("Telegram CDN не отдаёт файл. Попробуйте позже.")
-                dest_path.write_bytes(await resp.read())
-    except aiohttp.ClientError as error:
-        raise RuntimeError("Telegram CDN не отдаёт файл. Попробуйте позже.") from error
+            async with session.get(url) as response:
+                response.raise_for_status()
+                dest_path.write_bytes(await response.read())
 
     return dest_path
+# END REGION AI

@@ -1,7 +1,9 @@
 
+import asyncio
 from pathlib import Path
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message
 
 
@@ -23,8 +25,24 @@ async def download_telegram_file(bot: Bot, message: Message, dest_path: Path) ->
 
     tg_file = await bot.get_file(file_id)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        await bot.download(file=tg_file.file_path, destination=dest_path)
-    except (AttributeError, TypeError):
-        await bot.download_file(tg_file.file_path, destination=dest_path)
-    return dest_path
+
+    for attempt in range(2):
+        try:
+            try:
+                await bot.download(file=tg_file.file_path, destination=dest_path)
+            except (AttributeError, TypeError):
+                await bot.download_file(tg_file.file_path, destination=dest_path)
+            return dest_path
+        except TelegramBadRequest as error:
+            message = str(error).lower()
+            if "wrong file_id" in message or "temporarily unavailable" in message:
+                if attempt == 1:
+                    raise RuntimeError(
+                        "Telegram временно не отдаёт файл. Попробуйте позже."
+                    ) from error
+                await asyncio.sleep(1)
+                tg_file = await bot.get_file(file_id)
+                continue
+            raise
+
+    raise RuntimeError("Не удалось скачать файл после 2 попыток.")

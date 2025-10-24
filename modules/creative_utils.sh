@@ -47,12 +47,21 @@ creative_unwrap_vf() {
 collect_intro_clips() {
   INTRO_CLIPS=()
   local src_dir="$(cd "$(dirname "$SRC")" && pwd)"
+  local repo_dir="${BASE_DIR:-$src_dir}"
   local search_dirs=()
   if [ -d "${src_dir}/intros" ]; then
     search_dirs+=("${src_dir}/intros")
   fi
+  if [ -d "${repo_dir}/intros" ]; then
+    if [ "${repo_dir}/intros" != "${src_dir}/intros" ]; then
+      search_dirs+=("${repo_dir}/intros")
+    fi
+  fi
   if [ -d "${PWD}/intros" ]; then
-    search_dirs+=("${PWD}/intros")
+    local pwd_intros="${PWD}/intros"
+    if [ "$pwd_intros" != "${src_dir}/intros" ] && [ "$pwd_intros" != "${repo_dir}/intros" ]; then
+      search_dirs+=("$pwd_intros")
+    fi
   fi
   for dir in "${search_dirs[@]}"; do
     [ -d "$dir" ] || continue
@@ -65,12 +74,21 @@ collect_intro_clips() {
 collect_lut_files() {
   LUT_FILES=()
   local src_dir="$(cd "$(dirname "$SRC")" && pwd)"
+  local repo_dir="${BASE_DIR:-$src_dir}"
   local search_dirs=()
   if [ -d "${src_dir}/luts" ]; then
     search_dirs+=("${src_dir}/luts")
   fi
+  if [ -d "${repo_dir}/luts" ]; then
+    if [ "${repo_dir}/luts" != "${src_dir}/luts" ]; then
+      search_dirs+=("${repo_dir}/luts")
+    fi
+  fi
   if [ -d "${PWD}/luts" ]; then
-    search_dirs+=("${PWD}/luts")
+    local pwd_luts="${PWD}/luts"
+    if [ "$pwd_luts" != "${src_dir}/luts" ] && [ "$pwd_luts" != "${repo_dir}/luts" ]; then
+      search_dirs+=("$pwd_luts")
+    fi
   fi
   for dir in "${search_dirs[@]}"; do
     [ -d "$dir" ] || continue

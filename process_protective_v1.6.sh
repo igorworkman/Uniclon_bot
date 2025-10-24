@@ -417,9 +417,18 @@ log_warn() {
 collect_music_variants() {
   MUSIC_VARIANT_TRACKS=()
   local src_dir="$(cd "$(dirname "$SRC")" && pwd)"
+  local repo_dir="${BASE_DIR:-$src_dir}"
   local search_dirs=("${src_dir}/music_variants" "$src_dir")
+  if [ -d "${repo_dir}/music_variants" ]; then
+    if [ "${repo_dir}/music_variants" != "${src_dir}/music_variants" ]; then
+      search_dirs+=("${repo_dir}/music_variants")
+    fi
+  fi
   if [ -d "${PWD}/music_variants" ]; then
-    search_dirs+=("${PWD}/music_variants")
+    local pwd_music="${PWD}/music_variants"
+    if [ "$pwd_music" != "${src_dir}/music_variants" ] && [ "$pwd_music" != "${repo_dir}/music_variants" ]; then
+      search_dirs+=("$pwd_music")
+    fi
   fi
   for dir in "${search_dirs[@]}"; do
     [ -d "$dir" ] || continue

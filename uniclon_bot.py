@@ -438,6 +438,7 @@ from handlers import (
     get_user_output_paths,
     router,
     set_task_queue,
+    handle_video,
 )
 # END REGION AI
 
@@ -625,6 +626,7 @@ def make_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     dp.message.register(handle_clean_command, Command("clean"))
+    dp.message.register(handle_video)
     return dp
 
 

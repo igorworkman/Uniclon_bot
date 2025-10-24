@@ -42,7 +42,10 @@ async def download_telegram_file(bot: Bot, message: Message, dest_path: Path) ->
             async with session.get(file_url) as resp:
                 if resp.status != 200:
                     raise RuntimeError("Telegram CDN не отдаёт файл. Попробуйте позже.")
-                dest_path.write_bytes(await resp.read())
+
+                with dest_path.open("wb") as file_obj:
+                    async for chunk in resp.content.iter_chunked(64 * 1024):
+                        file_obj.write(chunk)
     except aiohttp.ClientError as error:
         raise RuntimeError("Telegram CDN не отдаёт файл. Попробуйте позже.") from error
 

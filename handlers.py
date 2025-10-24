@@ -738,6 +738,8 @@ async def _run_and_send(
             run_protective_process,
             input_path.name,
             copies,
+            profile,
+            quality,
         )
         suffix = "[retry via run_protective_process {}]"
         if retry_ok:

@@ -667,6 +667,11 @@ async def _enqueue_processing(
             save_preview,
         )
 
+    # REGION AI: linear execution
+    await task()
+    return
+    # END REGION AI
+
     if queue is None:
         await task()
         return

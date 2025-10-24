@@ -342,18 +342,22 @@ async def _ensure_valid_copies(message: Message, copies, hint_key: str):
     return copies
 
 
-@router.message(F.text == "/start")
-async def on_start(message: Message) -> None:
+# fix: reset FSM on /start and prompt for video
+# REGION AI: start handler reset
+@router.message(Command("start"))
+async def on_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
     lang = _get_user_lang(message)
-    code_example = hcode(get_text(lang, "code_example"))
     text = get_text(
         lang,
         "start_text",
-        code_example=code_example,
+        code_example=hcode(get_text(lang, "code_example")),
         max_copies=MAX_COPIES,
         output_dir=OUTPUT_DIR.name,
     )
     await message.answer(text)
+    await message.answer("📥 Отправьте видео для обработки.")
+# END REGION AI
 
 
 # Принимаем видео

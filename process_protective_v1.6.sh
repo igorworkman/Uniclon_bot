@@ -1,7 +1,4 @@
 #!/bin/bash
-# REGION AI: project working directory
-cd /Users/teddy/Documents/Uniclon_bot || exit 1
-# END REGION AI
 # process_protective_v1.6.sh (macOS совместимая версия)
 # Делает N уникальных копий из одного видео, сохраняет в OUTPUT_DIR/
 set -euo pipefail

@@ -3,14 +3,14 @@ import subprocess
 import time
 from pathlib import Path
 
-from config import BASE_DIR
+from config import BASE_DIR, OUTPUT_DIR as CONFIG_OUTPUT_DIR, SCRIPT_PATH as CONFIG_SCRIPT_PATH
 
 logger = logging.getLogger(__name__)
 
 # REGION AI: protective script paths
-PROJECT_DIR = Path("/Users/teddy/Documents/Uniclon_bot")
-OUTPUT_DIR = PROJECT_DIR / "output"
-_SCRIPT_PATH = (PROJECT_DIR / "process_protective_v1.6.sh").resolve()
+_SCRIPT_PATH = Path(CONFIG_SCRIPT_PATH).resolve()
+PROJECT_DIR = _SCRIPT_PATH.parent
+OUTPUT_DIR = CONFIG_OUTPUT_DIR
 # END REGION AI
 
 
@@ -36,7 +36,7 @@ def run_protective_process(
             _SCRIPT_PATH.chmod(mode | 0o111)
     except OSError:
         logger.debug("Failed to ensure executable for %s", _SCRIPT_PATH, exc_info=True)
-    cmd = ["./process_protective_v1.6.sh", str(full_path), str(int(copies))]
+    cmd = [str(_SCRIPT_PATH), str(full_path), str(int(copies))]
     start_ts = time.monotonic()
     try:
         proc = subprocess.run(

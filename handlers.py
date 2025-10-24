@@ -4,7 +4,7 @@ import time
 import zipfile
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple, TYPE_CHECKING
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -359,7 +359,7 @@ async def on_start(message: Message) -> None:
 
 async def _process_video_submission(
     message: Message,
-    bot,
+    bot: Bot,
     copies: int,
     lang: str,
     *,
@@ -404,7 +404,7 @@ async def _process_video_submission(
 
 
 @router.message(F.video)
-async def handle_video(message: Message, bot, state: FSMContext) -> None:
+async def handle_video(message: Message, bot: Bot, state: FSMContext) -> None:
     lang = _get_user_lang(message)
     copies = parse_copies_from_caption(message.caption or "")
     copies = await _ensure_valid_copies(message, copies, "hint_video_caption")
@@ -551,7 +551,7 @@ async def handle_preview_choice(callback: CallbackQuery, state: FSMContext) -> N
 
 # Принимаем документ (.mp4)
 @router.message(F.document)
-async def handle_document(message: Message, bot) -> None:
+async def handle_document(message: Message, bot: Bot) -> None:
     lang = _get_user_lang(message)
     copies = parse_copies_from_caption(message.caption or "")
     copies = await _ensure_valid_copies(message, copies, "hint_document_caption")

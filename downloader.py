@@ -25,10 +25,17 @@ async def download_telegram_file(bot: Bot, message: Message, dest_path: Path) ->
     dest_path = dest_path.with_name(original_name)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
-    tg_file = await bot.get_file(file_id)
+    tg_file = None
     try:
+        tg_file = await bot.get_file(file_id)
         await bot.download_file(tg_file.file_path, destination=dest_path)
-    except Exception:
+    except Exception as original_exc:
+        if tg_file is None:
+            try:
+                tg_file = await bot.get_file(file_id)
+            except Exception:
+                raise original_exc
+
         url = f"https://api.telegram.org/file/bot{bot.token}/{tg_file.file_path}"
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:

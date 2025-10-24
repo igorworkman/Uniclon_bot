@@ -1,9 +1,11 @@
 
 from pathlib import Path
+
 from aiogram import Bot
+from aiogram.types import Message
 
 
-async def download_telegram_file(bot: Bot, message, dest_path: Path) -> Path:
+async def download_telegram_file(bot: Bot, message: Message, dest_path: Path) -> Path:
     """Скачивает Video или Document(.mp4) в dest_path, пытается сохранить имя файла."""
     if message.video:
         file_id = message.video.file_id
@@ -22,7 +24,7 @@ async def download_telegram_file(bot: Bot, message, dest_path: Path) -> Path:
     tg_file = await bot.get_file(file_id)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     try:
+        await bot.download(file=tg_file.file_path, destination=dest_path)
+    except (AttributeError, TypeError):
         await bot.download_file(tg_file.file_path, destination=dest_path)
-    except Exception:
-        await bot.download(tg_file, destination=dest_path)
     return dest_path

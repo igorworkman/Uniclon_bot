@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Callable, Iterable, List
 
 logger = logging.getLogger(__name__)
@@ -19,8 +20,6 @@ def simplify_filter_chain(filter_chain: Iterable[str]) -> List[str]:
 
 
 def sanitize_crop_filter(filter_chain: str) -> str:
-    import re
-
     pattern = r"crop=(-?\d+):(-?\d+):(-?\d+):(-?\d+)"
     match = re.search(pattern, filter_chain)
     if not match:
@@ -45,6 +44,29 @@ def sanitize_crop_filter(filter_chain: str) -> str:
     return safe_chain
 
 
+def fix_final_crop_chain(filter_chain: str) -> str:
+    """Проверяет и правит некорректные параметры crop после генерации всей цепочки фильтров."""
+
+    pattern = r"crop=(\d+):(\d+):(\d+):(\d+)"
+
+    def _clamp(match: re.Match[str]) -> str:
+        w, h, x, y = map(int, match.groups())
+        if w <= 0 or h <= 0:
+            logging.warning(
+                f"[CropFinal] Invalid size {w}x{h}, corrected to 1080x1920"
+            )
+            w, h = 1080, 1920
+        if w > 1080:
+            logging.warning(f"[CropFinal] Width too large ({w}), clamped to 1080")
+            w = 1080
+        if h > 1920:
+            logging.warning(f"[CropFinal] Height too large ({h}), clamped to 1920")
+            h = 1920
+        return f"crop={w}:{h}:{x}:{y}"
+
+    return re.sub(pattern, _clamp, filter_chain)
+
+
 def sanitize_audio_filter(filter_chain: str) -> str:
     replacements = {
         "anequalizer": "aecho=0.8:0.9:1000:0.3",
@@ -63,7 +85,9 @@ def sanitize_audio_filter(filter_chain: str) -> str:
 
 def sanitize_filter_chain(filter_chain: Iterable[str]) -> List[str]:
     sanitized = [
-        sanitize_audio_filter(sanitize_crop_filter(segment))
+        fix_final_crop_chain(
+            sanitize_audio_filter(sanitize_crop_filter(segment))
+        )
         for segment in filter_chain
     ]
     if sanitized:

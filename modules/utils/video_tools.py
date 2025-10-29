@@ -53,6 +53,31 @@ _BLUR_FILTERS = [
 ]
 
 
+# REGION AI: audio filter helpers
+def build_audio_eq(freq: float = 1831.0, gain: float = -0.4) -> str:
+    """Return a safe FFmpeg equalizer filter with runtime capability checks."""
+
+    import subprocess
+
+    try:
+        probe = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-filters"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=3,
+        )
+        supports_anequalizer = "anequalizer" in probe.stdout
+    except Exception:
+        supports_anequalizer = False
+
+    target = "anequalizer" if supports_anequalizer else "equalizer"
+    return f"{target}=f={freq}:t=q:w=1:g={gain}"
+
+
+# END REGION AI
+
+
 @dataclass
 class VariantConfig:
     seed: str
@@ -182,9 +207,18 @@ def _pick_lut_descriptor(filters: Iterable[str]) -> Optional[str]:
 def _build_audio_micro_filter(sample_rate: int, tempo: float, pitch: float) -> str:
     pitch_factor = _clamp(pitch, 0.94, 1.06)
     tempo_factor = _clamp(tempo, 0.94, 1.06)
-    parts = [f"asetrate={sample_rate:.0f}*{pitch_factor:.4f}", f"aresample={sample_rate:.0f}"]
-    parts.append(f"atempo={tempo_factor:.4f}")
-    return ",".join(parts)
+    eq_filter = build_audio_eq(1831.0, -0.4)
+    chain = [
+        "acompressor=threshold=-16dB:ratio=2.4",
+        f"aresample={sample_rate:.0f}",
+        eq_filter,
+        "volume=0.99",
+        "aecho=0.8:0.9:1000:0.3",
+        f"asetrate={sample_rate:.0f}*{pitch_factor:.4f}",
+        f"aresample={sample_rate:.0f}",
+        f"atempo={tempo_factor:.4f}",
+    ]
+    return ",".join(chain)
 
 
 def generate_variant(

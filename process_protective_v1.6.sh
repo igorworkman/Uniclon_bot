@@ -1,17 +1,20 @@
 #!/bin/bash
-# REGION AI: project working directory
-cd /Users/teddy/Documents/Uniclon_bot || exit 1
-# END REGION AI
-# process_protective_v1.6.sh (macOS совместимая версия)
-# Делает N уникальных копий из одного видео, сохраняет в OUTPUT_DIR/
+# Безопасный режим исполнения
 set -euo pipefail
+
+# Определение абсолютного пути скрипта
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+BASE_DIR="$SCRIPT_DIR"
 IFS=$'\n\t'
 
-BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# process_protective_v1.6.sh (macOS совместимая версия)
+# Делает N уникальных копий из одного видео, сохраняет в OUTPUT_DIR/
 chmod +x "$BASE_DIR"/modules/*.sh 2>/dev/null || true
 export OUTPUT_DIR="${OUTPUT_DIR:-$BASE_DIR/output}"
 mkdir -p "$OUTPUT_DIR"
-source "$BASE_DIR/bootstrap_compat.sh"
+. "$BASE_DIR/bootstrap_compat.sh"
+. "$BASE_DIR/modules/fallback_manager.sh"
+. "$BASE_DIR/modules/manifest.sh"
 bootstrap_init "${BASH_SOURCE[0]}"
 
 echo "[INIT] Modular mode active — cleaned and sandboxed"

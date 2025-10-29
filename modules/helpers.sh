@@ -1,26 +1,64 @@
 #!/bin/bash
 
+_combo_collect_pairs() {
+  local combo_string="$1"
+  local sanitized="${combo_string//(/\\(}"
+  sanitized="${sanitized//)/\\)}"
+  local restore_glob=0
+  [[ $- == *f* ]] || restore_glob=1
+  set -f
+  local -a combo_tokens=()
+  if ! eval "combo_tokens=($sanitized)"; then
+    (( restore_glob )) && set +f
+    return 1
+  fi
+  (( restore_glob )) && set +f
+  local token key value
+  for token in "${combo_tokens[@]}"; do
+    token="${token//\\(/(}"
+    token="${token//\\)/)}"
+    [[ $token == *=* ]] || continue
+    key="${token%%=*}"
+    value="${token#*=}"
+    if [[ -n "$value" && ${value:0:1} == '"' && ${value: -1} == '"' ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+    printf '%s\t%s\n' "$key" "$value"
+  done
+  return 0
+}
+
+combo_extract_filters() {
+  local combo_pairs
+  combo_pairs=$(_combo_collect_pairs "$1") || return 1
+  local vf="" af=""
+  while IFS=$'\t' read -r key value; do
+    case "$key" in
+      CUR_VF_EXTRA) vf="$value" ;;
+      CUR_AF_EXTRA) af="$value" ;;
+    esac
+  done <<<"$combo_pairs"
+  printf '%s\t%s\n' "$vf" "$af"
+  return 0
+}
+
 apply_combo_context() {
   local combo_string="$1"
-  local combo_dump="" combo_script="" status=0 var
-  local combo_print="$combo_string"
+  local combo_dump="" combo_script="" status=0
+  local combo_pairs
+  combo_pairs=$(_combo_collect_pairs "$combo_string") || return 1
   combo_script=$(mktemp "${TMP_ROOT:-/tmp}/combo_ctx.XXXXXX") || return 1
   {
     printf 'set -euo pipefail\n'
     declare -f
-    while IFS= read -r var; do
-      case "$var" in
-        BASHOPTS|BASHPID|BASH_ARGC|BASH_ARGV|BASH_LINENO|BASH_SOURCE|BASH_VERSINFO|DIRSTACK|EUID|FUNCNAME|GROUPS|LINENO|PIPESTATUS|PPID|RANDOM|SECONDS|SHELLOPTS|UID)
-          continue
+    while IFS=$'\t' read -r key value; do
+      case "$key" in
+        CUR_COMBO_LABEL|CFPS|CNOISE|CMIRROR|CAUDIO|CSHIFT|CBR|CSOFT|CLEVEL|CUR_VF_EXTRA|CUR_AF_EXTRA|VF_CHAIN)
+          printf '%s=%q\n' "$key" "$value"
           ;;
       esac
-      [[ "$var" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
-      if declare -p "$var" >/dev/null 2>&1; then
-        declare -p "$var"
-      fi
-    done < <(compgen -A variable)
-    printf '%s\n' "$combo_print"
-    printf '%s\n' "for var in CUR_COMBO_LABEL CFPS CNOISE CMIRROR CAUDIO CSHIFT CBR CSOFT CLEVEL CUR_VF_EXTRA CUR_AF_EXTRA; do printf '%s\\t%s\\n' \"\$var\" \"\${!var}\"; done"
+    done <<<"$combo_pairs"
+    printf '%s\n' "for var in CUR_COMBO_LABEL CFPS CNOISE CMIRROR CAUDIO CSHIFT CBR CSOFT CLEVEL CUR_VF_EXTRA CUR_AF_EXTRA VF_CHAIN; do printf '%s\\t%s\\n' \"\$var\" \"\${!var-}\"; done"
   } >"$combo_script"
   combo_dump=$(bash --noprofile --norc "$combo_script")
   status=$?
@@ -29,20 +67,11 @@ apply_combo_context() {
   local key value
   while IFS=$'\t' read -r key value; do
     case "$key" in
-      CUR_COMBO_LABEL|CFPS|CNOISE|CMIRROR|CAUDIO|CSHIFT|CBR|CSOFT|CLEVEL|CUR_VF_EXTRA|CUR_AF_EXTRA)
+      CUR_COMBO_LABEL|CFPS|CNOISE|CMIRROR|CAUDIO|CSHIFT|CBR|CSOFT|CLEVEL|CUR_VF_EXTRA|CUR_AF_EXTRA|VF_CHAIN)
         printf -v "$key" '%s' "$value"
         ;;
     esac
   done <<<"$combo_dump"
-
-  local _combo_field
-  for _combo_field in CUR_VF_EXTRA CUR_AF_EXTRA; do
-    local _combo_value="${!_combo_field}"
-    if [[ -n "$_combo_value" && ${_combo_value:0:1} == '"' && ${_combo_value: -1} == '"' ]]; then
-      _combo_value="${_combo_value:1:${#_combo_value}-2}"
-      printf -v "$_combo_field" '%s' "$_combo_value"
-    fi
-  done
   return 0
 }
 

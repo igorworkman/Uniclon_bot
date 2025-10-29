@@ -179,11 +179,21 @@ manifest_write_entry() {
   local idx="$2"
   local validated_flag="$3"
   local regen_flag="$4"
-  local line
-  local combo_field
-  combo_field=$(manifest__escape_csv_field "${RUN_COMBO_USED[$idx]}")
-  line="${RUN_FILES[$idx]},${RUN_BITRATES[$idx]},${RUN_FPS[$idx]},${RUN_DURATIONS[$idx]},${RUN_SIZES[$idx]},${RUN_ENCODERS[$idx]},${RUN_SOFTWARES[$idx]},${RUN_CREATION_TIMES[$idx]},${RUN_SEEDS[$idx]},${RUN_TARGET_DURS[$idx]},${RUN_TARGET_BRS[$idx]},$validated_flag,$regen_flag,${RUN_PROFILES[$idx]},${RUN_QT_MAKES[$idx]},${RUN_QT_MODELS[$idx]},${RUN_QT_SOFTWARES[$idx]},${RUN_SSIM[$idx]},${RUN_PSNR[$idx]},${RUN_PHASH[$idx]},${RUN_QPASS[$idx]},${RUN_QUALITIES[$idx]},${RUN_FALLBACK_REASON[$idx]},${combo_field},${RUN_ATTEMPTS[$idx]},${RUN_CREATIVE_MIRROR[$idx]},${RUN_CREATIVE_INTRO[$idx]},${RUN_CREATIVE_LUT[$idx]},${RUN_PREVIEWS[$idx]}"
-  echo "$line" >> "$manifest_path"
+  local -a fields escaped_fields
+  fields=(
+    "${RUN_FILES[$idx]:-}" "${RUN_BITRATES[$idx]:-}" "${RUN_FPS[$idx]:-}" "${RUN_DURATIONS[$idx]:-}" "${RUN_SIZES[$idx]:-}"
+    "${RUN_ENCODERS[$idx]:-}" "${RUN_SOFTWARES[$idx]:-}" "${RUN_CREATION_TIMES[$idx]:-}" "${RUN_SEEDS[$idx]:-}"
+    "${RUN_TARGET_DURS[$idx]:-}" "${RUN_TARGET_BRS[$idx]:-}" "${validated_flag:-}" "${regen_flag:-}" "${RUN_PROFILES[$idx]:-}"
+    "${RUN_QT_MAKES[$idx]:-}" "${RUN_QT_MODELS[$idx]:-}" "${RUN_QT_SOFTWARES[$idx]:-}" "${RUN_SSIM[$idx]:-}" "${RUN_PSNR[$idx]:-}"
+    "${RUN_PHASH[$idx]:-}" "${RUN_QPASS[$idx]:-}" "${RUN_QUALITIES[$idx]:-}" "${RUN_FALLBACK_REASON[$idx]:-}" "${RUN_COMBO_USED[$idx]:-}"
+    "${RUN_ATTEMPTS[$idx]:-}" "${RUN_CREATIVE_MIRROR[$idx]:-}" "${RUN_CREATIVE_INTRO[$idx]:-}" "${RUN_CREATIVE_LUT[$idx]:-}" "${RUN_PREVIEWS[$idx]:-}"
+  )
+  local value
+  for value in "${fields[@]}"; do
+    escaped_fields+=("$(manifest__escape_csv_field "${value}")")
+  done
+  local IFS=,
+  echo "${escaped_fields[*]}" >> "$manifest_path"
 }
 
 write_manifest() {

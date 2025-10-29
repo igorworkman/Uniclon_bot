@@ -797,6 +797,7 @@ EOF
     if [ -n "${UNICLON_AUDIO_EQ_OVERRIDE:-}" ]; then
       AFILTER_CORE="${UNICLON_AUDIO_EQ_OVERRIDE}"
       AFILTER="${UNICLON_AUDIO_EQ_OVERRIDE}"
+      AUDIO_FILTER="${UNICLON_AUDIO_EQ_OVERRIDE}"
     fi
     audio_apply_combo_mode "${CAUDIO:-}" "$TEMPO_FACTOR"
     if [ -z "${AFILTER:-}" ]; then

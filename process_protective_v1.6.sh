@@ -55,6 +55,7 @@ set -- "${POSITIONAL_ARGS[@]}"
 : "${SEED:=}"
 : "${AFILTER_CORE:=}"
 : "${AFILTER:=anull}"
+: "${UNICLON_AUDIO_EQ_OVERRIDE:=}"
 : "${PREVIEW_SS:=00:00:01.000}"
 # END REGION AI
 audio_init_filter_caps
@@ -793,6 +794,10 @@ EOF
     fi
     pick_audio_chain
     AFILTER="${AFILTER_CORE:-}"
+    if [ -n "${UNICLON_AUDIO_EQ_OVERRIDE:-}" ]; then
+      AFILTER_CORE="${UNICLON_AUDIO_EQ_OVERRIDE}"
+      AFILTER="${UNICLON_AUDIO_EQ_OVERRIDE}"
+    fi
     audio_apply_combo_mode "${CAUDIO:-}" "$TEMPO_FACTOR"
     if [ -z "${AFILTER:-}" ]; then
       if [ -n "${AFILTER_CORE:-}" ]; then

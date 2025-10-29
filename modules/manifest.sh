@@ -1,7 +1,7 @@
 #!/bin/bash
 # Manifest helpers (manifest.csv handling)
 
-MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model,qt_software,ssim,psnr,phash,quality_pass,quality,fallback_reason,combo_used,attempts,creative_mirror,creative_intro,creative_lut,preview"
+MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation_time,seed,target_duration,target_bitrate,validated,regen,profile,qt_make,qt_model,qt_software,ssim,psnr,phash,trust_score,quality_pass,quality,fallback_reason,combo_used,attempts,creative_mirror,creative_intro,creative_lut,preview"
 
 manifest__escape_csv_field() {
   local value="$1"
@@ -116,6 +116,20 @@ manifest__legacy_upgrade() {
     echo "ℹ️ manifest обновлён: добавлена колонка phash"
   fi
   header_line=$(head -n1 "$manifest_path")
+  if ! printf '%s' "$header_line" | grep -q ",trust_score,"; then
+    local tmp=$(mktemp)
+    {
+      IFS= read -r current_header
+      echo "${current_header},trust_score"
+      while IFS= read -r data_line; do
+        [ -z "$data_line" ] && continue
+        echo "${data_line},"
+      done
+    } < "$manifest_path" > "$tmp"
+    mv "$tmp" "$manifest_path"
+    echo "ℹ️ manifest обновлён: добавлена колонка trust_score"
+  fi
+  header_line=$(head -n1 "$manifest_path")
   if ! printf '%s' "$header_line" | grep -q ",quality$"; then
     local tmp=$(mktemp)
     {
@@ -187,7 +201,7 @@ manifest_write_entry() {
     "${RUN_ENCODERS[$idx]:-}" "${RUN_SOFTWARES[$idx]:-}" "${RUN_CREATION_TIMES[$idx]:-}" "${RUN_SEEDS[$idx]:-}"
     "${RUN_TARGET_DURS[$idx]:-}" "${RUN_TARGET_BRS[$idx]:-}" "${validated_flag:-}" "${regen_flag:-}" "${RUN_PROFILES[$idx]:-}"
     "${RUN_QT_MAKES[$idx]:-}" "${RUN_QT_MODELS[$idx]:-}" "${RUN_QT_SOFTWARES[$idx]:-}" "${RUN_SSIM[$idx]:-}" "${RUN_PSNR[$idx]:-}"
-    "${RUN_PHASH[$idx]:-}" "${RUN_QPASS[$idx]:-}" "${RUN_QUALITIES[$idx]:-}" "${RUN_FALLBACK_REASON[$idx]:-}" "${RUN_COMBO_USED[$idx]:-}"
+    "${RUN_PHASH[$idx]:-}" "${RUN_TRUST_SCORE[$idx]:-}" "${RUN_QPASS[$idx]:-}" "${RUN_QUALITIES[$idx]:-}" "${RUN_FALLBACK_REASON[$idx]:-}" "${RUN_COMBO_USED[$idx]:-}"
     "${RUN_ATTEMPTS[$idx]:-}" "${RUN_CREATIVE_MIRROR[$idx]:-}" "${RUN_CREATIVE_INTRO[$idx]:-}" "${RUN_CREATIVE_LUT[$idx]:-}" "${RUN_PREVIEWS[$idx]:-}"
   )
   local -a field_names=()

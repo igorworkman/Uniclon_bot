@@ -492,13 +492,16 @@ declare -a RUN_SSIM=()
 declare -a RUN_UNIQ=()
 declare -a RUN_PSNR=()
 declare -a RUN_PHASH=()
+declare -a RUN_TRUST_SCORE=()
 declare -a RUN_QPASS=()
 declare -a RUN_CREATIVE_MIRROR=()
 declare -a RUN_CREATIVE_INTRO=()
 declare -a RUN_CREATIVE_LUT=()
 declare -a RUN_PREVIEWS=()
+declare -a RUN_FS_TIMESTAMPS=()
 declare -a QUALITY_ISSUES=()
 declare -a QUALITY_COPY_IDS=()
+: "${RANDOMIZATION_SALT:=uniclon_v1.7}"
 # REGION AI: container metadata placeholders
 MAJOR_BRAND_TAG="mp42"
 MINOR_VERSION_TAG="0"
@@ -640,20 +643,65 @@ generate_copy() {
     CURRENT_VARIANT_KEY=""
 # END REGION AI
 
-    # параметры видео
-    FPS=$(select_fps)
-    [ -n "$CFPS" ] && FPS="$CFPS"
-
-    BR=$(rand_int "$BR_MIN" "$BR_MAX")
-    if [ "$BR_MIN" -le 4600 ] && [ "$BR_MAX" -ge 3200 ]; then
-      local mid_min mid_max
-      mid_min=$(( BR_MIN > 3200 ? BR_MIN : 3200 ))
-      mid_max=$(( BR_MAX < 4600 ? BR_MAX : 4600 ))
-      if [ "$mid_min" -le "$mid_max" ] && [ "$(rand_int 1 100)" -le 72 ]; then
-        BR=$(rand_int "$mid_min" "$mid_max")
+    local variant_payload="" variant_ok=0
+    local variant_input_basename=""
+    local variant_audio_sr="${AUDIO_SR_OPTIONS[0]:-44100}"
+    variant_input_basename="$(basename "$SRC")"
+    local variant_fs_epoch=""
+    if variant_payload=$(python3 "$BASE_DIR/modules/utils/video_tools.py" generate \
+      --input "$variant_input_basename" \
+      --copy-index "$copy_index" \
+      --salt "$RANDOMIZATION_SALT" \
+      --profile-br-min "$BR_MIN" \
+      --profile-br-max "$BR_MAX" \
+      --base-width "$TARGET_W" \
+      --base-height "$TARGET_H" \
+      --audio-sample-rate "$variant_audio_sr" \
+      --format shell 2>&1); then
+      eval "$variant_payload"
+      variant_ok=1
+      variant_fs_epoch="${RAND_FILESYSTEM_EPOCH:-}"
+    else
+      variant_ok=0
+      if [ -n "$variant_payload" ]; then
+        echo "⚠️ Video randomization fallback (${variant_payload})" >&2
+      else
+        echo "⚠️ Video randomization engine unavailable, using legacy parameters" >&2
       fi
     fi
-    [ -n "$CBR" ] && BR=$(awk -v b="$BR" -v m="$CBR" 'BEGIN{b+=0;m+=0;if(m<=0)m=1;printf "%.0f",b*m}')
+    local -a VARIANT_MICRO_FILTERS=()
+    if [ -n "${RAND_MICRO_FILTERS:-}" ]; then
+      IFS='|' read -r -a VARIANT_MICRO_FILTERS <<<"${RAND_MICRO_FILTERS}"
+    fi
+
+    # параметры видео
+    local default_fps
+    default_fps=$(select_fps)
+    FPS="$default_fps"
+    if [ -n "$CFPS" ]; then
+      FPS="$CFPS"
+    elif [ -n "${RAND_FPS:-}" ]; then
+      FPS="${RAND_FPS}"
+    fi
+
+    local base_br
+    base_br=$(rand_int "$BR_MIN" "$BR_MAX")
+    if [ -z "${RAND_BITRATE_KBPS:-}" ]; then
+      BR="$base_br"
+      if [ "$BR_MIN" -le 4600 ] && [ "$BR_MAX" -ge 3200 ]; then
+        local mid_min mid_max
+        mid_min=$(( BR_MIN > 3200 ? BR_MIN : 3200 ))
+        mid_max=$(( BR_MAX < 4600 ? BR_MAX : 4600 ))
+        if [ "$mid_min" -le "$mid_max" ] && [ "$(rand_int 1 100)" -le 72 ]; then
+          BR=$(rand_int "$mid_min" "$mid_max")
+        fi
+      fi
+    else
+      BR="${RAND_BITRATE_KBPS}"
+    fi
+    if [ -n "$CBR" ]; then
+      BR=$(awk -v b="$BR" -v m="$CBR" 'BEGIN{b+=0;m+=0;if(m<=0)m=1;printf "%.0f",b*m}')
+    fi
 
     compute_duration_profile
 
@@ -691,30 +739,51 @@ EOF
     fi
 # END REGION AI
 
+    local NOISE_STRENGTH=0
     NOISE=0
-    if [ "$(rand_int 1 100)" -le "$NOISE_PROB_PERCENT" ]; then
+    if [ -n "${RAND_NOISE_STRENGTH:-}" ] && awk -v v="${RAND_NOISE_STRENGTH}" 'BEGIN{exit (v+0>0)?0:1}'; then
       NOISE=1
+      NOISE_STRENGTH=$(awk -v v="${RAND_NOISE_STRENGTH}" 'BEGIN{printf "%.0f", v+0}')
+    else
+      if [ "$(rand_int 1 100)" -le "$NOISE_PROB_PERCENT" ]; then
+        NOISE=1
+        NOISE_STRENGTH=$(rand_int 1 2)
+      fi
+      [ -n "$CNOISE" ] && NOISE="$CNOISE"
+      if [ "$NOISE" -gt 0 ] && { [ -z "$NOISE_STRENGTH" ] || [ "$NOISE_STRENGTH" -le 0 ]; }; then
+        NOISE_STRENGTH=1
+      fi
     fi
-    [ -n "$CNOISE" ] && NOISE="$CNOISE"
 
-    pick_crop_offsets
-    if [ "$TARGET_W" -gt 0 ] && [ "$TARGET_H" -gt 0 ]; then
-      local crop_roll=$(rand_int 0 99)
-      if [ "$crop_roll" -lt 78 ]; then
-        local crop_pct=$(rand_float 0.010 0.020 3)
-        local crop_w_side
-        crop_w_side=$(awk -v w="$TARGET_W" -v pct="$crop_pct" 'BEGIN{v=int(w*pct/2); if(v<1)v=1; print v}')
-        local crop_h_side
-        crop_h_side=$(awk -v h="$TARGET_H" -v pct="$crop_pct" 'BEGIN{v=int(h*pct/2); if(v<1)v=1; print v}')
-        CROP_W="$crop_w_side"
-        CROP_H="$crop_h_side"
-        if [ "$CROP_W" -gt 0 ]; then CROP_X=$(rand_int 0 "$CROP_W"); else CROP_X=0; fi
-        if [ "$CROP_H" -gt 0 ]; then CROP_Y=$(rand_int 0 "$CROP_H"); else CROP_Y=0; fi
-      else
-        CROP_W=0
-        CROP_H=0
-        CROP_X=0
-        CROP_Y=0
+    if [ -n "${RAND_CROP_MARGIN_W:-}" ] || [ -n "${RAND_CROP_MARGIN_H:-}" ]; then
+      CROP_W=$(( ${RAND_CROP_MARGIN_W:-0} ))
+      CROP_H=$(( ${RAND_CROP_MARGIN_H:-0} ))
+      CROP_X=$(( ${RAND_CROP_OFFSET_X:-0} ))
+      CROP_Y=$(( ${RAND_CROP_OFFSET_Y:-0} ))
+      [ "$CROP_W" -lt 0 ] && CROP_W=0
+      [ "$CROP_H" -lt 0 ] && CROP_H=0
+      if [ "$CROP_X" -lt 0 ] || [ "$CROP_X" -gt "$CROP_W" ]; then CROP_X=0; fi
+      if [ "$CROP_Y" -lt 0 ] || [ "$CROP_Y" -gt "$CROP_H" ]; then CROP_Y=0; fi
+    else
+      pick_crop_offsets
+      if [ "$TARGET_W" -gt 0 ] && [ "$TARGET_H" -gt 0 ]; then
+        local crop_roll=$(rand_int 0 99)
+        if [ "$crop_roll" -lt 78 ]; then
+          local crop_pct=$(rand_float 0.010 0.020 3)
+          local crop_w_side
+          crop_w_side=$(awk -v w="$TARGET_W" -v pct="$crop_pct" 'BEGIN{v=int(w*pct/2); if(v<1)v=1; print v}')
+          local crop_h_side
+          crop_h_side=$(awk -v h="$TARGET_H" -v pct="$crop_pct" 'BEGIN{v=int(h*pct/2); if(v<1)v=1; print v}')
+          CROP_W="$crop_w_side"
+          CROP_H="$crop_h_side"
+          if [ "$CROP_W" -gt 0 ]; then CROP_X=$(rand_int 0 "$CROP_W"); else CROP_X=0; fi
+          if [ "$CROP_H" -gt 0 ]; then CROP_Y=$(rand_int 0 "$CROP_H"); else CROP_Y=0; fi
+        else
+          CROP_W=0
+          CROP_H=0
+          CROP_X=0
+          CROP_Y=0
+        fi
       fi
     fi
 
@@ -731,6 +800,15 @@ EOF
       else
         AFILTER="aresample=${AUDIO_SR},atempo=1.0"
       fi
+    fi
+
+    if [ -n "${RAND_AUDIO_PITCH:-}" ] || [ -n "${RAND_AUDIO_TEMPO:-}" ]; then
+      local tempo_val="${RAND_AUDIO_TEMPO:-1.0}"
+      local pitch_val="${RAND_AUDIO_PITCH:-1.0}"
+      tempo_val=$(awk -v v="$tempo_val" 'BEGIN{if(v<=0)v=1.0; printf "%.4f", v+0}')
+      pitch_val=$(awk -v v="$pitch_val" 'BEGIN{if(v<=0)v=1.0; printf "%.4f", v+0}')
+      local variant_audio_chain="asetrate=${AUDIO_SR}*${pitch_val},aresample=${AUDIO_SR},atempo=${tempo_val}"
+      CUR_AF_EXTRA=$(compose_af_chain "$variant_audio_chain" "${CUR_AF_EXTRA:-}")
     fi
 
 # REGION AI: enforce variant uniqueness signature
@@ -818,19 +896,52 @@ EOF
     fi
   done
 
-  SEED="$SEED_HEX"
+  SEED="${RAND_SEED:-$SEED_HEX}"
   LAST_COMBOS+=("$combo_key")
   COMBO_HISTORY="${COMBO_HISTORY}${combo_key} "
 
-  RATE_PAD=$(rand_int 250 650)
-  MAXRATE=$((BR + RATE_PAD))
-  BUFSIZE=$((BR * 2 + RATE_PAD * 2))
+  local RATE_PAD=0
+  if [ -n "${RAND_MAXRATE_KBPS:-}" ]; then
+    MAXRATE="${RAND_MAXRATE_KBPS}"
+  else
+    RATE_PAD=$(rand_int 250 650)
+    MAXRATE=$((BR + RATE_PAD))
+  fi
+  if [ -n "${RAND_BUFSIZE_KBPS:-}" ]; then
+    BUFSIZE="${RAND_BUFSIZE_KBPS}"
+  else
+    if [ "$RATE_PAD" -eq 0 ]; then
+      RATE_PAD=$(rand_int 250 650)
+    fi
+    BUFSIZE=$((BR * 2 + RATE_PAD * 2))
+  fi
 
-  pick_software_encoder "$PROFILE_VALUE" "$SEED_HEX"; CSOFT=""
+  if [ "$variant_ok" -eq 1 ] && [ -n "${RAND_SOFTWARE:-}" ] && [ -n "${RAND_ENCODER:-}" ]; then
+    SOFTWARE_TAG="${RAND_SOFTWARE}"
+    ENCODER_TAG="${RAND_ENCODER}"
+    if [ "$(rand_int 0 1)" -eq 0 ]; then
+      MAJOR_BRAND_TAG="mp42"
+    else
+      MAJOR_BRAND_TAG="isom"
+    fi
+    MINOR_VERSION_TAG=$(rand_int 0 512)
+    local compat_list=("isommp42" "mp42isom" "iso6mp42")
+    local compat_idx
+    compat_idx=$(rand_int 0 $(( ${#compat_list[@]} - 1 )))
+    COMPAT_BRANDS_TAG="${compat_list[$compat_idx]}"
+  else
+    pick_software_encoder "$PROFILE_VALUE" "$SEED_HEX"; CSOFT=""
+  fi
+  CSOFT=""
 
-  CREATION_TIME=$(generate_iso_timestamp)
-  CREATION_TIME=$(jitter_iso_timestamp "$CREATION_TIME")
-  CREATION_TIME_EXIF="$CREATION_TIME"
+  if [ -n "${RAND_CREATION_TIME:-}" ]; then
+    CREATION_TIME="${RAND_CREATION_TIME}"
+    CREATION_TIME_EXIF="${RAND_CREATION_TIME_EXIF:-$RAND_CREATION_TIME}"
+  else
+    CREATION_TIME=$(generate_iso_timestamp)
+    CREATION_TIME=$(jitter_iso_timestamp "$CREATION_TIME")
+    CREATION_TIME_EXIF="$CREATION_TIME"
+  fi
   CURRENT_COPY_INDEX="$copy_index"
   prepare_output_name
   local FINAL_OUT="$OUT"
@@ -903,9 +1014,29 @@ EOF
   STRETCH_FACTOR=$(awk -v v="${STRETCH_FACTOR:-}" 'BEGIN{
     if (v == "" || v+0 <= 0) { printf "%.6g", 1.0 } else { printf "%.6g", v+0 }
   }')
-  VF="setpts=${STRETCH_FACTOR}*PTS,scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1"  # fix: корректный синтаксис setpts
-  VF="${VF},eq=brightness=0.005:saturation=1.01"
-  if [ "$NOISE" -eq 1 ]; then VF="${VF},noise=alls=1:allf=t"; fi
+  local SCALE_W="$TARGET_W"
+  local SCALE_H="$TARGET_H"
+  if [ -n "${RAND_SCALE_WIDTH:-}" ]; then
+    SCALE_W="${RAND_SCALE_WIDTH}"
+  fi
+  if [ -n "${RAND_SCALE_HEIGHT:-}" ]; then
+    SCALE_H="${RAND_SCALE_HEIGHT}"
+  fi
+  local brightness_val contrast_val saturation_val
+  brightness_val=$(awk -v v="${RAND_BRIGHTNESS:-0.005}" 'BEGIN{printf "%.4f", v+0}')
+  contrast_val=$(awk -v v="${RAND_CONTRAST:-1.010}" 'BEGIN{printf "%.4f", v+0}')
+  saturation_val=$(awk -v v="${RAND_SATURATION:-1.010}" 'BEGIN{printf "%.4f", v+0}')
+  VF="setpts=${STRETCH_FACTOR}*PTS,scale=${SCALE_W}:${SCALE_H}:flags=lanczos,setsar=1"  # fix: корректный синтаксис setpts
+  VF="${VF},eq=brightness=${brightness_val}:contrast=${contrast_val}:saturation=${saturation_val}"
+  if [ "$NOISE" -eq 1 ] && [ "${NOISE_STRENGTH:-0}" -gt 0 ]; then
+    VF="${VF},noise=alls=${NOISE_STRENGTH}:allf=t"
+  elif [ "$NOISE" -eq 1 ]; then
+    VF="${VF},noise=alls=1:allf=t"
+  fi
+  local micro_filter
+  for micro_filter in "${VARIANT_MICRO_FILTERS[@]}"; do
+    [ -n "$micro_filter" ] && VF="${VF},${micro_filter}"
+  done
   if [ "$CROP_TOTAL_W" -gt 0 ] || [ "$CROP_TOTAL_H" -gt 0 ]; then
     CROP_WIDTH=$((TARGET_W - CROP_TOTAL_W))
     CROP_HEIGHT=$((TARGET_H - CROP_TOTAL_H))
@@ -924,7 +1055,26 @@ EOF
   fi
   extras_chain=$(compose_vf_chain "$extras_chain" "$CUR_VF_EXTRA")
   VF=$(compose_vf_chain "$VF" "$extras_chain")
-  VF="${VF},pad=${TARGET_W}:${TARGET_H}:(ow-iw)/2:(oh-ih)/2:black"
+  if [ -n "${RAND_LUT_DESCRIPTOR:-}" ]; then
+    if [ -n "$LUT_DESC" ]; then
+      LUT_DESC="${LUT_DESC};${RAND_LUT_DESCRIPTOR}"
+    else
+      LUT_DESC="${RAND_LUT_DESCRIPTOR}"
+    fi
+  fi
+  local pad_offset_x="${RAND_PAD_OFFSET_X:-0}"
+  local pad_offset_y="${RAND_PAD_OFFSET_Y:-0}"
+  local pad_x_expr="(ow-iw)/2"
+  local pad_y_expr="(oh-ih)/2"
+  if [ "${pad_offset_x}" != "0" ]; then
+    pad_x_expr="${pad_x_expr}+${pad_offset_x}"
+  fi
+  if [ "${pad_offset_y}" != "0" ]; then
+    pad_y_expr="${pad_y_expr}+${pad_offset_y}"
+  fi
+  VF="${VF},pad=${TARGET_W}:${TARGET_H}:${pad_x_expr}:${pad_y_expr}:black"
+  PAD_X="$pad_offset_x"
+  PAD_Y="$pad_offset_y"
   VF="${VF},drawtext=text='${UID_TAG}':fontcolor=white@0.08:fontsize=16:x=10:y=H-30"
 
   if [ -z "${CLIP_DURATION:-}" ]; then
@@ -1120,7 +1270,13 @@ EOF
   EXIF_CMD+=("$OUT")
   "${EXIF_CMD[@]}" >/dev/null
 
-  touch_randomize_mtime "$OUT"
+  if [ -n "$variant_fs_epoch" ]; then
+    if ! python3 "$BASE_DIR/modules/utils/video_tools.py" touch --file "$OUT" --epoch "$variant_fs_epoch" >/dev/null 2>&1; then
+      touch_randomize_mtime "$OUT"
+    fi
+  else
+    touch_randomize_mtime "$OUT"
+  fi
   FILE_NAME="$(basename "$OUT")"
   local MEDIA_DURATION_RAW=""
   local MEDIA_DURATION_SEC=""
@@ -1219,6 +1375,7 @@ EOF
   RUN_CREATIVE_INTRO+=("$INTRO_DESC")
   RUN_CREATIVE_LUT+=("$LUT_DESC")
   RUN_PREVIEWS+=("$PREVIEW_NAME")
+  RUN_FS_TIMESTAMPS+=("${variant_fs_epoch:-}")
 # REGION AI: persist variant signature state
   if [ -n "$CURRENT_VARIANT_KEY" ]; then
     mark_variant_key "$CURRENT_VARIANT_KEY"
@@ -1328,6 +1485,11 @@ EOF
   RUN_PHASH+=("$metrics_phash")
   RUN_UNIQ+=("$metrics_uniq")
   RUN_BITRATES+=("$metrics_bitrate")
+  local trust_score_value="0.00"
+  if [ -n "$metrics_ssim" ] && [ -n "$metrics_phash" ]; then
+    trust_score_value=$(python3 "$BASE_DIR/modules/utils/video_tools.py" score --ssim "$metrics_ssim" --phash "$metrics_phash" 2>/dev/null || printf '0.00')
+  fi
+  RUN_TRUST_SCORE+=("$trust_score_value")
 
   echo "✅ done: $OUT"
 }
@@ -1469,6 +1631,31 @@ run_self_audit_pipeline() {
 }
 
 run_self_audit_pipeline
+
+echo "Audit Report:"
+total_outputs=${#RUN_FILES[@]}
+if [ "${#RUN_SOFTWARES[@]}" -gt 0 ]; then
+  unique_soft=$(printf '%s\n' "${RUN_SOFTWARES[@]}" | sort -u | awk 'NF' | wc -l | awk '{print $1}')
+  unique_enc=$(printf '%s\n' "${RUN_ENCODERS[@]}" | sort -u | awk 'NF' | wc -l | awk '{print $1}')
+  if { [ "${unique_soft}" -gt 1 ] && [ "${unique_enc}" -gt 1 ]; } || [ "$total_outputs" -le 1 ]; then
+    echo "✅ Encoder/software diversified"
+  else
+    echo "❌ Encoder/software diversified"
+  fi
+else
+  echo "❌ Encoder/software diversified"
+fi
+
+if [ "${#RUN_FS_TIMESTAMPS[@]}" -gt 0 ]; then
+  unique_ts=$(printf '%s\n' "${RUN_FS_TIMESTAMPS[@]}" | awk 'NF' | sort -u | wc -l | awk '{print $1}')
+  if { [ "$unique_ts" -ge "$total_outputs" ] && [ "$total_outputs" -gt 0 ]; } || [ "$total_outputs" -le 1 ]; then
+    echo "✅ Timestamps randomized"
+  else
+    echo "❌ Timestamps randomized"
+  fi
+else
+  echo "❌ Timestamps randomized"
+fi
 
 if ! fallback_soft_finalize; then
   exit 1

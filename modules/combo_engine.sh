@@ -235,11 +235,35 @@ generate_dynamic_combo() {
   local shift_idx=$(rand_int 0 $(( ${#shift_pool[@]} - 1 )))
   local level_idx=$(rand_int 0 $(( ${#level_pool[@]} - 1 )))
   local noise=$(rand_int 0 1)
-  local combo
-  combo=$(printf "CUR_COMBO_LABEL='auto_%s' CFPS=%s CNOISE=%s CMIRROR=%s CAUDIO=%s CBR=%s CSHIFT=%s CSOFT=%s CLEVEL=%s CUR_VF_EXTRA=%s CUR_AF_EXTRA=%s" \
-    "$ident" "${fps_pool[$fps_idx]}" "$noise" "${mirrors[$mirror_idx]}" "${audios[$audio_idx]}" \
-    "${br_pool[$br_idx]}" "${shift_pool[$shift_idx]}" "${softwares[$soft_idx]}" "${level_pool[$level_idx]}" \
-    "${vf_options[$vf_idx]}" "${af_options[$af_idx]}")
+  local -a parts=()
+  local tmp
+  printf -v tmp 'CUR_COMBO_LABEL=%q' "auto_${ident}"
+  parts+=("$tmp")
+  printf -v tmp 'CFPS=%s' "${fps_pool[$fps_idx]}"
+  parts+=("$tmp")
+  printf -v tmp 'CNOISE=%s' "$noise"
+  parts+=("$tmp")
+  printf -v tmp 'CMIRROR=%q' "${mirrors[$mirror_idx]}"
+  parts+=("$tmp")
+  printf -v tmp 'CAUDIO=%q' "${audios[$audio_idx]}"
+  parts+=("$tmp")
+  printf -v tmp 'CBR=%s' "${br_pool[$br_idx]}"
+  parts+=("$tmp")
+  printf -v tmp 'CSHIFT=%s' "${shift_pool[$shift_idx]}"
+  parts+=("$tmp")
+  printf -v tmp 'CSOFT=%q' "${softwares[$soft_idx]}"
+  parts+=("$tmp")
+  printf -v tmp 'CLEVEL=%s' "${level_pool[$level_idx]}"
+  parts+=("$tmp")
+  local vf_raw
+  vf_raw=$(printf '%s' "${vf_options[$vf_idx]}" | sed 's/[\\"]/\\&/g')
+  printf -v tmp 'CUR_VF_EXTRA="%s"' "$vf_raw"
+  parts+=("$tmp")
+  local af_raw
+  af_raw=$(printf '%s' "${af_options[$af_idx]}" | sed 's/[\\"]/\\&/g')
+  printf -v tmp 'CUR_AF_EXTRA="%s"' "$af_raw"
+  parts+=("$tmp")
+  local combo="${parts[*]}"
   printf '%s' "$combo"
 }
 

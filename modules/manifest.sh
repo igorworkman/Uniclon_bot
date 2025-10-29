@@ -5,6 +5,8 @@ MANIFEST_HEADER="filename,bitrate,fps,duration,size_kb,encoder,software,creation
 
 manifest__escape_csv_field() {
   local value="$1"
+  value="${value//$'\r\n'/\\n}"
+  value="${value//$'\r'/\\n}"
   value="${value//\"/\"\"}"
   value="${value//$'\n'/\\n}"
   printf '"%s"' "$value"
@@ -188,9 +190,20 @@ manifest_write_entry() {
     "${RUN_PHASH[$idx]:-}" "${RUN_QPASS[$idx]:-}" "${RUN_QUALITIES[$idx]:-}" "${RUN_FALLBACK_REASON[$idx]:-}" "${RUN_COMBO_USED[$idx]:-}"
     "${RUN_ATTEMPTS[$idx]:-}" "${RUN_CREATIVE_MIRROR[$idx]:-}" "${RUN_CREATIVE_INTRO[$idx]:-}" "${RUN_CREATIVE_LUT[$idx]:-}" "${RUN_PREVIEWS[$idx]:-}"
   )
-  local value
-  for value in "${fields[@]}"; do
-    escaped_fields+=("$(manifest__escape_csv_field "${value}")")
+  local -a field_names=()
+  IFS=, read -r -a field_names <<< "$MANIFEST_HEADER"
+  local idx field_value field_name
+  for idx in "${!fields[@]}"; do
+    field_value="${fields[$idx]}"
+    field_name="${field_names[$idx]:-}"
+    case "$field_name" in
+      VF_EXTRA|AF_EXTRA|profile|fallback_reason|combo_used)
+        field_value="${field_value//$'\r\n'/\\n}"
+        field_value="${field_value//$'\r'/\\n}"
+        field_value="${field_value//$'\n'/\\n}"
+        ;;
+    esac
+    escaped_fields+=("$(manifest__escape_csv_field "${field_value}")")
   done
   local IFS=,
   echo "${escaped_fields[*]}" >> "$manifest_path"

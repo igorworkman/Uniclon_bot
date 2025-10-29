@@ -603,6 +603,13 @@ duration_bucket() {
   awk -v v="$value" 'BEGIN { printf "%.1f", v }'
 }
 
+reset_rand_overrides() {
+  local rand_var
+  while IFS= read -r rand_var; do
+    unset "$rand_var"
+  done < <(compgen -v RAND_)
+}
+
 # REGION AI: uniqueness combo orchestration
 # (moved to modules/combo_engine.sh)
 generate_copy() {
@@ -648,6 +655,7 @@ generate_copy() {
     local variant_audio_sr="${AUDIO_SR_OPTIONS[0]:-44100}"
     variant_input_basename="$(basename "$SRC")"
     local variant_fs_epoch=""
+    reset_rand_overrides
     if variant_payload=$(python3 "$BASE_DIR/modules/utils/video_tools.py" generate \
       --input "$variant_input_basename" \
       --copy-index "$copy_index" \
@@ -663,6 +671,7 @@ generate_copy() {
       variant_fs_epoch="${RAND_FILESYSTEM_EPOCH:-}"
     else
       variant_ok=0
+      reset_rand_overrides
       if [ -n "$variant_payload" ]; then
         echo "⚠️ Video randomization fallback (${variant_payload})" >&2
       else

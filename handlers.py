@@ -744,12 +744,16 @@ async def _run_and_send(
         )
         await message.answer("⚠️ Обнаружена временная ошибка, повторяем попытку…")
         # REGION AI: synchronous protective retry
-        retry_ok = run_protective_process(
+        retry_result = run_protective_process(
             input_path.name,
             copies,
         )
         # END REGION AI
         suffix = "[retry via run_protective_process {}]"
+        retry_ok = (
+            not retry_result["temp_fail"]
+            and retry_result["failed_count"] == 0
+        )
         if retry_ok:
             rc = 0
             logs_text = (logs_text + "\n" if logs_text else "") + suffix.format("succeeded")
@@ -759,6 +763,9 @@ async def _run_and_send(
             logger.warning(
                 "Retry via run_protective_process failed for %s", input_path.name
             )
+        retry_tail = (retry_result.get("log_tail") or "").strip()
+        if retry_tail:
+            logs_text = (logs_text + "\n" if logs_text else "") + retry_tail
 
     if "⚠️ Обнаружены слишком похожие копии" in logs_text:
         await message.answer("⚠️ Обнаружены слишком похожие копии, выполняется перегенерация…")

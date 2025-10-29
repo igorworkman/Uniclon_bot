@@ -1,4 +1,5 @@
 import logging
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -20,16 +21,26 @@ def run_protective_process(
     copies: int,
     profile: str = "",
     quality: str = "",
-) -> bool:
+) -> dict:
     if copies < 1:
         raise ValueError("copies must be >= 1")
     full_path = (BASE_DIR / filename).resolve()
     if not full_path.exists():
         logger.error("❌ Файл не найден: %s", full_path)
-        return False
+        return {
+            "success_count": 0,
+            "failed_count": copies,
+            "temp_fail": False,
+            "log_tail": f"File not found: {full_path}",
+        }
     if not _SCRIPT_PATH.exists():
         logger.error("❌ Script not found: %s", _SCRIPT_PATH)
-        return False
+        return {
+            "success_count": 0,
+            "failed_count": copies,
+            "temp_fail": False,
+            "log_tail": f"Script not found: {_SCRIPT_PATH}",
+        }
     try:
         mode = _SCRIPT_PATH.stat().st_mode
         if not mode & 0o111:
@@ -48,24 +59,60 @@ def run_protective_process(
         )
     except FileNotFoundError:
         logger.error("❌ Unable to execute %s", _SCRIPT_PATH, exc_info=True)
-        return False
+        return {
+            "success_count": 0,
+            "failed_count": copies,
+            "temp_fail": False,
+            "log_tail": f"Unable to execute {_SCRIPT_PATH}",
+        }
     except OSError as exc:
         logger.error("❌ Failed to spawn process_protective_v1.6.sh: %s", exc)
-        return False
+        return {
+            "success_count": 0,
+            "failed_count": copies,
+            "temp_fail": False,
+            "log_tail": str(exc),
+        }
     duration = time.monotonic() - start_ts
     stdout, stderr = proc.stdout or "", proc.stderr or ""
+    combined = "\n".join([part for part in (stdout, stderr) if part])
+    lines = combined.splitlines()
+    tail20 = "\n".join(lines[-20:]) if lines else combined
+    success_count = len(re.findall(r"Generated copy #\\d+", combined))
+    failed_count = len(re.findall(r"Failed copy #\\d+", combined))
+    temp_fail = False
     if proc.returncode != 0:
-        logger.error(
-            "⚠️ Скрипт завершился с кодом %s: %s",
-            proc.returncode,
-            (stderr or stdout).strip() or "no output",
+        tail10 = "\n".join(lines[-10:]) if lines else combined
+        temp_fail = any(
+            marker in tail10
+            for marker in (
+                "[WARN] Uniqueness low but accepted",
+                "[Fallback] Copy",
+            )
         )
-        return False
-    if stdout:
-        logger.info("process_protective stdout:\n%s", stdout.rstrip())
-    if stderr:
-        logger.warning("process_protective stderr:\n%s", stderr.rstrip())
-    logger.info("✅ Скрипт успешно завершён: %s (%.2fs)", full_path, duration)
-    logger.info("📂 Готовые файлы доступны в %s", OUTPUT_DIR)
-    return True
+        if temp_fail:
+            logger.warning(
+                "⚠️ Зафиксирована временная ошибка (rc=%s).", proc.returncode
+            )
+        else:
+            logger.error(
+                "⚠️ Скрипт завершился с кодом %s: %s",
+                proc.returncode,
+                (stderr or stdout).strip() or "no output",
+            )
+    else:
+        if stdout:
+            logger.info("process_protective stdout:\n%s", stdout.rstrip())
+        if stderr:
+            logger.warning("process_protective stderr:\n%s", stderr.rstrip())
+        logger.info("✅ Скрипт успешно завершён: %s (%.2fs)", full_path, duration)
+        logger.info("📂 Готовые файлы доступны в %s", OUTPUT_DIR)
+    if not tail20.strip():
+        tail20 = (stderr or stdout).strip() or f"Process exited with code {proc.returncode}"
+    return {
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "temp_fail": temp_fail,
+        "log_tail": tail20,
+    }
 # END REGION AI

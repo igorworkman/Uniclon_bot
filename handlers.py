@@ -76,6 +76,10 @@ class FSM(StatesGroup):
     awaiting_profile = State()
     awaiting_preview = State()
 
+class VideoUpload(StatesGroup): waiting_for_video = State()
+class ProfileChoice(StatesGroup): profile = State()
+class CoverChoice(StatesGroup): decision = State()
+
 
 # REGION AI: dynamic profile keyboard
 def _profile_keyboard() -> InlineKeyboardMarkup:
@@ -409,16 +413,12 @@ async def _ensure_valid_copies(
 @router.message(Command("start"))
 async def on_start(message: Message, state: FSMContext) -> None:
     await state.clear()
-    lang = _get_user_lang(message)
-    text = get_text(
-        lang,
-        "start_text",
-        code_example=hcode(get_text(lang, "code_example")),
-        max_copies=MAX_COPIES,
-        output_dir=OUTPUT_DIR.name,
+    text = (
+        "Привет 👋 Я Uniclon!\n"
+        "Пришли мне видео (.mp4) и в подписи укажи, сколько копий нужно создать (например, 10)."
     )
     await message.answer(text)
-    await message.answer("📥 Отправьте видео для обработки.")
+    await state.set_state(VideoUpload.waiting_for_video)
 # END REGION AI
 
 
@@ -433,7 +433,11 @@ async def _process_video_submission(
     *,
     profile_override: Optional[str] = None,
     save_preview: bool = True,
+    state: Optional[FSMContext] = None,
 ) -> None:
+    if not (message.video or getattr(message.document, "mime_type", "") == "video/mp4"):
+        await message.answer("❌ Похоже, ты не отправил видеофайл (.mp4). Попробуй ещё раз."); return
+
     ack = await message.reply(get_text(lang, "saving_video", copies=copies))
 
     tmp_name = f"input_{message.message_id}.mp4"
@@ -460,6 +464,8 @@ async def _process_video_submission(
     await ack.edit_text(
         get_text(lang, "file_saved", filename=hcode(input_path.name))
     )
+    if state is not None and profile_override is None:
+        await message.answer("Теперь выбери профиль платформы:\nВыберите профиль платформы:", reply_markup=_profile_keyboard()); await state.set_state(ProfileChoice.profile); return
     await _enqueue_processing(
         message,
         ack,
@@ -485,10 +491,7 @@ async def handle_video(message: Message, bot: Bot, state: FSMContext) -> None:
         )
         return
 
-    await state.clear()
-    await state.update_data(message=message, copies=copies)
-    await message.answer("Выберите профиль платформы:", reply_markup=_profile_keyboard())
-    await state.set_state(FSM.awaiting_profile)
+    await state.clear(); await state.update_data(message=message, copies=copies); await _process_video_submission(message, bot, copies, lang, state=state)
 
 
 @router.message(FSM.awaiting_copies)
@@ -516,12 +519,11 @@ async def handle_copies_input(message: Message, state: FSMContext) -> None:
         await message.answer(f"Введите число от 1 до {MAX_COPIES}.")
         return
 
-    await state.update_data(copies=copies)
-    await message.answer("Выберите профиль платформы:", reply_markup=_profile_keyboard())
-    await state.set_state(FSM.awaiting_profile)
+    await state.update_data(copies=copies); lang = _get_user_lang(original_message)
+    await _process_video_submission(original_message, message.bot, copies, lang, state=state)
 
 
-@router.callback_query(FSM.awaiting_profile)
+@router.callback_query(ProfileChoice.profile)
 async def handle_profile_choice(callback: CallbackQuery, state: FSMContext) -> None:
     data = callback.data or ""
     if not data.startswith("profile:"):
@@ -561,10 +563,10 @@ async def handle_profile_choice(callback: CallbackQuery, state: FSMContext) -> N
         await prompt_target.answer(
             "Сохранять PNG-обложки из видео?", reply_markup=_preview_keyboard()
         )
-    await state.set_state(FSM.awaiting_preview)
+    await state.set_state(CoverChoice.decision)
 
 
-@router.callback_query(FSM.awaiting_preview)
+@router.callback_query(CoverChoice.decision)
 async def handle_preview_choice(callback: CallbackQuery, state: FSMContext) -> None:
     data = callback.data or ""
     if not data.startswith("preview:"):

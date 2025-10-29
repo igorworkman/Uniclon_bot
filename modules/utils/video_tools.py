@@ -55,26 +55,39 @@ _BLUR_FILTERS = [
 
 
 # REGION AI: audio filter helpers
-def build_audio_eq(freq: float = 1831.0, gain: float = -0.4) -> str:
+_ANEQ_FAILURE_MARKERS = ("Option not found", "Invalid argument")
+_ANEQ_RUNTIME_LOG = "[Audio] anequalizer failed validation, switching to equalizer (runtime recovery)"
+_ANEQ_VALIDATED: Optional[bool] = None
+_ANEQ_RUNTIME_OVERRIDE = False
+_ANEQ_RUNTIME_LOGGED = False
+
+
+def _audio_eq_safe_chain(freq: float, gain: float, *, runtime: bool = False) -> str:
+    global _ANEQ_RUNTIME_LOGGED
+    if runtime and not _ANEQ_RUNTIME_LOGGED:
+        logging.warning(_ANEQ_RUNTIME_LOG)
+        _ANEQ_RUNTIME_LOGGED = True
+    return f"equalizer=f={freq}:t=q:w=1:g={gain}"
+
+
+def build_audio_eq(freq: float = 1831.0, gain: float = -0.4, ffmpeg_log: Optional[str] = None) -> str:
     """Return a safe FFmpeg equalizer filter with runtime capability checks."""
 
     import subprocess
 
-    try:
-        probe = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-filters"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=3,
-        )
-        supports_anequalizer = "anequalizer" in probe.stdout
-    except Exception:
-        supports_anequalizer = False
+    global _ANEQ_VALIDATED, _ANEQ_RUNTIME_OVERRIDE
 
-    if supports_anequalizer:
+    if ffmpeg_log and any(marker in ffmpeg_log for marker in _ANEQ_FAILURE_MARKERS):
+        _ANEQ_RUNTIME_OVERRIDE = True
+        return _audio_eq_safe_chain(freq, gain, runtime=True)
+
+    if _ANEQ_RUNTIME_OVERRIDE:
+        return _audio_eq_safe_chain(freq, gain)
+
+    if _ANEQ_VALIDATED is None:
         test_cmd = [
             "ffmpeg",
+            "-hide_banner",
             "-f",
             "lavfi",
             "-i",
@@ -86,21 +99,27 @@ def build_audio_eq(freq: float = 1831.0, gain: float = -0.4) -> str:
             "-",
         ]
         try:
-            test = subprocess.run(
+            probe = subprocess.run(
                 test_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                timeout=5,
+                timeout=3,
+                check=False,
             )
-            if test.returncode > 0 or "Option not found" in (test.stderr or ""):
-                supports_anequalizer = False
-        except Exception:
-            supports_anequalizer = False
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            _ANEQ_VALIDATED = False
+        else:
+            stderr = probe.stderr or ""
+            if probe.returncode != 0 or any(marker in stderr for marker in _ANEQ_FAILURE_MARKERS):
+                _ANEQ_VALIDATED = False
+            else:
+                _ANEQ_VALIDATED = True
 
-    target = "anequalizer" if supports_anequalizer else "equalizer"
-    logging.info(f"[Audio] Using {target} (safe mode={not supports_anequalizer})")
-    return f"{target}=f={freq}:t=q:w=1:g={gain}"
+    if not _ANEQ_VALIDATED:
+        return _audio_eq_safe_chain(freq, gain)
+
+    return f"anequalizer=f={freq}:t=q:w=1:g={gain}"
 
 
 # END REGION AI

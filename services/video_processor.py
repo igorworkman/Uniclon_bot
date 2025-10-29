@@ -1,10 +1,13 @@
 import logging
+import os
 import re
 import subprocess
 import time
 from pathlib import Path
+from typing import Optional
 
 from config import BASE_DIR
+from modules.utils.video_tools import build_audio_eq
 
 logger = logging.getLogger(__name__)
 
@@ -54,37 +57,75 @@ def run_protective_process(
             logger.debug("Failed to ensure executable for %s", _SCRIPT_PATH, exc_info=True)
         cmd = ["./process_protective_v1.6.sh", str(full_path), str(int(requested))]
         start_ts = time.monotonic()
-        try:
-            proc = subprocess.run(
+
+        def _needs_audio_recovery(return_code: int, log_blob: str) -> bool:
+            if return_code not in {8, 234}:
+                return False
+            return "Option not found" in log_blob
+
+        def _run_process(env: Optional[dict] = None) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
                 cmd,
                 cwd=str(PROJECT_DIR),
                 capture_output=True,
                 text=True,
                 check=False,
+                env=env,
             )
-        except FileNotFoundError:
-            logger.error("❌ Unable to execute %s", _SCRIPT_PATH, exc_info=True)
-            return {
-                "success_count": 0,
-                "failed_count": requested,
-                "temp_fail": False,
-                "temp_error_count": 0,
-                "log_tail": f"Unable to execute {_SCRIPT_PATH}",
-                "fatal": True,
-            }
-        except OSError as exc:
-            logger.error("❌ Failed to spawn process_protective_v1.6.sh: %s", exc)
-            return {
-                "success_count": 0,
-                "failed_count": requested,
-                "temp_fail": False,
-                "temp_error_count": 0,
-                "log_tail": str(exc),
-                "fatal": True,
-            }
-        duration = time.monotonic() - start_ts
-        stdout, stderr = proc.stdout or "", proc.stderr or ""
-        combined = "\n".join([part for part in (stdout, stderr) if part])
+
+        attempt_outputs = []
+        recovery_env = None
+        try:
+            for attempt in range(2):
+                try:
+                    proc = _run_process(recovery_env)
+                except FileNotFoundError:
+                    logger.error("❌ Unable to execute %s", _SCRIPT_PATH, exc_info=True)
+                    return {
+                        "success_count": 0,
+                        "failed_count": requested,
+                        "temp_fail": False,
+                        "temp_error_count": 0,
+                        "log_tail": f"Unable to execute {_SCRIPT_PATH}",
+                        "fatal": True,
+                    }
+                except OSError as exc:
+                    logger.error("❌ Failed to spawn process_protective_v1.6.sh: %s", exc)
+                    return {
+                        "success_count": 0,
+                        "failed_count": requested,
+                        "temp_fail": False,
+                        "temp_error_count": 0,
+                        "log_tail": str(exc),
+                        "fatal": True,
+                    }
+
+                stdout = proc.stdout or ""
+                stderr = proc.stderr or ""
+                attempt_outputs.append((stdout, stderr))
+                combined_log = "\n".join(
+                    part
+                    for out_stdout, out_stderr in attempt_outputs
+                    for part in (out_stdout, out_stderr)
+                    if part
+                )
+                if attempt == 0 and _needs_audio_recovery(proc.returncode, combined_log):
+                    override_chain = build_audio_eq(ffmpeg_log=combined_log)
+                    if override_chain.startswith("equalizer="):
+                        recovery_env = os.environ.copy()
+                        recovery_env["UNICLON_AUDIO_EQ_OVERRIDE"] = override_chain
+                        continue
+                break
+        finally:
+            duration = time.monotonic() - start_ts
+
+        stdout, stderr = attempt_outputs[-1] if attempt_outputs else ("", "")
+        combined = "\n".join(
+            part
+            for out_stdout, out_stderr in attempt_outputs
+            for part in (out_stdout, out_stderr)
+            if part
+        )
         lines = combined.splitlines()
         tail20 = "\n".join(lines[-20:]) if lines else combined
         success_count = len(re.findall(r"Generated copy #\\d+", combined))

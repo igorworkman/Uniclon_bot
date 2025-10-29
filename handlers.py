@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import time
 import zipfile
 from pathlib import Path
@@ -413,10 +414,17 @@ async def _ensure_valid_copies(
 @router.message(Command("start"))
 async def on_start(message: Message, state: FSMContext) -> None:
     await state.clear()
-    text = (
-        "Привет 👋 Я Uniclon!\n"
-        "Пришли мне видео (.mp4) и в подписи укажи, сколько копий нужно создать (например, 10)."
+    lang = _get_user_lang(message)
+    text = get_text(
+        lang,
+        "start_text",
+        max_copies=MAX_COPIES,
+        output_dir=OUTPUT_DIR.name,
     )
+    bot = getattr(message, "bot", None)
+    parse_mode = getattr(getattr(bot, "defaults", None), "parse_mode", None)
+    if parse_mode and parse_mode.upper() == "HTML":
+        text = re.sub(r"\*(.+?)\*", r"<b>\1</b>", text, flags=re.DOTALL)
     await message.answer(text)
     await state.set_state(VideoUpload.waiting_for_video)
 # END REGION AI

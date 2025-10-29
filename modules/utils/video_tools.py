@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import os
 import random
@@ -71,7 +72,34 @@ def build_audio_eq(freq: float = 1831.0, gain: float = -0.4) -> str:
     except Exception:
         supports_anequalizer = False
 
+    if supports_anequalizer:
+        test_cmd = [
+            "ffmpeg",
+            "-f",
+            "lavfi",
+            "-i",
+            f"anequalizer=f={freq}:t=q:w=1:g={gain}",
+            "-t",
+            "0.1",
+            "-f",
+            "null",
+            "-",
+        ]
+        try:
+            test = subprocess.run(
+                test_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
+            )
+            if test.returncode > 0 or "Option not found" in (test.stderr or ""):
+                supports_anequalizer = False
+        except Exception:
+            supports_anequalizer = False
+
     target = "anequalizer" if supports_anequalizer else "equalizer"
+    logging.info(f"[Audio] Using {target} (safe mode={not supports_anequalizer})")
     return f"{target}=f={freq}:t=q:w=1:g={gain}"
 
 

@@ -6,7 +6,7 @@ import os
 import time
 from typing import Callable, Iterable, List
 
-from .executor import simplify_filter_chain
+from .executor import sanitize_filter_chain, simplify_filter_chain
 
 _RECOVERY_CODES = {8, 22, 234}
 
@@ -17,7 +17,7 @@ def retry_render(
 ) -> int:
     """Retry FFmpeg renders up to three times with filter simplification."""
 
-    chain: List[str] = list(filter_chain)
+    chain: List[str] = sanitize_filter_chain(filter_chain)
     last_code = 0
     for attempt in range(3):
         result = run_ffmpeg(chain)
@@ -37,7 +37,7 @@ def retry_render(
         backoff = attempt + 1
         os.environ["UNICLON_CROP_BACKOFF"] = str(backoff)
         logging.info("[Recovery] Applying UNICLON_CROP_BACKOFF=%s", backoff)
-        chain = simplify_filter_chain(chain)
+        chain = sanitize_filter_chain(simplify_filter_chain(chain))
         time.sleep(1)
     logging.error("[Recovery] ❌ Failed after 3 attempts, skipping file")
     return last_code

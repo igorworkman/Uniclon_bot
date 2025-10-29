@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 PROJECT_DIR = Path("/Users/teddy/Documents/Uniclon_bot")
 OUTPUT_DIR = PROJECT_DIR / "output"
 _SCRIPT_PATH = (PROJECT_DIR / "process_protective_v1.6.sh").resolve()
+_FFMPEG_CROP_GUARD = (Path(__file__).with_name("ffmpeg_crop_guard.sh")).resolve()
 # END REGION AI
 
 
@@ -81,13 +83,23 @@ def run_protective_process(
                             filter_chain = fix_final_crop_chain(actual_cmd[idx + 1])
                             logger.info(f"[CropSanity] Final chain verified: {filter_chain}")
                             actual_cmd[idx + 1] = filter_chain
+            env_payload = os.environ.copy()
+            previous_bash_env = env_payload.get("BASH_ENV")
+            if previous_bash_env:
+                env_payload["UNICLON_PREV_BASH_ENV"] = previous_bash_env
+            else:
+                env_payload.pop("UNICLON_PREV_BASH_ENV", None)
+            env_payload["BASH_ENV"] = str(_FFMPEG_CROP_GUARD)
+            env_payload["UNICLON_PYTHON"] = sys.executable
+            if env:
+                env_payload.update(env)
             return subprocess.run(
                 actual_cmd,
                 cwd=str(PROJECT_DIR),
                 capture_output=True,
                 text=True,
                 check=False,
-                env=env,
+                env=env_payload,
             )
 
         attempt_outputs = []

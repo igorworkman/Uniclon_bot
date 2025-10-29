@@ -1,5 +1,26 @@
 #!/bin/bash
 # Fallback orchestration helpers
+: "${MIN_ACCEPT:=2}"
+: "${MAX_RETRY_PER_COPY:=2}"
+FALLBACK_SOFT_SUCCESS=0
+
+fallback_soft_retry_guard() {
+  local copy_index="$1" attempts="${2:-0}" min_accept="${MIN_ACCEPT:-2}" max_retry="${MAX_RETRY_PER_COPY:-2}"
+  if (( FALLBACK_SOFT_SUCCESS < min_accept && attempts < max_retry )); then
+    echo "[INFO] Soft-retry triggered (low uniqueness, copy #$copy_index)"
+    echo "[INFO] Minimum accepted copies: $MIN_ACCEPT"
+    return 0
+  fi
+  return 1
+}
+
+fallback_soft_register_result() { [ "$2" != "SKIP" ] && FALLBACK_SOFT_SUCCESS=$((FALLBACK_SOFT_SUCCESS + 1)); }
+
+fallback_soft_finalize() {
+  (( FALLBACK_SOFT_SUCCESS == 0 )) && return 1
+  (( FALLBACK_SOFT_SUCCESS >= ${MIN_ACCEPT:-2} )) && return 0
+  return 0
+}
 
 fallback_should_similarity_regen() {
   local ssim_val="$1"

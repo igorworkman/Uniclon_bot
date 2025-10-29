@@ -1,6 +1,6 @@
 {
-  "copies_missing": "Укажи количество копий {hint} (1..{max_copies}).",
-  "copies_out_of_range": "Количество копий должно быть от 1 до {max_copies}.",
+  "copies_missing": "Не указано количество копий (1–{max_copies}).",
+  "copies_out_of_range": "Максимум можно создать {max_copies} копий.",
   "hint_video_caption": "в подписи к видео",
   "hint_document_caption": "в подписи к файлу",
   "hint_message": "в сообщении",

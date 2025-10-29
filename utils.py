@@ -16,10 +16,10 @@ from importlib import import_module
 def parse_copies_from_caption(caption: Optional[str]) -> Optional[int]:
     if not caption:
         return None
-    m = re.search(r"(\d+)", caption)
-    if not m:
-        return None
-    return int(m.group(1))
+    match = re.search(r"copies\s*=\s*(\d+)", caption, re.IGNORECASE)
+    if not match:
+        match = re.search(r"(\d+)", caption)
+    return int(match.group(1)) if match else None
 
 
 def parse_filename_and_copies(text: Optional[str]) -> Optional[Tuple[Path, int]]:

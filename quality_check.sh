@@ -2,6 +2,8 @@
 set -euo pipefail
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+bash "${BASE_DIR}/modules/permissions.sh"
 OUTPUT_DIR="${BASE_DIR}/Новая папка"
 MANIFEST="${OUTPUT_DIR}/manifest.csv"
 CHECK_DIR="${BASE_DIR}/checks"

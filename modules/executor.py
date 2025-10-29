@@ -21,7 +21,7 @@ def simplify_filter_chain(filter_chain: Iterable[str]) -> List[str]:
 def sanitize_crop_filter(filter_chain: str) -> str:
     import re
 
-    pattern = r"crop=(\d+):(\d+):(\d+):(\d+)"
+    pattern = r"crop=(-?\d+):(-?\d+):(-?\d+):(-?\d+)"
     match = re.search(pattern, filter_chain)
     if not match:
         return filter_chain

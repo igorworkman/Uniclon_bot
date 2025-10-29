@@ -1,15 +1,5 @@
 from __future__ import annotations
 
-from typing import Final
-
-
-_MAX_SCORE: Final[float] = 10.0
-_MIN_SCORE: Final[float] = 0.0
-
-
-def _clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
-
 
 def compute_trust_score(
     ssim: float,
@@ -17,14 +7,31 @@ def compute_trust_score(
     bitrate_delta: float,
     meta_diversity: float,
     time_diversity: float,
+    profile_valid: bool = False,
 ) -> float:
-    base = 5.0
-    base += _clamp(phash_delta * 0.18, 0.0, 2.0)
-    base += _clamp((1.0 - _clamp(ssim, 0.0, 1.0)) * 160.0, 0.0, 2.1)
-    base += _clamp(abs(bitrate_delta) * 0.12, 0.0, 1.6)
-    base += _clamp(meta_diversity * 1.5, 0.0, 1.5)
-    base += _clamp(time_diversity * 1.2, 0.0, 1.2)
-    return round(_clamp(base, _MIN_SCORE, _MAX_SCORE), 2)
+    base = 3.5
+    if phash_delta >= 8:
+        base += (phash_delta - 8) * 0.08
+    if ssim <= 0.994:
+        base += (0.994 - ssim) * 120
+    if bitrate_delta >= 10:
+        base += 0.5
+    if meta_diversity:
+        base += 0.3
+    if time_diversity:
+        base += 0.3
+    if profile_valid:
+        base += 0.5
+    return round(min(base, 9.9), 2)
 
 
-__all__ = ["compute_trust_score"]
+def validate_profile(video_meta, target_profile):
+    """Проверяет, совпадают ли параметры видео с профилем"""
+    return (
+        video_meta.get("codec") == target_profile["codec"]
+        and video_meta.get("audio_rate") == target_profile["audio_rate"]
+        and video_meta.get("major_brand") == target_profile["major_brand"]
+    )
+
+
+__all__ = ["compute_trust_score", "validate_profile"]

@@ -29,9 +29,11 @@ try:
         seeded_uniform,
     )
     from ..core.audit_manager import compute_trust_score
+    from ..core.presets import get_profile
 except ImportError:  # pragma: no cover - fallback for script execution
     from modules.core.seed_utils import current_rng, generate_seed, seeded_random_choice, seeded_uniform
     from modules.core.audit_manager import compute_trust_score
+    from modules.core.presets import get_profile
 
 SOFTWARE_POOL = [
     "CapCut 12.4.1",
@@ -39,8 +41,6 @@ SOFTWARE_POOL = [
     "iMovie 3.1.0",
     "Premiere Rush 2.5",
 ]
-FPS_POOL = [24, 25, 30, 60]
-
 _VIDEO_MICRO_FILTERS = [
     ("soft_glow", "unsharp=lx=5:ly=5:la=0.25"),
     ("teal_orange", "colorbalance=bs=-0.015:rs=0.02"),
@@ -72,6 +72,17 @@ class VariantConfig:
     contrast: float
     saturation: float
     noise_strength: int
+    codec: str
+    video_profile: str
+    video_level: str
+    pix_fmt: str
+    audio_codec: str
+    audio_bitrate: str
+    audio_rate: int
+    major_brand: str
+    compatible_brands: str
+    max_duration: Optional[int]
+    profile_name: str
     micro_filters: List[str] = field(default_factory=list)
     blur_filter: Optional[str] = None
     software: str = ""
@@ -102,6 +113,16 @@ class VariantConfig:
             "contrast": round(self.contrast, 4),
             "saturation": round(self.saturation, 4),
             "noise_strength": self.noise_strength,
+            "codec": self.codec,
+            "video_profile": self.video_profile,
+            "video_level": self.video_level,
+            "pix_fmt": self.pix_fmt,
+            "audio_codec": self.audio_codec,
+            "audio_bitrate": self.audio_bitrate,
+            "audio_rate": self.audio_rate,
+            "major_brand": self.major_brand,
+            "compatible_brands": self.compatible_brands,
+            "profile_name": self.profile_name,
             "micro_filters": self.micro_filters,
             "blur_filter": self.blur_filter,
             "software": self.software,
@@ -116,6 +137,8 @@ class VariantConfig:
             payload["creation_time_exif"] = self.timestamps.exif
         if self.filesystem_epoch is not None:
             payload["filesystem_epoch"] = self.filesystem_epoch
+        if self.max_duration is not None:
+            payload["max_duration"] = self.max_duration
         return payload
 
 
@@ -173,12 +196,24 @@ def generate_variant(
     base_width: int,
     base_height: int,
     audio_sample_rate: int,
+    profile_name: str = "tiktok_hightrust",
 
 ) -> VariantConfig:
     seed = generate_seed(input_name, copy_index, salt)
     rng = current_rng()
 
-    fps = seeded_random_choice(FPS_POOL)
+    profile_settings = get_profile(profile_name)
+    fps = rng.choice(profile_settings["fps"])
+    video_codec = profile_settings["codec"]
+    video_profile = profile_settings["profile"]
+    video_level = str(profile_settings["level"])
+    pix_fmt = profile_settings["pix_fmt"]
+    audio_codec = profile_settings.get("audio_codec", "aac")
+    audio_bitrate = profile_settings.get("audio_bitrate", "128k")
+    audio_sample_rate = int(profile_settings.get("audio_rate", audio_sample_rate))
+    major_brand = profile_settings.get("major_brand", "mp42")
+    compatible_brands = profile_settings.get("compatible_brands", "isommp42")
+    max_duration = profile_settings.get("max_duration")
     if profile_br_min <= 0 and profile_br_max <= 0:
         base_bitrate = 3600
     elif profile_br_max <= 0:
@@ -254,6 +289,17 @@ def generate_variant(
         audio_pitch=audio_pitch,
         audio_micro_filter=audio_micro_filter,
         lut_descriptor=lut_descriptor,
+        codec=video_codec,
+        video_profile=video_profile,
+        video_level=video_level,
+        pix_fmt=pix_fmt,
+        audio_codec=audio_codec,
+        audio_bitrate=audio_bitrate,
+        audio_rate=audio_sample_rate,
+        major_brand=major_brand,
+        compatible_brands=compatible_brands,
+        max_duration=max_duration,
+        profile_name=profile_name,
     )
 
 
@@ -281,6 +327,7 @@ def _cli_generate(args: argparse.Namespace) -> int:
         base_width=args.base_width,
         base_height=args.base_height,
         audio_sample_rate=args.audio_sample_rate,
+        profile_name=args.profile_name,
     )
     data = variant.to_dict()
     if args.format == "json":
@@ -301,6 +348,7 @@ def _cli_score(args: argparse.Namespace) -> int:
         args.bitrate_delta,
         args.meta_diversity,
         args.time_diversity,
+        profile_valid=args.profile_valid,
     )
     print(f"{score:.2f}")
     return 0
@@ -326,6 +374,7 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--base-width", type=int, default=1080)
     gen.add_argument("--base-height", type=int, default=1920)
     gen.add_argument("--audio-sample-rate", type=int, default=44100)
+    gen.add_argument("--profile-name", default="tiktok_hightrust")
     gen.add_argument("--format", choices=["json", "shell"], default="json")
     gen.set_defaults(func=_cli_generate)
 
@@ -335,6 +384,7 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--bitrate-delta", type=float, default=0.0)
     score.add_argument("--meta-diversity", type=float, default=0.0)
     score.add_argument("--time-diversity", type=float, default=0.0)
+    score.add_argument("--profile-valid", action="store_true")
     score.set_defaults(func=_cli_score)
 
     touch = sub.add_parser("touch", help="Apply filesystem timestamp with os.utime")

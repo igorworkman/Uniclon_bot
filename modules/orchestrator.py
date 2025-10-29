@@ -28,6 +28,7 @@ def retry_render(
         last_code = result
         if result not in _RECOVERY_CODES:
             logging.error("[Recovery] ❌ Non-recoverable code=%s", result)
+            os.environ.pop("UNICLON_CROP_BACKOFF", None)
             return result
         logging.warning(
             "[Recovery] Attempt %d/3 failed (code=%s), simplifying filters…",
@@ -40,4 +41,5 @@ def retry_render(
         chain = simplify_filter_chain(chain)
         time.sleep(1)
     logging.error("[Recovery] ❌ Failed after 3 attempts, skipping file")
+    os.environ.pop("UNICLON_CROP_BACKOFF", None)
     return last_code

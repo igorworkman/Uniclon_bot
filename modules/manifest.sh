@@ -118,16 +118,41 @@ manifest__legacy_upgrade() {
   header_line=$(head -n1 "$manifest_path")
   if ! printf '%s' "$header_line" | grep -q ",trust_score,"; then
     local tmp=$(mktemp)
-    {
-      IFS= read -r current_header
-      echo "${current_header},trust_score"
-      while IFS= read -r data_line; do
-        [ -z "$data_line" ] && continue
-        echo "${data_line},"
-      done
-    } < "$manifest_path" > "$tmp"
+    python3 - "$manifest_path" "$tmp" <<'PY'
+import csv
+import sys
+
+src, dst = sys.argv[1:3]
+with open(src, newline='') as fh:
+    rows = list(csv.reader(fh))
+
+if not rows:
+    with open(dst, 'w', newline='') as fh:
+        pass
+    sys.exit(0)
+
+header = rows[0]
+if 'trust_score' not in header:
+    try:
+        insert_at = header.index('phash') + 1
+    except ValueError:
+        try:
+            insert_at = header.index('quality_pass')
+        except ValueError:
+            insert_at = len(header)
+
+    header.insert(insert_at, 'trust_score')
+    for row in rows[1:]:
+        while len(row) < insert_at:
+            row.append('')
+        row.insert(insert_at, '')
+
+with open(dst, 'w', newline='') as fh:
+    writer = csv.writer(fh)
+    writer.writerows(rows)
+PY
     mv "$tmp" "$manifest_path"
-    echo "ℹ️ manifest обновлён: добавлена колонка trust_score"
+    echo "ℹ️ manifest обновлён: колонка trust_score вставлена после phash"
   fi
   header_line=$(head -n1 "$manifest_path")
   if ! printf '%s' "$header_line" | grep -q ",quality$"; then

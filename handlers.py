@@ -333,6 +333,8 @@ async def handle_go_command(message: Message) -> None:
     )
     if copies is None:
         return
+    user_id = message.from_user.id
+    logger.info("/go command: user=%s copies=%s", user_id, copies)
     lang = _get_user_lang(message)
     if lang.startswith("ru"):
         text = f"Количество копий установлено: {copies}"
@@ -831,9 +833,16 @@ async def _run_and_send(
         retry_tail = (retry_result.get("log_tail") or "").strip()
         if retry_tail:
             logs_text = (logs_text + "\n" if logs_text else "") + retry_tail
-        await message.answer(
-            f"✅ Успешно: {retry_result['success_count']}/{copies}\n⚠️ Ошибки: {retry_result['failed_count']}"
+        temp_errors = retry_result.get("temp_error_count", retry_result["failed_count"])
+        progress_text = (
+            f"✅ Успешно: {retry_result['success_count']}/{copies}\n"
+            f"⚠️ Временные ошибки: {temp_errors}"
         )
+        try:
+            await ack.edit_text(progress_text)
+        except Exception:
+            pass
+        await message.answer(progress_text)
 
     if "⚠️ Обнаружены слишком похожие копии" in logs_text:
         await message.answer("⚠️ Обнаружены слишком похожие копии, выполняется перегенерация…")

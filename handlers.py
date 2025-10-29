@@ -438,6 +438,14 @@ async def _process_video_submission(
     if not (message.video or getattr(message.document, "mime_type", "") == "video/mp4"):
         await message.answer("❌ Похоже, ты не отправил видеофайл (.mp4). Попробуй ещё раз."); return
 
+    if state is not None and profile_override is None:
+        await message.answer(
+            "Теперь выбери профиль платформы:\nВыберите профиль платформы:",
+            reply_markup=_profile_keyboard(),
+        )
+        await state.set_state(ProfileChoice.profile)
+        return
+
     ack = await message.reply(get_text(lang, "saving_video", copies=copies))
 
     tmp_name = f"input_{message.message_id}.mp4"
@@ -464,8 +472,6 @@ async def _process_video_submission(
     await ack.edit_text(
         get_text(lang, "file_saved", filename=hcode(input_path.name))
     )
-    if state is not None and profile_override is None:
-        await message.answer("Теперь выбери профиль платформы:\nВыберите профиль платформы:", reply_markup=_profile_keyboard()); await state.set_state(ProfileChoice.profile); return
     await _enqueue_processing(
         message,
         ack,

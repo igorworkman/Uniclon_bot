@@ -3,10 +3,23 @@
 : "${MIN_ACCEPT:=2}"
 : "${MAX_RETRY_PER_COPY:=2}"
 FALLBACK_SOFT_SUCCESS=0
+FALLBACK_UNIQUENESS_REASON="unique_ok"
 
 fallback_soft_retry_guard() {
-  local copy_index="$1" attempts="${2:-0}" min_accept="${MIN_ACCEPT:-2}" max_retry="${MAX_RETRY_PER_COPY:-2}"
-  if (( FALLBACK_SOFT_SUCCESS < min_accept && attempts < max_retry )); then
+  local copy_index="$1" attempts="${2:-0}" reason_line="${3:-}"
+  local min_accept="${MIN_ACCEPT:-2}"
+  local max_retry="${MAX_RETRY_PER_COPY:-2}"
+  local success_count="${FALLBACK_SOFT_SUCCESS:-0}"
+  if (( success_count >= min_accept )); then
+    return 1
+  fi
+  local reason_tag
+  reason_tag=$(printf '%s' "$reason_line" | awk -F';' 'NR==1 {print $1}')
+  reason_tag=${reason_tag#reason=}
+  if [ "$reason_tag" != "too_similar" ]; then
+    return 1
+  fi
+  if (( attempts < max_retry )); then
     echo "[INFO] Soft-retry triggered (low uniqueness, copy #$copy_index)"
     echo "[INFO] Minimum accepted copies: $MIN_ACCEPT"
     return 0
@@ -14,12 +27,20 @@ fallback_soft_retry_guard() {
   return 1
 }
 
-fallback_soft_register_result() { [ "$2" != "SKIP" ] && FALLBACK_SOFT_SUCCESS=$((FALLBACK_SOFT_SUCCESS + 1)); }
+fallback_soft_register_result() {
+  local verdict="$2"
+  case "$verdict" in
+    OK|ACCEPT_WARN)
+      FALLBACK_SOFT_SUCCESS=$((FALLBACK_SOFT_SUCCESS + 1))
+      ;;
+  esac
+}
 
 fallback_soft_finalize() {
-  (( FALLBACK_SOFT_SUCCESS == 0 )) && return 1
-  (( FALLBACK_SOFT_SUCCESS >= ${MIN_ACCEPT:-2} )) && return 0
-  return 0
+  if (( FALLBACK_SOFT_SUCCESS >= ${MIN_ACCEPT:-2} )); then
+    return 0
+  fi
+  return 1
 }
 
 fallback_should_similarity_regen() {
@@ -43,11 +64,13 @@ fallback_should_similarity_regen() {
 fallback_uniqueness_status() {
   local ssim_val="$1"
   local phash_val="$2"
+  FALLBACK_UNIQUENESS_REASON="unique_ok"
   if fallback_should_similarity_regen "$ssim_val" "$phash_val"; then
+    FALLBACK_UNIQUENESS_REASON="too_similar"
     printf 'RETRY'
-  else
-    printf 'OK'
+    return 0
   fi
+  printf 'OK'
 }
 
 fallback_can_retry() {
@@ -236,11 +259,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   phash_val="${2:-0}"
   delta_br="${3:-0}"
   status="$(fallback_uniqueness_status "$ssim_val" "$phash_val")"
-  reason="unique_ok"
-  if [ "$status" = "RETRY" ]; then
-    reason="low_unique"
-  fi
   printf '%s\n' "$status"
-  printf 'reason=%s;ssim=%s;phash=%s;dbr=%s\n' "$reason" "$ssim_val" "$phash_val" "$delta_br"
+  printf 'reason=%s;ssim=%s;phash=%s;dbr=%s\n' "$FALLBACK_UNIQUENESS_REASON" "$ssim_val" "$phash_val" "$delta_br"
   exit 0
 fi

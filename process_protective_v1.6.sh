@@ -1262,7 +1262,7 @@ EOF
     uniqueness_verdict=$(printf '%s' "$manager_output" | head -n1)
     reason_line=$(printf '%s' "$manager_output" | sed -n '2p')
     if [ "$uniqueness_verdict" = "RETRY" ]; then
-      if ! fallback_soft_retry_guard "$copy_index" "$fallback_attempts"; then
+      if ! fallback_soft_retry_guard "$copy_index" "$fallback_attempts" "$reason_line"; then
         echo "[INFO] Copy $copy_index skipped after low uniqueness retries"
         fallback_reason_entry="soft_retry_skipped"
         uniqueness_verdict="SKIP"

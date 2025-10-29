@@ -184,14 +184,12 @@ def run_protective_process(
         }
 
     total_success = 0
-    total_temp_errors = 0
     fatal_error = False
     log_tail_parts = []
     while total_success < copies and not fatal_error:
         requested = copies - total_success
         result = _invoke(requested)
         total_success += result["success_count"]
-        total_temp_errors += result.get("temp_error_count", 0)
         fatal_error = result.get("fatal", False)
         log_tail_parts.append(result.get("log_tail", ""))
         if not result.get("temp_fail"):
@@ -222,8 +220,8 @@ def run_protective_process(
     return {
         "success_count": total_success,
         "failed_count": failed_total,
-        "temp_fail": total_temp_errors > 0,
-        "temp_error_count": total_temp_errors,
+        "temp_fail": failed_total > 0,
+        "temp_error_count": failed_total,
         "log_tail": final_tail,
     }
 # END REGION AI

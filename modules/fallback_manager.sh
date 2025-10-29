@@ -65,12 +65,12 @@ fallback_uniqueness_status() {
   local ssim_val="$1"
   local phash_val="$2"
   FALLBACK_UNIQUENESS_REASON="unique_ok"
+  FALLBACK_UNIQUENESS_STATUS="OK"
   if fallback_should_similarity_regen "$ssim_val" "$phash_val"; then
     FALLBACK_UNIQUENESS_REASON="too_similar"
-    printf 'RETRY'
+    FALLBACK_UNIQUENESS_STATUS="RETRY"
     return 0
   fi
-  printf 'OK'
 }
 
 fallback_can_retry() {
@@ -258,8 +258,8 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   ssim_val="${1:-0}"
   phash_val="${2:-0}"
   delta_br="${3:-0}"
-  status="$(fallback_uniqueness_status "$ssim_val" "$phash_val")"
-  printf '%s\n' "$status"
+  fallback_uniqueness_status "$ssim_val" "$phash_val"
+  printf '%s\n' "${FALLBACK_UNIQUENESS_STATUS:-OK}"
   printf 'reason=%s;ssim=%s;phash=%s;dbr=%s\n' "$FALLBACK_UNIQUENESS_REASON" "$ssim_val" "$phash_val" "$delta_br"
   exit 0
 fi

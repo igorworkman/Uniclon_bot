@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from config import BASE_DIR
+from modules.executor import fix_final_crop_chain
 from modules.utils.video_tools import build_audio_eq
 
 logger = logging.getLogger(__name__)
@@ -64,8 +65,24 @@ def run_protective_process(
             return "Option not found" in log_blob
 
         def _run_process(env: Optional[dict] = None) -> subprocess.CompletedProcess[str]:
+            actual_cmd = cmd
+            if isinstance(cmd, str) and "ffmpeg" in cmd:
+                match = re.search(r"-(?:vf|filter_complex)\s+(['\"])(.+?)\1", cmd)
+                if match:
+                    filter_chain = fix_final_crop_chain(match.group(2))
+                    logger.info(f"[CropSanity] Final chain verified: {filter_chain}")
+                    actual_cmd = f"{cmd[:match.start(2)]}{filter_chain}{cmd[match.end(2):]}"
+            elif isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "ffmpeg":
+                actual_cmd = list(cmd)
+                for flag in ("-vf", "-filter_complex"):
+                    if flag in actual_cmd:
+                        idx = actual_cmd.index(flag)
+                        if idx + 1 < len(actual_cmd):
+                            filter_chain = fix_final_crop_chain(actual_cmd[idx + 1])
+                            logger.info(f"[CropSanity] Final chain verified: {filter_chain}")
+                            actual_cmd[idx + 1] = filter_chain
             return subprocess.run(
-                cmd,
+                actual_cmd,
                 cwd=str(PROJECT_DIR),
                 capture_output=True,
                 text=True,

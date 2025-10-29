@@ -46,19 +46,84 @@ def sanitize_crop_filter(filter_chain: str) -> str:
 
 
 def sanitize_audio_filter(filter_chain: str) -> str:
+    import re
+
     replacements = {
         "anequalizer": "aecho=0.8:0.9:1000:0.3",
         "apulsator": "aecho=0.8:0.9:1000:0.3",
         "afir": "atempo=1.0",
         "afreqshift": "atempo=1.0",
     }
-    for bad, safe in replacements.items():
-        if bad in filter_chain:
-            logging.warning(
-                f"[AudioGuard] '{bad}' not supported — replaced with '{safe}'"
-            )
-            filter_chain = filter_chain.replace(bad, safe)
-    return filter_chain
+    tokens = re.split(r"([,;])", filter_chain)
+
+    for index, token in enumerate(tokens):
+        if index % 2 == 1:
+            continue
+
+        stripped = token.strip()
+        if not stripped:
+            continue
+
+        leading_ws = token[: len(token) - len(token.lstrip())]
+        trailing_ws = token[len(token.rstrip()) :]
+
+        prefix = ""
+        suffix = ""
+        body = stripped
+
+        while body.startswith("["):
+            end = body.find("]")
+            if end == -1:
+                break
+            prefix += body[: end + 1]
+            body = body[end + 1 :].lstrip()
+
+        while body.endswith("]"):
+            start = body.rfind("[")
+            if start == -1:
+                break
+            suffix = body[start:] + suffix
+            body = body[:start].rstrip()
+
+        if not body:
+            tokens[index] = leading_ws + prefix + suffix + trailing_ws
+            continue
+
+        match = re.match(
+            r"^(?P<name>[A-Za-z0-9_]+)(?P<label>@[A-Za-z0-9_]+)?(?P<args>(?:=.*)?)$",
+            body,
+        )
+        if not match:
+            continue
+
+        name = match.group("name")
+        label = match.group("label") or ""
+        replacement = replacements.get(name.lower())
+        if not replacement:
+            continue
+
+        safe_match = re.match(
+            r"^(?P<safe_name>[A-Za-z0-9_]+)(?P<safe_args>(?:=.*)?)$", replacement
+        )
+        if safe_match:
+            safe_name = safe_match.group("safe_name")
+            safe_args = safe_match.group("safe_args") or ""
+        else:
+            safe_name = replacement
+            safe_args = ""
+
+        tokens[index] = (
+            leading_ws
+            + prefix
+            + f"{safe_name}{label}{safe_args}"
+            + suffix
+            + trailing_ws
+        )
+        logging.warning(
+            f"[AudioGuard] '{name}' not supported — replaced with '{replacement}'"
+        )
+
+    return "".join(tokens)
 
 
 def sanitize_filter_chain(filter_chain: Iterable[str]) -> List[str]:

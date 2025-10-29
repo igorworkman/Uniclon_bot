@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -21,6 +20,18 @@ try:
     from .meta_utils import TimestampBundle, filesystem_epoch_from, random_past_timestamp
 except ImportError:  # pragma: no cover - fallback for script execution
     from modules.utils.meta_utils import TimestampBundle, filesystem_epoch_from, random_past_timestamp
+
+try:
+    from ..core.seed_utils import (
+        current_rng,
+        generate_seed,
+        seeded_random_choice,
+        seeded_uniform,
+    )
+    from ..core.audit_manager import compute_trust_score
+except ImportError:  # pragma: no cover - fallback for script execution
+    from modules.core.seed_utils import current_rng, generate_seed, seeded_random_choice, seeded_uniform
+    from modules.core.audit_manager import compute_trust_score
 
 SOFTWARE_POOL = [
     "CapCut 12.4.1",
@@ -116,12 +127,6 @@ def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
-def _derive_seed(input_name: str, copy_index: int, salt: str) -> str:
-    stem = Path(input_name).name
-    base = f"{stem}:{copy_index}:{salt}".encode("utf-8")
-    return hashlib.md5(base).hexdigest()
-
-
 def _encoder_from_rng(rng: random.Random) -> str:
     minor = rng.randint(2, 6)
     patch = rng.randint(80, 140)
@@ -168,12 +173,12 @@ def generate_variant(
     base_width: int,
     base_height: int,
     audio_sample_rate: int,
-) -> VariantConfig:
-    seed = _derive_seed(input_name, copy_index, salt)
-    seed_int = int(seed, 16)
-    rng = random.Random(seed_int)
 
-    fps = rng.choice(FPS_POOL)
+) -> VariantConfig:
+    seed = generate_seed(input_name, copy_index, salt)
+    rng = current_rng()
+
+    fps = seeded_random_choice(FPS_POOL)
     if profile_br_min <= 0 and profile_br_max <= 0:
         base_bitrate = 3600
     elif profile_br_max <= 0:
@@ -182,12 +187,12 @@ def generate_variant(
         base_bitrate = profile_br_max
     else:
         base_bitrate = (profile_br_min + profile_br_max) / 2
-    bitrate = max(900, int(round(base_bitrate * rng.uniform(0.9, 1.1))))
-    maxrate = max(bitrate + 120, int(round(bitrate * rng.uniform(1.08, 1.18))))
-    bufsize = int(round(maxrate * rng.uniform(1.8, 2.4)))
+    bitrate = max(900, int(round(base_bitrate * seeded_uniform(0.9, 1.1))))
+    maxrate = max(bitrate + 120, int(round(bitrate * seeded_uniform(1.08, 1.18))))
+    bufsize = int(round(maxrate * seeded_uniform(1.8, 2.4)))
 
-    scale_w = _ensure_even(int(round(base_width * rng.uniform(0.99, 1.01))))
-    scale_h = _ensure_even(int(round(base_height * rng.uniform(0.99, 1.01))))
+    scale_w = _ensure_even(int(round(base_width * seeded_uniform(0.99, 1.01))))
+    scale_h = _ensure_even(int(round(base_height * seeded_uniform(0.99, 1.01))))
     scale_w = max(2, scale_w)
     scale_h = max(2, scale_h)
 
@@ -199,9 +204,9 @@ def generate_variant(
     crop_offset_x = rng.randint(0, max(0, crop_margin_w))
     crop_offset_y = rng.randint(0, max(0, crop_margin_h))
 
-    brightness = rng.uniform(-0.03, 0.03)
-    contrast = 1.0 + rng.uniform(-0.03, 0.03)
-    saturation = 1.0 + rng.uniform(-0.03, 0.03)
+    brightness = seeded_uniform(-0.03, 0.03)
+    contrast = 1.0 + seeded_uniform(-0.03, 0.03)
+    saturation = 1.0 + seeded_uniform(-0.03, 0.03)
 
     noise_roll = rng.random()
     noise_strength = 0
@@ -211,14 +216,14 @@ def generate_variant(
     micro_filters = _pick_micro_variations(rng)
     lut_descriptor = _pick_lut_descriptor(micro_filters)
 
-    software = rng.choice(SOFTWARE_POOL)
+    software = seeded_random_choice(SOFTWARE_POOL)
     encoder = _encoder_from_rng(rng)
 
     timestamps = random_past_timestamp(rng, min_days=3, max_days=14)
     filesystem_epoch = filesystem_epoch_from(timestamps, rng)
 
-    audio_tempo = rng.uniform(0.97, 1.03)
-    audio_pitch = rng.uniform(0.97, 1.03)
+    audio_tempo = seeded_uniform(0.97, 1.03)
+    audio_pitch = seeded_uniform(0.97, 1.03)
     audio_micro_filter = _build_audio_micro_filter(audio_sample_rate, audio_tempo, audio_pitch)
 
     return VariantConfig(
@@ -289,21 +294,14 @@ def _cli_generate(args: argparse.Namespace) -> int:
     return 0
 
 
-def compute_trust_score(ssim: float, phash_delta: float) -> float:
-    base = 4.2
-    if phash_delta > 8:
-        base += min(1.5, (phash_delta - 8) * 0.08)
-    if ssim < 0.994:
-        base += min(1.2, (0.994 - ssim) * 120)
-    if ssim < 0.992 and phash_delta > 12:
-        base += 0.6
-    if ssim < 0.994 and phash_delta > 10:
-        base = max(base, 5.1 + min(0.9, (phash_delta - 10) * 0.1))
-    return round(_clamp(base, 3.5, 9.5), 2)
-
-
 def _cli_score(args: argparse.Namespace) -> int:
-    score = compute_trust_score(args.ssim, args.phash)
+    score = compute_trust_score(
+        args.ssim,
+        args.phash,
+        args.bitrate_delta,
+        args.meta_diversity,
+        args.time_diversity,
+    )
     print(f"{score:.2f}")
     return 0
 
@@ -334,6 +332,9 @@ def build_parser() -> argparse.ArgumentParser:
     score = sub.add_parser("score", help="Compute trust score from metrics")
     score.add_argument("--ssim", type=float, required=True)
     score.add_argument("--phash", type=float, required=True)
+    score.add_argument("--bitrate-delta", type=float, default=0.0)
+    score.add_argument("--meta-diversity", type=float, default=0.0)
+    score.add_argument("--time-diversity", type=float, default=0.0)
     score.set_defaults(func=_cli_score)
 
     touch = sub.add_parser("touch", help="Apply filesystem timestamp with os.utime")

@@ -98,7 +98,9 @@ def run_protective_process(
                 for marker in (
                     "[WARN] Uniqueness low but accepted",
                     "[Fallback] Copy",
+                    "[Retry] Similarity low",
                 )
+            )
 
     try:
         mode = _SCRIPT_PATH.stat().st_mode

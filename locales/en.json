@@ -1,6 +1,6 @@
 {
-  "copies_missing": "Specify the number of copies {hint} (1..{max_copies}).",
-  "copies_out_of_range": "The number of copies must be between 1 and {max_copies}.",
+  "copies_missing": "Copies count is required (1-{max_copies}).",
+  "copies_out_of_range": "You can create up to {max_copies} copies.",
   "hint_video_caption": "in the video caption",
   "hint_document_caption": "in the document caption",
   "hint_message": "in the message",

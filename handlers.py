@@ -58,6 +58,7 @@ _task_queue: Optional["UserTaskQueue"] = None
 _user_profiles: Dict[int, str] = {}
 _user_quality: Dict[int, str] = {}
 _user_outputs: Dict[int, Set[Path]] = {}
+_user_default_copies: Dict[int, int] = {}
 
 _TELEGRAM_DOCUMENT_LIMIT = 2 * 1024 * 1024 * 1024  # 2 GB
 
@@ -311,34 +312,93 @@ async def handle_status(message: Message) -> None:
     await message.answer("\n".join(lines))
 
 
-async def _ensure_valid_copies(message: Message, copies, hint_key: str):
-    user_id = message.from_user.id if message.from_user else "unknown"
-    lang = _get_user_lang(message)
-    hint_text = get_text(lang, hint_key)
+@router.message(Command("go"))
+async def handle_go_command(message: Message) -> None:
+    if not message.from_user:
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.reply("Не указано количество копий (1–20)")
+        return
+    try:
+        raw_copies = int(parts[1])
+    except ValueError:
+        await message.reply("Не указано количество копий (1–20)")
+        return
+    copies = await _ensure_valid_copies(
+        message,
+        raw_copies,
+        "hint_message",
+        allow_fallback=False,
+    )
     if copies is None:
-        logger.warning("Copies missing (%s): user=%s msg=%s", hint_key, user_id, message.message_id)
-        if hint_key == "hint_video_caption":
-            await message.reply("Укажите число копий в подписи к видео")
+        return
+    lang = _get_user_lang(message)
+    if lang.startswith("ru"):
+        text = f"Количество копий установлено: {copies}"
+    else:
+        text = f"Copies count set to {copies}"
+    await message.reply(text)
+
+
+async def _ensure_valid_copies(
+    message: Message,
+    copies,
+    hint_key: str,
+    *,
+    allow_fallback: bool = True,
+):
+    user = message.from_user
+    user_id = user.id if user else None
+    lang = _get_user_lang(message)
+    if copies is None and allow_fallback:
+        if user_id is not None:
+            copies = _user_default_copies.get(user_id, 3)
         else:
-            await message.reply(
-                get_text(lang, "copies_missing", hint=hint_text, max_copies=MAX_COPIES)
-            )
+            copies = 3
+    if copies is None:
+        logger.warning(
+            "Copies missing (%s): user=%s msg=%s",
+            hint_key,
+            user_id or "unknown",
+            message.message_id,
+        )
+        await message.reply(
+            "Не указано количество копий (1–20)"
+            if lang.startswith("ru")
+            else get_text(lang, "copies_missing", max_copies=MAX_COPIES)
+        )
         return None
-    if copies < 1 or copies > MAX_COPIES:
+    if copies < 1:
+        logger.warning(
+            "Copies below minimum (%s): %s. user=%s msg=%s",
+            hint_key,
+            copies,
+            user_id or "unknown",
+            message.message_id,
+        )
+        await message.reply(
+            "Не указано количество копий (1–20)"
+            if lang.startswith("ru")
+            else get_text(lang, "copies_missing", max_copies=MAX_COPIES)
+        )
+        return None
+    if copies > MAX_COPIES:
         logger.warning(
             "Copies out of range (%s): %s. user=%s msg=%s",
             hint_key,
             copies,
-            user_id,
+            user_id or "unknown",
             message.message_id,
         )
-        if hint_key == "hint_video_caption" and copies > MAX_COPIES:
-            await message.reply("Максимум — 20 копий. Уменьшите количество")
-        else:
-            await message.reply(
-                get_text(lang, "copies_out_of_range", max_copies=MAX_COPIES)
-            )
+        await message.reply(
+            "Максимум можно создать 20 копий"
+            if lang.startswith("ru")
+            else get_text(lang, "copies_out_of_range", max_copies=MAX_COPIES)
+        )
         return None
+    if user_id is not None:
+        _user_default_copies[user_id] = copies
     return copies
 
 
@@ -707,6 +767,7 @@ async def _run_and_send(
     quality: str,
     save_preview: bool,
 ) -> None:
+    logger.info(f"Starting process for {copies} copies of {input_path.name}")
     before = {p.resolve() for p in OUTPUT_DIR.glob('*.mp4')}
     start_ts = time.time()
     lang = _get_user_lang(message)
@@ -742,11 +803,13 @@ async def _run_and_send(
         logger.warning(
             "Temporary failure detected for %s; invoking safe retry", input_path.name
         )
-        await message.answer("⚠️ Обнаружена временная ошибка, повторяем попытку…")
+        await message.answer("⚠️ Обнаружена временная ошибка, запускаем защитный режим…")
         # REGION AI: synchronous protective retry
         retry_result = run_protective_process(
             input_path.name,
             copies,
+            profile,
+            quality,
         )
         # END REGION AI
         suffix = "[retry via run_protective_process {}]"
@@ -754,6 +817,8 @@ async def _run_and_send(
             not retry_result["temp_fail"]
             and retry_result["failed_count"] == 0
         )
+        if retry_result.get("temp_fail"):
+            await message.answer("⚠️ Временная ошибка уникализации, повторяем генерацию…")
         if retry_ok:
             rc = 0
             logs_text = (logs_text + "\n" if logs_text else "") + suffix.format("succeeded")
@@ -766,6 +831,9 @@ async def _run_and_send(
         retry_tail = (retry_result.get("log_tail") or "").strip()
         if retry_tail:
             logs_text = (logs_text + "\n" if logs_text else "") + retry_tail
+        await message.answer(
+            f"✅ Успешно: {retry_result['success_count']}/{copies}\n⚠️ Ошибки: {retry_result['failed_count']}"
+        )
 
     if "⚠️ Обнаружены слишком похожие копии" in logs_text:
         await message.answer("⚠️ Обнаружены слишком похожие копии, выполняется перегенерация…")

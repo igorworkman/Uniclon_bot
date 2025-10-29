@@ -45,13 +45,33 @@ def sanitize_crop_filter(filter_chain: str) -> str:
     return safe_chain
 
 
+def sanitize_audio_filter(filter_chain: str) -> str:
+    replacements = {
+        "anequalizer": "aecho=0.8:0.9:1000:0.3",
+        "apulsator": "aecho=0.8:0.9:1000:0.3",
+        "afir": "atempo=1.0",
+        "afreqshift": "atempo=1.0",
+    }
+    for bad, safe in replacements.items():
+        if bad in filter_chain:
+            logging.warning(
+                f"[AudioGuard] '{bad}' not supported — replaced with '{safe}'"
+            )
+            filter_chain = filter_chain.replace(bad, safe)
+    return filter_chain
+
+
 def sanitize_filter_chain(filter_chain: Iterable[str]) -> List[str]:
-    sanitized = [sanitize_crop_filter(segment) for segment in filter_chain]
+    sanitized = [
+        sanitize_audio_filter(sanitize_crop_filter(segment))
+        for segment in filter_chain
+    ]
     if sanitized:
         logging.info(
             "[CropPreCheck] Validated crop parameters → %s",
             ", ".join(sanitized),
         )
+        logger.info("[AudioGuard] Final audio filter chain → %s", ", ".join(sanitized))
     else:
         logging.info("[CropPreCheck] Validated crop parameters → <empty>")
     return sanitized

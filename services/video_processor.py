@@ -75,8 +75,11 @@ def run_protective_process(
 
         attempt_outputs = []
         recovery_env = None
+        audio_recovery_applied = False
+        crop_backoff_depth = 0
+        proc: subprocess.CompletedProcess[str]
         try:
-            for attempt in range(2):
+            for attempt in range(1, 6):
                 try:
                     proc = _run_process(recovery_env)
                 except FileNotFoundError:
@@ -109,12 +112,23 @@ def run_protective_process(
                     for part in (out_stdout, out_stderr)
                     if part
                 )
-                if attempt == 0 and _needs_audio_recovery(proc.returncode, combined_log):
+                if not audio_recovery_applied and _needs_audio_recovery(proc.returncode, combined_log):
                     override_chain = build_audio_eq(ffmpeg_log=combined_log)
                     if override_chain.startswith("equalizer="):
-                        recovery_env = os.environ.copy()
+                        if recovery_env is None:
+                            recovery_env = os.environ.copy()
                         recovery_env["UNICLON_AUDIO_EQ_OVERRIDE"] = override_chain
+                        audio_recovery_applied = True
                         continue
+
+                if proc.returncode == -22 and crop_backoff_depth < 3:
+                    crop_backoff_depth += 1
+                    if recovery_env is None:
+                        recovery_env = os.environ.copy()
+                    recovery_env["UNICLON_CROP_BACKOFF"] = str(crop_backoff_depth)
+                    logger.warning("[CropGuard] FFmpeg error -22 detected, retrying with crop backoff=%s", crop_backoff_depth)
+                    continue
+
                 break
         finally:
             duration = time.monotonic() - start_ts

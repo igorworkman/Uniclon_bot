@@ -1262,6 +1262,12 @@ EOF
     uniqueness_verdict=$(printf '%s' "$manager_output" | head -n1)
     reason_line=$(printf '%s' "$manager_output" | sed -n '2p')
     if [ "$uniqueness_verdict" = "RETRY" ]; then
+      if ! fallback_soft_retry_guard "$copy_index" "$fallback_attempts"; then
+        echo "[INFO] Copy $copy_index skipped after low uniqueness retries"
+        fallback_reason_entry="soft_retry_skipped"
+        uniqueness_verdict="SKIP"
+        break
+      fi
       fallback_attempts=$((fallback_attempts + 1))
       if [ "$fallback_attempts" -ge "$max_uniqueness_retry" ]; then
         echo "[WARN] Max regeneration attempts reached for copy $copy_index — accepting result."
@@ -1301,6 +1307,7 @@ EOF
     fi
     break
   done
+  fallback_soft_register_result "$copy_index" "$uniqueness_verdict"
   local uniqueness_attempts=$((fallback_attempts + 1))
   RUN_FALLBACK_REASON+=("$fallback_reason_entry")
   RUN_COMBO_USED+=("$combo_used_label")
@@ -1456,6 +1463,10 @@ run_self_audit_pipeline() {
 }
 
 run_self_audit_pipeline
+
+if ! fallback_soft_finalize; then
+  exit 1
+fi
 
 if [ "$LOW_UNIQUENESS_TRIGGERED" -eq 1 ]; then
   printf '⚠️ Low uniqueness fallback triggered.' >"$LOW_UNIQUENESS_FLAG"

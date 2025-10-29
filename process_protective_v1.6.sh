@@ -1278,7 +1278,13 @@ EOF
       fi
       echo "[Fallback] Copy $copy_index too similar — regenerating with $combo_payload"
       combo_used_label="$combo_payload"
-      read -r combo_vf combo_af < <(bash -c "$combo_payload; printf '%s %s' \"\${CUR_VF_EXTRA:-}\" \"\${CUR_AF_EXTRA:-}\"")
+      local combo_filters=""
+      if combo_filters=$(combo_extract_filters "$combo_payload"); then
+        IFS=$'\t' read -r combo_vf combo_af <<<"$combo_filters"
+      else
+        combo_vf=""
+        combo_af=""
+      fi
       combo_vf="$(build_filter "$combo_vf")"
       combo_af="$(build_filter "$combo_af")"
       local fallback_vf_extra="" fallback_af_extra="$base_af_extra"

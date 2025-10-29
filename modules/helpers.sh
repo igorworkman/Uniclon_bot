@@ -76,7 +76,11 @@ apply_combo_context() {
 }
 
 variant_max_share() {
-  local -n arr="$1"
+  local ref="$1"
+  local -a arr=()
+  if [ -n "$ref" ]; then
+    eval "arr=(\"\${${ref}[@]-}\")" || true
+  fi
   local total=${#arr[@]}
   if [ "$total" -eq 0 ]; then
     echo "0"
@@ -113,9 +117,21 @@ duplicate_threshold() {
 }
 
 calculate_duplicate_max() {
-  local -n fps_arr="$1"
-  local -n br_arr="$2"
-  local -n dur_arr="$3"
+  local fps_ref="$1"
+  local br_ref="$2"
+  local dur_ref="$3"
+  local -a fps_arr=()
+  local -a br_arr=()
+  local -a dur_arr=()
+  if [ -n "$fps_ref" ]; then
+    eval "fps_arr=(\"\${${fps_ref}[@]-}\")" || true
+  fi
+  if [ -n "$br_ref" ]; then
+    eval "br_arr=(\"\${${br_ref}[@]-}\")" || true
+  fi
+  if [ -n "$dur_ref" ]; then
+    eval "dur_arr=(\"\${${dur_ref}[@]-}\")" || true
+  fi
   local -a seen_keys=()
   local -a seen_counts=()
   local max_count=0

@@ -317,8 +317,40 @@ def generate_variant(
 
     crop_margin_w = _ensure_even(rng.randint(4, 10))
     crop_margin_h = _ensure_even(rng.randint(4, 10))
+    backoff_raw = os.environ.get("UNICLON_CROP_BACKOFF", "").strip()
+    crop_backoff_depth = int(backoff_raw) if backoff_raw.isdigit() else 0
+    if crop_backoff_depth:
+        reduction_w = _ensure_even(min(crop_margin_w, crop_backoff_depth * 2))
+        reduction_h = _ensure_even(min(crop_margin_h, crop_backoff_depth * 2))
+        if reduction_w or reduction_h:
+            logging.warning(
+                "[CropGuard] Applying backoff depth %s (reduce margins by %sx%s)",
+                crop_backoff_depth,
+                reduction_w,
+                reduction_h,
+            )
+            crop_margin_w = max(0, crop_margin_w - reduction_w)
+            crop_margin_h = max(0, crop_margin_h - reduction_h)
     crop_offset_x = rng.randint(0, max(0, crop_margin_w))
     crop_offset_y = rng.randint(0, max(0, crop_margin_h))
+    crop_w, crop_h = base_width - 2 * crop_margin_w, base_height - 2 * crop_margin_h
+    crop_x, crop_y = crop_offset_x, crop_offset_y
+    if crop_w <= 0 or crop_h <= 0:
+        safe_w = min(base_width, max(64, base_width - 8))
+        safe_h = min(base_height, max(64, base_height - 8))
+        logging.warning("[CropGuard] Invalid crop size %sx%s, fallback to %sx%s", crop_w, crop_h, safe_w, safe_h)
+        crop_w, crop_h, crop_x, crop_y = safe_w, safe_h, 0, 0
+    if crop_x + crop_w > base_width or crop_y + crop_h > base_height:
+        logging.warning("[CropGuard] Crop out of bounds, clamping to valid area")
+        crop_x = max(0, base_width - crop_w)
+        crop_y = max(0, base_height - crop_h)
+    crop_w, crop_h = _ensure_even(int(crop_w)), _ensure_even(int(crop_h))
+    if crop_w < 64 or crop_h < 64:
+        logging.warning("[CropGuard] Crop too small, resetting to full frame")
+        crop_w, crop_h, crop_x, crop_y = base_width, base_height, 0, 0
+    crop_margin_w = max(0, _ensure_even(int((base_width - crop_w) / 2)))
+    crop_margin_h = max(0, _ensure_even(int((base_height - crop_h) / 2)))
+    crop_offset_x, crop_offset_y = max(0, min(int(crop_x), crop_margin_w)), max(0, min(int(crop_y), crop_margin_h))
 
     brightness = seeded_uniform(-0.03, 0.03)
     contrast = 1.0 + seeded_uniform(-0.03, 0.03)

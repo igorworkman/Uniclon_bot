@@ -7,6 +7,42 @@ from typing import Callable, Iterable, List
 
 logger = logging.getLogger(__name__)
 
+
+def reconcile_crop_scale(filter_chain: str) -> str:
+    """
+    Гарантирует, что значения crop <= scale.
+    Исправляет ошибки 'Invalid too big or non positive size' (-22, 234)
+    """
+
+    # Найти scale
+    scale_match = re.search(r"scale=(\d+):(\d+)", filter_chain)
+    if not scale_match:
+        return filter_chain
+
+    scale_w, scale_h = map(int, scale_match.groups())
+
+    # Найти crop
+    crop_match = re.search(r"crop=(\d+):(\d+):(\d+):(\d+)", filter_chain)
+    if not crop_match:
+        return filter_chain
+
+    crop_w, crop_h, x, y = map(int, crop_match.groups())
+
+    # Исправить значения, если превышают scale
+    if crop_w > scale_w or crop_h > scale_h or crop_w <= 0 or crop_h <= 0:
+        new_w = min(crop_w, scale_w)
+        new_h = min(crop_h, scale_h)
+        logging.warning(
+            f"[CropReconcile] corrected crop {crop_w}x{crop_h} → {new_w}x{new_h}"
+        )
+        filter_chain = re.sub(
+            r"crop=\d+:\d+:\d+:\d+",
+            f"crop={new_w}:{new_h}:{x}:{y}",
+            filter_chain,
+        )
+
+    return filter_chain
+
 def simplify_filter_chain(filter_chain: Iterable[str]) -> List[str]:
     """Drop heavy filters (noise/curves/lut) before a retry."""
     safe: List[str] = []
@@ -85,8 +121,10 @@ def sanitize_audio_filter(filter_chain: str) -> str:
 
 def sanitize_filter_chain(filter_chain: Iterable[str]) -> List[str]:
     sanitized = [
-        fix_final_crop_chain(
-            sanitize_audio_filter(sanitize_crop_filter(segment))
+        reconcile_crop_scale(
+            fix_final_crop_chain(
+                sanitize_audio_filter(sanitize_crop_filter(segment))
+            )
         )
         for segment in filter_chain
     ]

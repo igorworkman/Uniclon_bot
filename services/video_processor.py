@@ -135,6 +135,7 @@ def run_protective_process(
 
     total_success = 0
     total_temp_errors = 0
+    any_temp_fail = False
     fatal_error = False
     log_tail_parts = []
     while total_success < copies and not fatal_error:
@@ -142,6 +143,8 @@ def run_protective_process(
         result = _invoke(requested)
         total_success += result["success_count"]
         total_temp_errors += result.get("temp_error_count", 0)
+        if result.get("temp_fail"):
+            any_temp_fail = True
         fatal_error = result.get("fatal", False)
         log_tail_parts.append(result.get("log_tail", ""))
         if not result.get("temp_fail"):
@@ -155,7 +158,7 @@ def run_protective_process(
     return {
         "success_count": total_success,
         "failed_count": failed_total,
-        "temp_fail": total_temp_errors > 0,
+        "temp_fail": any_temp_fail,
         "temp_error_count": total_temp_errors,
         "log_tail": final_tail,
     }

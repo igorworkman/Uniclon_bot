@@ -92,16 +92,14 @@ def run_protective_process(
         temp_fail = False
         fatal = False
         rc = proc.returncode
+        markers = (
+            "[WARN] Uniqueness low but accepted",
+            "[Fallback] Copy",
+            "[Retry] Similarity low",
+        )
         if rc != 0:
             tail10 = "\n".join(lines[-10:]) if lines else combined
-            temp_fail = any(
-                marker in tail10
-                for marker in (
-                    "[WARN] Uniqueness low but accepted",
-                    "[Fallback] Copy",
-                    "[Retry] Similarity low",
-                )
-            )
+            temp_fail = any(marker in tail10 for marker in markers)
             if temp_fail:
                 logger.warning("⚠️ Зафиксирована временная ошибка (rc=%s).", rc)
             else:
@@ -118,6 +116,11 @@ def run_protective_process(
                 logger.warning("process_protective stderr:\n%s", stderr.rstrip())
             logger.info("✅ Скрипт успешно завершён: %s (%.2fs)", full_path, duration)
             logger.info("📂 Готовые файлы доступны в %s", OUTPUT_DIR)
+            if any(marker in combined for marker in markers):
+                temp_fail = True
+                logger.warning(
+                    "⚠️ Зафиксирована временная ошибка: обнаружены предупреждения об уникальности."
+                )
         if not tail20.strip():
             tail20 = (stderr or stdout).strip() or f"Process exited with code {rc}"
         remaining_failed = max(0, requested - success_count)

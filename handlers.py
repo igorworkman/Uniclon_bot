@@ -6,6 +6,8 @@ import time
 import zipfile
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple, TYPE_CHECKING
+
+import psutil
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
@@ -33,7 +35,7 @@ from utils import (
 )
 from downloader import download_telegram_file
 from executor import run_script_with_logs, list_new_mp4s, probe_video_duration
-from services.video_processor import run_protective_process
+from services.video_processor import run_protective_process_async
 # END REGION AI
 from locales import get_text
 
@@ -734,6 +736,10 @@ async def _enqueue_processing(
     )
     # END REGION AI
 
+    if copies > 5:
+        copies = 5
+        await message.answer("⚠️ Максимум 5 копий за один запуск.")
+
     removed_auto = auto_cleanup_stale_outputs(user_id)
     if removed_auto:
         logger.info("Auto-clean removed %s stale files for user=%s", removed_auto, user_id)
@@ -817,41 +823,65 @@ async def _run_and_send(
     temporary_error = rc != 0 and (
         "RETRY" in logs_text or "UniqScore=0.0" in logs_text
     )
+    sequential_delivery = False
+    delivered_files: List[Path] = []
     if temporary_error:
         logger.warning(
             "Temporary failure detected for %s; invoking safe retry", input_path.name
         )
         await message.answer("⚠️ Обнаружена временная ошибка, запускаем защитный режим…")
-        # REGION AI: synchronous protective retry
-        retry_result = run_protective_process(
-            input_path.name,
-            copies,
-            profile,
-            quality,
-        )
-        # END REGION AI
-        suffix = "[retry via run_protective_process {}]"
-        retry_ok = (
-            not retry_result["temp_fail"]
-            and retry_result["failed_count"] == 0
-        )
-        if retry_result.get("temp_fail"):
-            await message.answer("⚠️ Временная ошибка уникализации, повторяем генерацию…")
-        if retry_ok:
-            rc = 0
-            logs_text = (logs_text + "\n" if logs_text else "") + suffix.format("succeeded")
-            logger.info("Retry via run_protective_process succeeded for %s", input_path.name)
-        else:
-            logs_text = (logs_text + "\n" if logs_text else "") + suffix.format("failed")
-            logger.warning(
-                "Retry via run_protective_process failed for %s", input_path.name
+        sequential_delivery = True
+        known_outputs = {p.resolve() for p in before}
+        errors_log = Path("/output/errors.log")
+        success_count = 0
+        for idx in range(copies):
+            retry_result = await run_protective_process_async(
+                input_path.name,
+                1,
+                profile,
+                quality,
             )
-        retry_tail = (retry_result.get("log_tail") or "").strip()
-        if retry_tail:
-            logs_text = (logs_text + "\n" if logs_text else "") + retry_tail
-        temp_errors = retry_result.get("temp_error_count", retry_result["failed_count"])
+            outputs = [Path(p) for p in retry_result.get("outputs", [])]
+            picked_path: Optional[Path] = None
+            for candidate in outputs:
+                try:
+                    resolved = candidate.resolve()
+                except OSError:
+                    continue
+                if resolved not in known_outputs and candidate.exists():
+                    known_outputs.add(resolved)
+                    picked_path = candidate
+                    break
+            if picked_path is not None:
+                delivered_files.append(picked_path)
+                success_count += 1
+                await message.answer_document(
+                    FSInputFile(picked_path),
+                    caption=f"✅ Копия #{idx + 1} готова",
+                )
+                logger.info(
+                    "[Copy %s/%s] Done | CPU=%s%% | %s",
+                    idx + 1,
+                    copies,
+                    psutil.cpu_percent(),
+                    picked_path,
+                )
+            else:
+                await message.answer(f"⚠️ Ошибка при создании копии #{idx + 1}")
+                try:
+                    errors_log.parent.mkdir(parents=True, exist_ok=True)
+                    with errors_log.open("a", encoding="utf-8") as handle:
+                        handle.write(
+                            f"Copy {idx + 1} failed for {input_path.name}\n"
+                        )
+                except OSError:
+                    logger.exception("Failed to append to %s", errors_log)
+            await asyncio.sleep(1)
+        failed_count = copies - success_count
+        rc = 0 if failed_count == 0 else rc
+        temp_errors = failed_count
         progress_text = (
-            f"✅ Успешно: {retry_result['success_count']}/{copies}\n"
+            f"✅ Успешно: {success_count}/{copies}\n"
             f"⚠️ Временные ошибки: {temp_errors}"
         )
         try:
@@ -870,23 +900,32 @@ async def _run_and_send(
         )
 
     if rc != 0:
-        logger.error(
-            "Script failed with code %s for %s (copies=%s, profile=%s)",
-            rc,
-            input_path,
-            copies,
-            profile,
-        )
-        error_text = get_text(
-            lang,
-            "script_failed",
-            rc=rc,
-            output_dir=OUTPUT_DIR.name,
-        )
-        await message.answer("Произошла ошибка при обработке. Попробуйте ещё раз.")
-        await ack.edit_text(error_text)
-        await message.answer(error_text)
-        return
+        if sequential_delivery and delivered_files:
+            logger.warning(
+                "Protective sequential mode partially failed for %s (delivered=%s/%s)",
+                input_path,
+                len(delivered_files),
+                copies,
+            )
+            rc = 0
+        else:
+            logger.error(
+                "Script failed with code %s for %s (copies=%s, profile=%s)",
+                rc,
+                input_path,
+                copies,
+                profile,
+            )
+            error_text = get_text(
+                lang,
+                "script_failed",
+                rc=rc,
+                output_dir=OUTPUT_DIR.name,
+            )
+            await message.answer("Произошла ошибка при обработке. Попробуйте ещё раз.")
+            await ack.edit_text(error_text)
+            await message.answer(error_text)
+            return
 
     await ack.edit_text(get_text(lang, "collecting_files"))
 
@@ -903,6 +942,8 @@ async def _run_and_send(
         return
 
     new_files = sorted(new_files)[:copies]
+    if sequential_delivery and delivered_files:
+        new_files = delivered_files
 
     preview_files: List[Path] = []
     if save_preview:
@@ -950,9 +991,12 @@ async def _run_and_send(
     archive_path: Optional[Path] = None
     archive_sent = False
     preview_archive_path: Optional[Path] = None
+    if sequential_delivery:
+        sent = len(delivered_files)
+        archive_sent = True
 
     should_zip = len(new_files) > 10 or FORCE_ZIP_ARCHIVE
-    if should_zip:
+    if should_zip and not sequential_delivery:
         total_size = 0
         total_known = True
         for file_path in new_files:

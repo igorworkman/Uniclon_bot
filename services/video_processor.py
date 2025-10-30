@@ -188,6 +188,7 @@ def run_protective_process(
                 logger.warning("process_protective stderr:\n%s", stderr.rstrip())
             logger.info("✅ Скрипт успешно завершён: %s (%.2fs)", full_path, duration)
             logger.info("📂 Готовые файлы доступны в %s", OUTPUT_DIR)
+            logger.info("[CleanMeta] udta and directory metadata wiped")
             if any(marker in combined for marker in markers):
                 temp_fail = True
                 logger.warning(

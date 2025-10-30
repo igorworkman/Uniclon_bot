@@ -1192,6 +1192,12 @@ EOF
     -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$combined_audio_filters"
     -movflags +faststart
     -map_metadata -1
+    -metadata location=""
+    -metadata handler_name=""
+    -metadata com.apple.quicktime.location.ISO6709=""
+    -metadata project=""
+    -metadata dir=""
+    -metadata creation_app=""
     -metadata major_brand="$MAJOR_BRAND_TAG"
     -metadata minor_version="$MINOR_VERSION_TAG"
     -metadata compatible_brands="$COMPAT_BRANDS_TAG"

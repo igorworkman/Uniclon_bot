@@ -724,14 +724,15 @@ generate_copy() {
       --audio-sample-rate "$variant_audio_sr" \
       --format shell 2>&1); then
       while IFS= read -r variant_line; do
-        if [[ -z "$variant_line" ]]; then
+        local variant_line_trimmed="${variant_line#"${variant_line%%[![:space:]]*}"}"
+        if [[ -z "$variant_line_trimmed" ]]; then
           continue
         fi
-        if [[ "$variant_line" =~ ^[[:space:]]*Adjusted:[[:space:]]*(.*)$ ]]; then
-          echo "Adjusted: ${BASH_REMATCH[1]}"
+        if [[ "$variant_line_trimmed" == Adjusted:* ]]; then
+          echo "$variant_line_trimmed"
           continue
         fi
-        eval "$variant_line"
+        eval "$variant_line_trimmed"
       done <<<"$variant_payload"
       variant_ok=1
       variant_fs_epoch="${RAND_FILESYSTEM_EPOCH:-}"

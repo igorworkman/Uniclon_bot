@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -14,6 +15,10 @@ from orchestrator import add_task as orchestrator_add_task, finish_task as orche
 
 
 logger = logging.getLogger(__name__)
+
+_SAVED_LINE_RE = re.compile(
+    r"^\[Uniclon v1\.7\] Saved as: (?P<name>[A-Z]{3}_\d{8}_\d{6}_(?P<hash>[0-9a-f]{4})\.mp4)\s+\(seed=(?P<seed>[0-9.]+),\s*software=(?P<software>.+)\)$"
+)
 
 # REGION AI: adaptive tuning bootstrap
 _ADAPTIVE_ENV, _ADAPTIVE_META = get_tuned_params()
@@ -159,6 +164,7 @@ async def _run_script_core(
     duration_map: Dict[str, str] = {}
     success_files: List[str] = []
     failure_names: List[str] = []
+    saved_meta: Dict[str, Tuple[str, str]] = {}
     # END REGION AI
     env = os.environ.copy()
     if orchestrator_ticket:
@@ -196,6 +202,26 @@ async def _run_script_core(
         stripped = message.strip()
         if stripped:
             last_nonempty = stripped
+            saved_match = _SAVED_LINE_RE.match(stripped)
+            if saved_match:
+                name = saved_match.group("name")
+                seed_text = saved_match.group("seed")
+                actual_hash = saved_match.group("hash")
+                try:
+                    expected_hash = f"{int(float(seed_text) * 65535) & 0xFFFF:04x}"
+                except ValueError:
+                    expected_hash = None
+                if expected_hash and expected_hash != actual_hash:
+                    logger.warning(
+                        "Seed hash mismatch: %s (seed=%s expected=%s actual=%s)",
+                        name,
+                        seed_text,
+                        expected_hash,
+                        actual_hash,
+                    )
+                if any(seed_text == existing_seed for existing_seed, _ in saved_meta.values()):
+                    logger.warning("Duplicate seed detected for %s (seed=%s)", name, seed_text)
+                saved_meta[name] = (seed_text, saved_match.group("software").strip())
         if message:
             logger.info(
                 "[%s|copies=%s|profile=%s] %s",

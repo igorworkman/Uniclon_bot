@@ -210,8 +210,12 @@ if [ -z "$PREVIEW_SS_NORMALIZED" ]; then
 fi
 
 prepare_output_name() {
+  local seed_value="" seed_hash="" prefix="VID"
   while :; do
-    local days hours minutes seconds stamp salt hash_val seed_hash
+    local days hours minutes seconds stamp raw_seed
+    local -a default_pool=("VID" "VID" "IMG" "PXL")
+    local -a ios_pool=("IMG" "IMG" "VID")
+    local -a pixel_pool=("PXL" "PXL" "VID")
     days=$(rand_int 3 10)
     hours=$(rand_int 0 23)
     minutes=$(rand_int 0 59)
@@ -220,15 +224,41 @@ prepare_output_name() {
     if [ -z "$stamp" ]; then
       stamp=$(date -u +"%Y%m%d_%H%M%S")
     fi
-    salt=$(date +%s%N 2>/dev/null || date +%s)
-    hash_val=$(deterministic_md5 "${name}-${CURRENT_COPY_INDEX}-${salt}-${stamp}-${SEED_HEX}")
-    seed_hash=${hash_val:0:5}
-    OUT_NAME="VID_${stamp}_${seed_hash}.mp4"
+
+    raw_seed="${RAND_SEED:-$SEED_HEX}"
+    if [[ "$raw_seed" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+      seed_value=$(awk -v s="$raw_seed" 'BEGIN{ if (s<0) s=0; if (s>1) s=1; printf "%.3f", s+0 }')
+      seed_hash=$(awk -v s="$raw_seed" 'BEGIN{ if (s<0) s=0; if (s>1) s=1; printf "%04x", int(s*65535) }')
+    else
+      local seed_int
+      seed_int=$(printf '%d' "0x${SEED_HEX:0:4}")
+      seed_hash=$(printf "%04x" "$seed_int")
+      seed_value=$(awk -v v="$seed_int" 'BEGIN{ printf "%.3f", (v % 65536) / 65535 }')
+    fi
+    seed_hash=${seed_hash,,}
+
+    local hash_idx
+    hash_idx=$(printf '%d' "0x${SEED_HEX:4:2}")
+    local -a pool=("${default_pool[@]}")
+    case "$SOFTWARE_TAG" in
+      *iMovie*|*Final*Cut*) pool=("${ios_pool[@]}") ;;
+      *Pixel*|*Google*) pool=("${pixel_pool[@]}") ;;
+      *) pool=("${default_pool[@]}") ;;
+    esac
+    if [ ${#pool[@]} -gt 0 ]; then
+      prefix="${pool[$((hash_idx % ${#pool[@]}))]}"
+    else
+      prefix="VID"
+    fi
+
+    OUT_NAME="${prefix}_${stamp}_${seed_hash}.mp4"
     OUT="${OUTPUT_DIR}/${OUT_NAME}"
     [ -e "$OUT" ] || break
   done
   FILE_STEM="${OUT_NAME%.*}"
   FILE_EXT="${OUT_NAME##*.}"
+  CURRENT_SEED_PRINT="${seed_value:-0.000}"
+  CURRENT_SEED_HASH="$seed_hash"
 }
 
 rand_description() {
@@ -1497,6 +1527,8 @@ EOF
   RUN_TRUST_SCORE+=("$trust_score_value")
 
   echo "✅ done: $OUT"
+  printf '[Uniclon v1.7] Saved as: %s  (seed=%s, software=%s)\n' \
+    "$OUT_NAME" "${CURRENT_SEED_PRINT:-0.000}" "$SOFTWARE_TAG"
 }
 
 combo_engine_autofill

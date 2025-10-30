@@ -40,8 +40,12 @@ from utils import (
     cleanup_user_outputs,
 )
 from downloader import download_telegram_file
-from executor import run_script_with_logs, list_new_mp4s, probe_video_duration
-from services.video_processor import run_protective_process_async
+from executor import (
+    run_script_with_logs,
+    list_new_mp4s,
+    probe_video_duration,
+    process_copies_sequentially,
+)
 # END REGION AI
 from locales import get_text
 
@@ -859,52 +863,36 @@ async def _run_and_send(
         )
         await message.answer("⚠️ Обнаружена временная ошибка, запускаем защитный режим…")
         sequential_delivery = True
-        known_outputs = {p.resolve() for p in before}
-        errors_log = Path("/output/errors.log")
+        deliveries = await process_copies_sequentially(
+            input_path,
+            copies,
+            profile,
+            quality,
+        )
         success_count = 0
-        for idx in range(copies):
-            retry_result = await run_protective_process_async(
-                input_path.name,
-                1,
-                profile,
-                quality,
-            )
-            outputs = [Path(p) for p in retry_result.get("outputs", [])]
-            picked_path: Optional[Path] = None
-            for candidate in outputs:
-                try:
-                    resolved = candidate.resolve()
-                except OSError:
-                    continue
-                if resolved not in known_outputs and candidate.exists():
-                    known_outputs.add(resolved)
-                    picked_path = candidate
-                    break
-            if picked_path is not None:
-                delivered_files.append(picked_path)
+        for item in deliveries:
+            idx = item["index"]
+            path = item.get("path")
+            if path and path.exists():
+                delivered_files.append(path)
                 success_count += 1
-                await message.answer_document(
-                    FSInputFile(picked_path),
-                    caption=f"✅ Копия #{idx + 1} готова",
-                )
+                await finalize_video(message, path)
                 logger.info(
                     "[Copy %s/%s] Done | CPU=%s%% | %s",
-                    idx + 1,
+                    idx,
                     copies,
                     psutil.cpu_percent(),
-                    picked_path,
+                    path,
+                )
+                continue
+            if item.get("error") == "timeout":
+                await message.answer(
+                    f"⚠️ Копия #{idx} не успела сгенерироваться за 5 минут — пропущена."
                 )
             else:
-                await message.answer(f"⚠️ Ошибка при создании копии #{idx + 1}")
-                try:
-                    errors_log.parent.mkdir(parents=True, exist_ok=True)
-                    with errors_log.open("a", encoding="utf-8") as handle:
-                        handle.write(
-                            f"Copy {idx + 1} failed for {input_path.name}\n"
-                        )
-                except OSError:
-                    logger.exception("Failed to append to %s", errors_log)
-            await asyncio.sleep(1)
+                await message.answer(
+                    f"❌ Ошибка при создании копии #{idx}: {item.get('error', 'unknown')}"
+                )
         failed_count = copies - success_count
         rc = 0 if failed_count == 0 else rc
         temp_errors = failed_count

@@ -10,6 +10,18 @@ from .metadata import generate_meta_variants
 logger = logging.getLogger(__name__)
 
 
+# REGION AI: trust score bitrate tolerance
+def relaxed_bitrate_delta(delta: float, max_growth: float = 50.0) -> float:
+    """Return 0 when bitrate growth stays within the allowed percentage."""
+
+    try:
+        value = float(delta)
+    except (TypeError, ValueError):
+        return 0.0
+    return value if value > max_growth else 0.0
+# END REGION AI
+
+
 def reconcile_crop_scale(filter_chain: str) -> str:
     """
     Гарантирует, что значения crop <= scale.

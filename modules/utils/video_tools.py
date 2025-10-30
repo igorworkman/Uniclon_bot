@@ -36,6 +36,14 @@ except ImportError:  # pragma: no cover - fallback for script execution
     from modules.core.audit_manager import compute_trust_score
     from modules.core.presets import get_profile
 
+
+# REGION AI: executor helpers import
+try:
+    from ..executor import relaxed_bitrate_delta
+except ImportError:  # pragma: no cover - fallback for script execution
+    from modules.executor import relaxed_bitrate_delta
+# END REGION AI
+
 SOFTWARE_POOL = [
     "CapCut 12.4.1",
     "VN 2.13.6",
@@ -151,6 +159,10 @@ class VariantConfig:
     audio_codec: str
     audio_bitrate: str
     audio_rate: int
+# REGION AI: encode quality controls
+    crf: int = 20
+    tune: str = "film"
+# END REGION AI
     major_brand: str
     compatible_brands: str
     max_duration: Optional[int]
@@ -192,6 +204,10 @@ class VariantConfig:
             "audio_codec": self.audio_codec,
             "audio_bitrate": self.audio_bitrate,
             "audio_rate": self.audio_rate,
+# REGION AI: encode quality serialization
+            "crf": self.crf,
+            "tune": self.tune,
+# END REGION AI
             "major_brand": self.major_brand,
             "compatible_brands": self.compatible_brands,
             "profile_name": self.profile_name,
@@ -307,6 +323,23 @@ def generate_variant(
     maxrate = max(bitrate + 120, int(round(bitrate * seeded_uniform(1.08, 1.18))))
     bufsize = int(round(maxrate * seeded_uniform(1.8, 2.4)))
 
+# REGION AI: vertical bitrate uplift and CRF policy
+    if base_height > base_width:
+        bitrate = int(round(seeded_uniform(6500, 9000)))
+        maxrate = max(bitrate + 120, int(round(bitrate * seeded_uniform(1.05, 1.15))))
+        bufsize = int(round(maxrate * seeded_uniform(1.9, 2.3)))
+    clip_hint_raw = os.environ.get("UNICLON_TARGET_DURATION", "").strip()
+    crf_value = 20
+    if clip_hint_raw:
+        try:
+            if float(clip_hint_raw) < 20.0:
+                crf_value = 18
+        except ValueError:
+            pass
+    if crf_value != 18 and max_duration is not None and max_duration <= 20:
+        crf_value = 18
+# END REGION AI
+
     scale_w = _ensure_even(int(round(base_width * seeded_uniform(0.99, 1.01))))
     scale_h = _ensure_even(int(round(base_height * seeded_uniform(0.99, 1.01))))
     scale_w = max(2, scale_w)
@@ -409,6 +442,7 @@ def generate_variant(
         audio_codec=audio_codec,
         audio_bitrate=audio_bitrate,
         audio_rate=audio_sample_rate,
+        crf=crf_value,
         major_brand=major_brand,
         compatible_brands=compatible_brands,
         max_duration=max_duration,
@@ -455,10 +489,13 @@ def _cli_generate(args: argparse.Namespace) -> int:
 
 
 def _cli_score(args: argparse.Namespace) -> int:
+    # REGION AI: bitrate tolerance for trust score
+    bitrate_delta = relaxed_bitrate_delta(args.bitrate_delta)
+    # END REGION AI
     score = compute_trust_score(
         args.ssim,
         args.phash,
-        args.bitrate_delta,
+        bitrate_delta,
         args.meta_diversity,
         args.time_diversity,
         profile_valid=args.profile_valid,

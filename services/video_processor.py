@@ -62,7 +62,7 @@ def run_protective_process(
         def _needs_audio_recovery(return_code: int, log_blob: str) -> bool:
             if return_code not in {8, 234}:
                 return False
-            return "Option not found" in log_blob
+            return any(marker in log_blob for marker in ("Option not found", "Result too large"))
 
         def _run_process(env: Optional[dict] = None) -> subprocess.CompletedProcess[str]:
             actual_cmd = cmd

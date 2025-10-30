@@ -53,27 +53,64 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 
-def _cleanup_restart_data() -> None:
+async def _cleanup_restart_data(user_id: Optional[int]) -> bool:
+    queue = _get_task_queue()
+    has_active_jobs = False
+    user_has_tasks = False
+
+    if queue is not None:
+        try:
+            if user_id is not None:
+                user_has_tasks = bool(await queue.get_user_tasks(user_id))
+            others_active = await queue.has_pending_tasks(
+                exclude_user=user_id if user_id is not None else None
+            )
+            has_active_jobs = others_active or user_has_tasks
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to inspect task queue before cleanup")
+            has_active_jobs = True
+
+    if has_active_jobs:
+        if user_id is not None and not user_has_tasks:
+            try:
+                cleanup_user_outputs(user_id)
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to clean recorded outputs for user %s", user_id)
+        logger.info("Skipping restart cleanup due to active jobs")
+        return False
+
+    if user_id is not None:
+        try:
+            cleanup_user_outputs(user_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to clean recorded outputs for user %s", user_id)
+
     temp_dir = BASE_DIR / "temp"
     state_file = BASE_DIR / "state.json"
 
     if temp_dir.exists():
         try:
             shutil.rmtree(temp_dir)
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception("Failed to remove temporary directory %s", temp_dir)
 
     if state_file.exists():
         try:
             state_file.unlink()
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception("Failed to remove state file %s", state_file)
+
+    return True
 
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
-    _cleanup_restart_data()
+    user_id = message.from_user.id if message.from_user else None
+    try:
+        await _cleanup_restart_data(user_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to run restart cleanup during /start")
     await state.set_state(VideoUpload.waiting_for_video)
     await message.answer(
         "👋 Привет, я **Uniclon v1.8** — бот для уникализации видео.\n\n"
@@ -91,9 +128,19 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 @router.message(F.text == "🔄 RESTART")
 async def restart_bot(message: Message, state: FSMContext) -> None:
     await state.clear()
-    _cleanup_restart_data()
+    user_id = message.from_user.id if message.from_user else None
+    try:
+        cleaned = await _cleanup_restart_data(user_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to run restart cleanup during manual restart")
+        cleaned = False
     await state.set_state(VideoUpload.waiting_for_video)
-    await message.answer("♻️ Всё очищено. Готов к новой обработке!")
+    if cleaned:
+        await message.answer("♻️ Всё очищено. Готов к новой обработке!")
+    else:
+        await message.answer(
+            "⚠️ Очистка пропущена: выполняются активные задачи. Диалог сброшен, можно отправить новое видео."
+        )
 
 
 async def finalize_video(message: Message, output_path: Path) -> None:

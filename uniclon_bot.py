@@ -578,6 +578,15 @@ class UserTaskQueue:
         async with self._lock:
             return list(self._tasks.get(user_id, []))
 
+    async def has_pending_tasks(self, *, exclude_user: Optional[int] = None) -> bool:
+        async with self._lock:
+            for user_id, tasks in self._tasks.items():
+                if exclude_user is not None and user_id == exclude_user:
+                    continue
+                if tasks:
+                    return True
+            return False
+
 
 _TASK_QUEUE_REF: Optional["UserTaskQueue"] = None
 

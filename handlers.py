@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 import time
 import zipfile
 from pathlib import Path
@@ -52,9 +53,28 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 
+def _cleanup_restart_data() -> None:
+    temp_dir = BASE_DIR / "temp"
+    state_file = BASE_DIR / "state.json"
+
+    if temp_dir.exists():
+        try:
+            shutil.rmtree(temp_dir)
+        except Exception:
+            logger.exception("Failed to remove temporary directory %s", temp_dir)
+
+    if state_file.exists():
+        try:
+            state_file.unlink()
+        except Exception:
+            logger.exception("Failed to remove state file %s", state_file)
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
+    _cleanup_restart_data()
+    await state.set_state(VideoUpload.waiting_for_video)
     await message.answer(
         "👋 Привет, я **Uniclon v1.8** — бот для уникализации видео.\n\n"
         "🎥 Отправь мне MP4 и в подписи укажи количество копий (1–5).\n"
@@ -71,6 +91,8 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 @router.message(F.text == "🔄 RESTART")
 async def restart_bot(message: Message, state: FSMContext) -> None:
     await state.clear()
+    _cleanup_restart_data()
+    await state.set_state(VideoUpload.waiting_for_video)
     await message.answer("♻️ Всё очищено. Готов к новой обработке!")
 
 

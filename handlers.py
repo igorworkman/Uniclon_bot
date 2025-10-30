@@ -53,16 +53,17 @@ if TYPE_CHECKING:
     from uniclon_bot import UserTaskQueue
 
 
-router = Router()
+command_router = Router(name="command_router")
+router = Router(name="main_router")
 logger = logging.getLogger(__name__)
 
 
 async def _send_welcome_message(message: Message) -> None:
     await message.answer(
         "👋 Привет, я **Uniclon v1.8** — бот для уникализации видео.\n\n"
-        "🎥 Отправь MP4-видео и в подписи укажи количество копий (1–5).\n"
-        "Каждая копия придёт отдельно, по мере готовности.\n\n"
-        "Для сброса — нажми 🔄 **RESTART**.",
+        "🎥 Отправь MP4-файл и в подписи укажи количество копий (1–5).\n"
+        "Каждая копия будет приходить по одной, как только готова.\n\n"
+        "🔄 Для сброса состояния нажми **RESTART**.",
         reply_markup=ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text="🔄 RESTART")]],
             resize_keyboard=True,
@@ -71,7 +72,7 @@ async def _send_welcome_message(message: Message) -> None:
     )
 
 
-@router.message(CommandStart())
+@command_router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     _cleanup_restart_data()
@@ -96,7 +97,7 @@ def _cleanup_restart_data() -> None:
             logger.exception("Failed to remove state file %s", state_file)
 
 
-@router.message(F.text == "🔄 RESTART")
+@command_router.message(F.text == "🔄 RESTART")
 async def restart_bot(message: Message, state: FSMContext) -> None:
     await state.clear()
     _cleanup_restart_data()

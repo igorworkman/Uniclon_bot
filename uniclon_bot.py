@@ -39,6 +39,9 @@ CHECKS_DIR = BASE_DIR / "checks"
 CHECKS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass
 class AuditSummary:
     copies_created: int
@@ -435,6 +438,7 @@ async def _perform_self_audit_impl(
 # REGION AI: handlers imports
 from utils import cleanup_user_outputs
 from handlers import (
+    command_router,
     get_user_output_paths,
     router,
     set_task_queue,
@@ -624,9 +628,11 @@ def make_bot() -> Bot:
 
 def make_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(command_router)
     dp.include_router(router)
     dp.message.register(handle_clean_command, Command("clean"))
     dp.message.register(handle_video)
+    logger.info("✅ Command router initialized (start/restart ready)")
     return dp
 
 

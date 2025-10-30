@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import re
-import shutil
 import time
 import zipfile
 from pathlib import Path
@@ -52,40 +51,27 @@ if TYPE_CHECKING:
 router = Router()
 logger = logging.getLogger(__name__)
 
-WELCOME_MSG = (
-    "👋 Привет, я **Uniclon v1.8** — бот для уникализации видео.\n\n"
-    "🎥 Отправь мне MP4-видео и в подписи укажи количество копий (1–5).\n"
-    "Я создам уникальные версии с изменёнными метаданными, фильтрами и звуком.\n\n"
-    "🧩 После генерации ты получишь видео по одному, с прогрессом и отчётом TrustScore.\n"
-    "⚙️ Для перезапуска — нажми **🔄 RESTART**.\n\n"
-    "🚀 Готов к работе!"
-)
 
-restart_kb = ReplyKeyboardMarkup(
-    keyboard=[[KeyboardButton(text="🔄 RESTART")]],
-    resize_keyboard=True,
-)
+@router.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(
+        "👋 Привет, я **Uniclon v1.8** — бот для уникализации видео.\n\n"
+        "🎥 Отправь мне MP4 и в подписи укажи количество копий (1–5).\n"
+        "Каждая копия придёт отдельно, по мере готовности.\n\n"
+        "Если хочешь сбросить всё — нажми 🔄 **RESTART**.",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="🔄 RESTART")]],
+            resize_keyboard=True,
+        ),
+        parse_mode="Markdown",
+    )
 
 
-def _cleanup_restart_data() -> None:
-    temp_dir = BASE_DIR / "temp"
-    state_file = BASE_DIR / "state.json"
-    targets = []
-    if temp_dir.exists():
-        targets.append(temp_dir)
-    if state_file.exists():
-        targets.append(state_file)
-
-    for path in targets:
-        try:
-            if path.is_dir():
-                shutil.rmtree(path)
-            else:
-                path.unlink()
-        except FileNotFoundError:
-            continue
-        except OSError as exc:
-            logger.warning("Failed to remove %s during restart: %s", path, exc)
+@router.message(F.text == "🔄 RESTART")
+async def restart_bot(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("♻️ Всё очищено. Готов к новой обработке!")
 
 
 async def finalize_video(message: Message, output_path: Path) -> None:
@@ -450,33 +436,6 @@ async def _ensure_valid_copies(
     if user_id is not None:
         _user_default_copies[user_id] = copies
     return copies
-
-
-@router.message(F.text == "🔄 RESTART")
-async def restart_bot(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    _cleanup_restart_data()
-    await message.answer(
-        "♻️ Состояние сброшено. Готов к новой обработке!",
-        reply_markup=restart_kb,
-    )
-    await message.answer(
-        WELCOME_MSG,
-        reply_markup=restart_kb,
-        parse_mode="Markdown",
-    )
-    await state.set_state(VideoUpload.waiting_for_video)
-
-
-@router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await message.answer(
-        WELCOME_MSG,
-        reply_markup=restart_kb,
-        parse_mode="Markdown",
-    )
-    await state.set_state(VideoUpload.waiting_for_video)
 
 
 # Принимаем видео
@@ -1216,3 +1175,10 @@ async def _run_and_send(
             logger.exception("Failed to remove input file %s", input_path)
         else:
             logger.info("Temporary file %s deleted.", input_path)
+
+
+@router.message()
+async def fallback_check(message: Message) -> None:
+    await message.answer(
+        "❌ Похоже, ты не отправил видеофайл (.mp4). Попробуй ещё раз."
+    )

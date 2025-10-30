@@ -53,6 +53,24 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 
+@router.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    _cleanup_restart_data()
+    await message.answer(
+        "👋 Привет, я **Uniclon v1.8** — бот для уникализации видео.\n\n"
+        "🎥 Отправь мне MP4 и в подписи укажи количество копий (1–5).\n"
+        "Каждая копия придёт отдельно, по мере готовности.\n\n"
+        "Если хочешь сбросить всё — нажми 🔄 **RESTART**.",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="🔄 RESTART")]],
+            resize_keyboard=True,
+        ),
+        parse_mode="Markdown",
+    )
+    await state.set_state(VideoUpload.waiting_for_video)
+
+
 def _cleanup_restart_data() -> None:
     temp_dir = BASE_DIR / "temp"
     state_file = BASE_DIR / "state.json"
@@ -68,24 +86,6 @@ def _cleanup_restart_data() -> None:
             state_file.unlink()
         except Exception:
             logger.exception("Failed to remove state file %s", state_file)
-
-
-@router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    _cleanup_restart_data()
-    await state.set_state(VideoUpload.waiting_for_video)
-    await message.answer(
-        "👋 Привет, я **Uniclon v1.8** — бот для уникализации видео.\n\n"
-        "🎥 Отправь мне MP4 и в подписи укажи количество копий (1–5).\n"
-        "Каждая копия придёт отдельно, по мере готовности.\n\n"
-        "Если хочешь сбросить всё — нажми 🔄 **RESTART**.",
-        reply_markup=ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="🔄 RESTART")]],
-            resize_keyboard=True,
-        ),
-        parse_mode="Markdown",
-    )
 
 
 @router.message(F.text == "🔄 RESTART")
@@ -1201,6 +1201,8 @@ async def _run_and_send(
 
 @router.message()
 async def fallback_check(message: Message) -> None:
+    if message.text and message.text.startswith("/"):
+        return
     await message.answer(
         "❌ Похоже, ты не отправил видеофайл (.mp4). Попробуй ещё раз."
     )

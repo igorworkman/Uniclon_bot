@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
+logger = logging.getLogger(__name__)
+
 MODULE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = MODULE_DIR.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -68,6 +70,7 @@ _ANEQ_RUNTIME_LOG = "[Audio] anequalizer failed validation, switching to equaliz
 _ANEQ_VALIDATED: Optional[bool] = None
 _ANEQ_RUNTIME_OVERRIDE = False
 _ANEQ_RUNTIME_LOGGED = False
+_SUPEREQ_CLAMP_LOGGED = False
 
 
 def _audio_eq_safe_chain(freq: float, gain: float, *, runtime: bool = False) -> str:
@@ -127,7 +130,20 @@ def build_audio_eq(freq: float = 1831.0, gain: float = -0.4, ffmpeg_log: Optiona
     if not _ANEQ_VALIDATED:
         return _audio_eq_safe_chain(freq, gain)
 
-    return f"anequalizer=f={freq}:t=q:w=1:g={gain}"
+    global _SUPEREQ_CLAMP_LOGGED
+    try:
+        uniform = current_rng().uniform
+    except RuntimeError:
+        uniform = random.uniform
+    bands = []
+    for idx in range(1, 7):
+        val = max(0.0, min(uniform(-0.5, 1.5), 20.0))
+        if val == 0.0 and not _SUPEREQ_CLAMP_LOGGED:
+            logger.warning("⚠️ Superequalizer value adjusted to 0.0 to avoid FFmpeg range error")
+            _SUPEREQ_CLAMP_LOGGED = True
+        bands.append(f"{idx}b={val:.3f}")
+    supereq = f"superequalizer={':'.join(bands)}"
+    return f"{supereq},anequalizer=f={freq}:t=q:w=1:g={gain}"
 
 
 # END REGION AI

@@ -557,6 +557,38 @@ sanitize_audio_filters() {
   printf '%s' "$chain"
 }
 
+ensure_superequalizer_bounds() {
+  local chain="${1:-}"
+  if [[ "$chain" != *"superequalizer="* ]]; then
+    printf '%s' "$chain"
+    return
+  fi
+  python3 - "$chain" <<'PY_SAN'
+import sys, re
+chain = sys.argv[1]
+def clamp(match):
+    parts = match.group(1).split(':')
+    bands = []
+    for part in parts:
+        if '=' in part:
+            name, value = part.split('=', 1)
+            try:
+                num = float(value)
+            except ValueError:
+                bands.append(f"{name}={value}")
+                continue
+            if num < 0.0:
+                num = 0.0
+            elif num > 20.0:
+                num = 20.0
+            bands.append(f"{name}={num:.3f}")
+        else:
+            bands.append(part)
+    return "superequalizer=" + ":".join(bands)
+print(re.sub(r"superequalizer=([^,]+)", clamp, chain), end="")
+PY_SAN
+}
+
 next_combo() {
   local payload
   payload=$(next_regen_combo)
@@ -667,6 +699,7 @@ generate_copy() {
       combo_preview="${CUR_COMBO_LABEL:-$CUR_COMBO_STRING}"
       CUR_VF_EXTRA="$(build_filter "${CUR_VF_EXTRA:-}")"
       CUR_AF_EXTRA="$(build_filter "${CUR_AF_EXTRA:-}")"
+      CUR_AF_EXTRA=$(ensure_superequalizer_bounds "${CUR_AF_EXTRA:-}")
       echo "[Strategy] Using combo #${copy_index} → ${combo_preview}"
     fi
     SEED_HEX=$(deterministic_md5 "${SRC}_${copy_index}_соль_${regen_tag}_${attempt}")
@@ -846,6 +879,10 @@ EOF
         AFILTER="aresample=${AUDIO_SR},atempo=1.0"
       fi
     fi
+
+    AFILTER=$(ensure_superequalizer_bounds "${AFILTER:-}")
+    CUR_AF_EXTRA=$(ensure_superequalizer_bounds "${CUR_AF_EXTRA:-}")
+    SAFE_AF_CHAIN=$(ensure_superequalizer_bounds "${SAFE_AF_CHAIN:-}")
 
     if [ -n "${RAND_AUDIO_PITCH:-}" ] || [ -n "${RAND_AUDIO_TEMPO:-}" ]; then
       local tempo_val="${RAND_AUDIO_TEMPO:-1.0}"
@@ -1150,6 +1187,7 @@ EOF
   vf_payload=$(ensure_vf_format "$VF")
   local af_payload
   af_payload=$(compose_af_chain "$AFILTER" "$CUR_AF_EXTRA")
+  af_payload=$(ensure_superequalizer_bounds "$af_payload")
 # REGION AI: inject safe uniqueness chain at tail
   if [ -n "${SAFE_AF_CHAIN:-}" ]; then
     af_payload=$(compose_af_chain "$SAFE_AF_CHAIN" "$af_payload")
@@ -1176,6 +1214,7 @@ EOF
     combined_audio_filters="${combined_audio_filters:+$combined_audio_filters,}$AUDIO_FILTER"
   fi
   combined_audio_filters=$(sanitize_audio_filters "$combined_audio_filters")
+  combined_audio_filters=$(ensure_superequalizer_bounds "$combined_audio_filters")
   FFMPEG_ARGS=(
     -y -hide_banner -loglevel warning -ignore_unknown
     -analyzeduration 200M -probesize 200M
@@ -1509,6 +1548,7 @@ EOF
       fallback_vf_chain=$(ensure_vf_format "$fallback_vf_chain")
       local fallback_af_chain
       fallback_af_chain=$(compose_af_chain "$base_af" "$fallback_af_extra")
+      fallback_af_chain=$(ensure_superequalizer_bounds "$fallback_af_chain")
       fallback_af_chain=$(sanitize_audio_filters "$fallback_af_chain")
       ffmpeg_exec -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC" \
         -t "$CLIP_DURATION" -c:v libx264 -preset medium -crf 24 \

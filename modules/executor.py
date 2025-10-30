@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-import logging
-import os
-import re
-from typing import Callable, Iterable, List
+import logging, os, re, random
+from typing import Callable, Dict, Iterable, List
+
+# REGION AI: metadata imports
+from .metadata import generate_meta_variants
+# END REGION AI
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +141,17 @@ def sanitize_filter_chain(filter_chain: Iterable[str]) -> List[str]:
     return sanitized
 
 
+# REGION AI: meta shift variants
+def apply_copy_metashift(profile: Dict[str, object], base_fps: float, base_bitrate: float, base_pitch: float = 1.0) -> Dict[str, object]:
+    variant = generate_meta_variants(profile or {})
+    fps = max(1, int(round(float(base_fps or 0) + random.randint(-2, 2))))
+    bitrate_seed = float(base_bitrate or (profile or {}).get("bitrate") or 1200); bitrate = max(128, int(round(bitrate_seed * (1.0 + random.uniform(-0.1, 0.1)))))
+    swing = random.uniform(0.005, 0.01) * (1 if random.random() >= 0.5 else -1); pitch = round(base_pitch * (1.0 + swing), 6)
+    logging.info("[MetaShift] fps=%s | bitrate=%s | pitch=%.4f | encoder=%s | software=%s | creation=%s", fps, bitrate, pitch, variant["encoder"], variant["software"], variant["creation_time"]); variant.update({"fps": fps, "bitrate": bitrate, "audio_pitch": pitch})
+    return variant
+
+
+# END REGION AI
 def ensure_output_integrity(
     output_file: str,
     filter_chain: Iterable[str],

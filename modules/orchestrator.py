@@ -4,6 +4,10 @@ from __future__ import annotations
 import logging
 import os
 import time
+
+# REGION AI: metadata reseed imports
+import datetime as _dt; import random
+# END REGION AI
 from typing import Callable, Iterable, List
 
 from .executor import sanitize_filter_chain, simplify_filter_chain
@@ -20,6 +24,10 @@ def retry_render(
     chain: List[str] = sanitize_filter_chain(filter_chain)
     last_code = 0
     for attempt in range(3):
+        # REGION AI: refresh metadata timestamp per attempt
+        stamp = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(seconds=random.uniform(1.0, 60.0))
+        os.environ["UNICLON_META_CREATION_TIME"] = stamp.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"; logging.info("[MetaShift] creation_time updated for retry: %s", os.environ["UNICLON_META_CREATION_TIME"])
+        # END REGION AI
         result = run_ffmpeg(chain)
         if result == 0:
             logging.info("[Recovery] ✅ Successful retry on attempt %d", attempt + 1)

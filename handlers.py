@@ -57,21 +57,25 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 
-@router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    _cleanup_restart_data()
+async def _send_welcome_message(message: Message) -> None:
     await message.answer(
         "👋 Привет, я **Uniclon v1.8** — бот для уникализации видео.\n\n"
-        "🎥 Отправь мне MP4 и в подписи укажи количество копий (1–5).\n"
+        "🎥 Отправь MP4-видео и в подписи укажи количество копий (1–5).\n"
         "Каждая копия придёт отдельно, по мере готовности.\n\n"
-        "Если хочешь сбросить всё — нажми 🔄 **RESTART**.",
+        "Для сброса — нажми 🔄 **RESTART**.",
         reply_markup=ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text="🔄 RESTART")]],
             resize_keyboard=True,
         ),
         parse_mode="Markdown",
     )
+
+
+@router.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    _cleanup_restart_data()
+    await _send_welcome_message(message)
     await state.set_state(VideoUpload.waiting_for_video)
 
 
@@ -96,8 +100,8 @@ def _cleanup_restart_data() -> None:
 async def restart_bot(message: Message, state: FSMContext) -> None:
     await state.clear()
     _cleanup_restart_data()
+    await _send_welcome_message(message)
     await state.set_state(VideoUpload.waiting_for_video)
-    await message.answer("♻️ Всё очищено. Готов к новой обработке!")
 
 
 async def finalize_video(message: Message, output_path: Path) -> None:
@@ -1190,13 +1194,22 @@ async def _run_and_send(
 
 @router.message()
 async def fallback_check(message: Message) -> None:
-    if message.text and message.text.startswith(("/", "🔄")):
+    """
+    Игнорирует команды, кнопку RESTART и видеофайлы,
+    реагирует только на некорректные текстовые сообщения.
+    """
+    # Игнорировать команды и кнопку RESTART
+    if message.text and (
+        message.text.startswith("/") or "RESTART" in message.text
+    ):
         return
 
+    # Игнорировать видео и документы с видео
     if message.video or (
         message.document and message.document.mime_type == "video/mp4"
     ):
         return
+
     await message.answer(
         "❌ Похоже, ты не отправил видеофайл (.mp4). Попробуй ещё раз."
     )

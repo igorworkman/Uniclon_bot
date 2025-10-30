@@ -235,7 +235,8 @@ prepare_output_name() {
       seed_hash=$(printf "%04x" "$seed_int")
       seed_value=$(awk -v v="$seed_int" 'BEGIN{ printf "%.3f", (v % 65536) / 65535 }')
     fi
-    seed_hash=${seed_hash,,}
+    # Compatible with macOS Bash 3.2 — lowercase conversion via 'tr'
+    seed_hash=$(echo "$seed_hash" | tr '[:upper:]' '[:lower:]')
 
     local hash_idx
     hash_idx=$(printf '%d' "0x${SEED_HEX:4:2}")

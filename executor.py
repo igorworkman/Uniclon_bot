@@ -32,6 +32,7 @@ RUN_LOG_PATH = OUTPUT_DIR / "uniclon_run.log"
 _CPU_CORES = os.cpu_count() or 1
 _BASE_MAX_JOBS = max(1, min(2, (_CPU_CORES // 2) or 1))
 _FFMPEG_LIMITS = {False: asyncio.Semaphore(_BASE_MAX_JOBS), True: asyncio.Semaphore(1)}
+_COPY_SEMAPHORE = asyncio.Semaphore(1)
 
 
 def _load_manifest_metadata(files: List[str]) -> Dict[str, Dict[str, str]]:
@@ -500,3 +501,44 @@ async def probe_video_duration(path: Path) -> Optional[float]:
         return float(stdout.decode().strip())
     except (TypeError, ValueError):
         return None
+
+
+async def process_copies_sequentially(
+    input_path: Path,
+    copies: int,
+    profile: str,
+    quality: str,
+    *,
+    timeout: float = 300.0,
+    retries: int = 1,
+):
+    results = []
+    for idx in range(1, copies + 1):
+        attempt = 0
+        while True:
+            try:
+                async with _COPY_SEMAPHORE:
+                    payload = await asyncio.wait_for(
+                        run_protective_process_async(
+                            input_path.name,
+                            1,
+                            profile,
+                            quality,
+                        ),
+                        timeout=timeout,
+                    )
+                outputs = [Path(p) for p in payload.get("outputs", []) if p]
+                if not outputs:
+                    raise RuntimeError("no output produced")
+                results.append({"index": idx, "path": outputs[0]})
+                break
+            except asyncio.TimeoutError:
+                results.append({"index": idx, "error": "timeout"})
+                break
+            except Exception as exc:  # noqa: BLE001
+                if attempt >= retries:
+                    results.append({"index": idx, "error": str(exc)})
+                    break
+                attempt += 1
+                await asyncio.sleep(2)
+    return results

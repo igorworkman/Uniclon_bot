@@ -698,7 +698,18 @@ generate_copy() {
           echo "Adjusted: ${variant_line#Adjusted: }"
           continue
         fi
-        eval "$variant_line"
+        if [[ "$variant_line" == WARNING:* ]]; then
+          echo "$variant_line" >&2
+          continue
+        fi
+        if [[ "$variant_line" == *=* ]]; then
+          local variant_key="${variant_line%%=*}"
+          if [[ $variant_key =~ ^[[:alpha:]_][[:alnum:]_]*$ ]]; then
+            eval "$variant_line"
+            continue
+          fi
+        fi
+        echo "⚠️ Ignoring unexpected randomizer output: $variant_line" >&2
       done <<<"$variant_payload"
       variant_ok=1
       variant_fs_epoch="${RAND_FILESYSTEM_EPOCH:-}"

@@ -1201,6 +1201,8 @@ async def _run_and_send(
 
 @router.message()
 async def fallback_check(message: Message) -> None:
+    if message.text and message.text.startswith("/"):
+        return
     await message.answer(
         "❌ Похоже, ты не отправил видеофайл (.mp4). Попробуй ещё раз."
     )

@@ -2,14 +2,20 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 import time
 import zipfile
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple, TYPE_CHECKING
 from aiogram import Bot, F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.markdown import hcode
@@ -43,6 +49,41 @@ if TYPE_CHECKING:
 
 router = Router()
 logger = logging.getLogger(__name__)
+
+WELCOME_MSG = (
+    "👋 Привет, я **Uniclon v1.8** — бот для уникализации видео.\n\n"
+    "🎥 Отправь мне MP4-видео и в подписи укажи количество копий (1–5).\n"
+    "Я создам уникальные версии с изменёнными метаданными, фильтрами и звуком.\n\n"
+    "🧩 После генерации ты получишь видео по одному, с прогрессом и отчётом TrustScore.\n"
+    "⚙️ Для перезапуска — нажми **🔄 RESTART**.\n\n"
+    "🚀 Готов к работе!"
+)
+
+restart_kb = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="🔄 RESTART")]],
+    resize_keyboard=True,
+)
+
+
+def _cleanup_restart_data() -> None:
+    temp_dir = BASE_DIR / "temp"
+    state_file = BASE_DIR / "state.json"
+    targets = []
+    if temp_dir.exists():
+        targets.append(temp_dir)
+    if state_file.exists():
+        targets.append(state_file)
+
+    for path in targets:
+        try:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logger.warning("Failed to remove %s during restart: %s", path, exc)
 
 
 async def finalize_video(message: Message, output_path: Path) -> None:
@@ -409,25 +450,31 @@ async def _ensure_valid_copies(
     return copies
 
 
-# fix: reset FSM on /start and prompt for video
-# REGION AI: start handler reset
-@router.message(Command("start"))
-async def on_start(message: Message, state: FSMContext) -> None:
+@router.message(F.text == "🔄 RESTART")
+async def restart_bot(message: Message, state: FSMContext) -> None:
     await state.clear()
-    lang = _get_user_lang(message)
-    text = get_text(
-        lang,
-        "start_text",
-        max_copies=MAX_COPIES,
-        output_dir=OUTPUT_DIR.name,
+    _cleanup_restart_data()
+    await message.answer(
+        "♻️ Состояние сброшено. Готов к новой обработке!",
+        reply_markup=restart_kb,
     )
-    bot = getattr(message, "bot", None)
-    parse_mode = getattr(getattr(bot, "defaults", None), "parse_mode", None)
-    if parse_mode and parse_mode.upper() == "HTML":
-        text = re.sub(r"\*(.+?)\*", r"<b>\1</b>", text, flags=re.DOTALL)
-    await message.answer(text)
+    await message.answer(
+        WELCOME_MSG,
+        reply_markup=restart_kb,
+        parse_mode="Markdown",
+    )
     await state.set_state(VideoUpload.waiting_for_video)
-# END REGION AI
+
+
+@router.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(
+        WELCOME_MSG,
+        reply_markup=restart_kb,
+        parse_mode="Markdown",
+    )
+    await state.set_state(VideoUpload.waiting_for_video)
 
 
 # Принимаем видео

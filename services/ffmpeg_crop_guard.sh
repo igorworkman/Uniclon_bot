@@ -8,7 +8,7 @@ fi
 
 # Ensure the shim is loaded only once per shell session.
 if [[ -z "${UNICLON_FFMPEG_SANITIZER_LOADED:-}" ]]; then
-  export UNICLON_FFMPEG_SANITIZER_LOADED=1
+  UNICLON_FFMPEG_SANITIZER_LOADED=1
 
   ffmpeg() {
     local -a sanitized_args=()

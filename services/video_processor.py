@@ -19,7 +19,9 @@ OUTPUT_DIR = PROJECT_DIR / "output"
 _SCRIPT_PATH = (PROJECT_DIR / "process_protective_v1.6.sh").resolve()
 # END REGION AI
 
-_SEMAPHORE = asyncio.Semaphore(2)
+# The protective retry flow must serialize invocations so that diffs against the
+# shared OUTPUT_DIR are not polluted by other concurrent runs.
+_SEMAPHORE = asyncio.Semaphore(1)
 
 
 # REGION AI: synchronous protective runner

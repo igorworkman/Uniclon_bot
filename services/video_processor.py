@@ -1,10 +1,11 @@
+import asyncio
 import logging
 import os
 import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from config import BASE_DIR
 from modules.executor import fix_final_crop_chain
@@ -17,6 +18,8 @@ PROJECT_DIR = Path("/Users/teddy/Documents/Uniclon_bot")
 OUTPUT_DIR = PROJECT_DIR / "output"
 _SCRIPT_PATH = (PROJECT_DIR / "process_protective_v1.6.sh").resolve()
 # END REGION AI
+
+_SEMAPHORE = asyncio.Semaphore(2)
 
 
 # REGION AI: synchronous protective runner
@@ -37,6 +40,7 @@ def run_protective_process(
             "temp_fail": False,
             "temp_error_count": 0,
             "log_tail": f"File not found: {full_path}",
+            "outputs": [],
         }
     if not _SCRIPT_PATH.exists():
         logger.error("❌ Script not found: %s", _SCRIPT_PATH)
@@ -46,10 +50,12 @@ def run_protective_process(
             "temp_fail": False,
             "temp_error_count": 0,
             "log_tail": f"Script not found: {_SCRIPT_PATH}",
+            "outputs": [],
         }
 
     
     def _invoke(requested: int) -> dict:
+        initial_outputs = {p.resolve() for p in OUTPUT_DIR.glob("*.mp4")}
         try:
             mode = _SCRIPT_PATH.stat().st_mode
             if not mode & 0o111:
@@ -108,6 +114,7 @@ def run_protective_process(
                         "temp_error_count": 0,
                         "log_tail": f"Unable to execute {_SCRIPT_PATH}",
                         "fatal": True,
+                        "outputs": [],
                     }
                 except OSError as exc:
                     logger.error("❌ Failed to spawn process_protective_v1.6.sh: %s", exc)
@@ -118,6 +125,7 @@ def run_protective_process(
                         "temp_error_count": 0,
                         "log_tail": str(exc),
                         "fatal": True,
+                        "outputs": [],
                     }
 
                 stdout = proc.stdout or ""
@@ -157,6 +165,11 @@ def run_protective_process(
             for part in (out_stdout, out_stderr)
             if part
         )
+        after_outputs = {p.resolve() for p in OUTPUT_DIR.glob("*.mp4")}
+        new_outputs: List[str] = [
+            str(path)
+            for path in sorted(after_outputs - initial_outputs)
+        ]
         lines = combined.splitlines()
         tail20 = "\n".join(lines[-20:]) if lines else combined
         success_count = len(re.findall(r"Generated copy #\\d+", combined))
@@ -204,12 +217,14 @@ def run_protective_process(
             "temp_error_count": remaining_failed if temp_fail else 0,
             "log_tail": tail20,
             "fatal": fatal,
+            "outputs": new_outputs,
         }
 
     total_success = 0
     total_temp_errors = 0
     fatal_error = False
     log_tail_parts = []
+    collected_outputs: List[str] = []
     while total_success < copies and not fatal_error:
         requested = copies - total_success
         result = _invoke(requested)
@@ -217,6 +232,7 @@ def run_protective_process(
         total_temp_errors += result.get("temp_error_count", 0)
         fatal_error = result.get("fatal", False)
         log_tail_parts.append(result.get("log_tail", ""))
+        collected_outputs.extend(result.get("outputs", []))
         if not result.get("temp_fail"):
             break
         if result["success_count"] == 0:
@@ -231,5 +247,22 @@ def run_protective_process(
         "temp_fail": total_temp_errors > 0,
         "temp_error_count": total_temp_errors,
         "log_tail": final_tail,
+        "outputs": collected_outputs,
     }
 # END REGION AI
+
+
+async def run_protective_process_async(
+    filename: str,
+    copies: int,
+    profile: str = "",
+    quality: str = "",
+) -> dict:
+    async with _SEMAPHORE:
+        return await asyncio.to_thread(
+            run_protective_process,
+            filename,
+            copies,
+            profile,
+            quality,
+        )

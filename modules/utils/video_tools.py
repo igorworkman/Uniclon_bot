@@ -28,13 +28,12 @@ try:
     from ..core.seed_utils import (
         current_rng,
         generate_seed,
-        seeded_random_choice,
         seeded_uniform,
     )
     from ..core.audit_manager import compute_trust_score
     from ..core.presets import get_profile
 except ImportError:  # pragma: no cover - fallback for script execution
-    from modules.core.seed_utils import current_rng, generate_seed, seeded_random_choice, seeded_uniform
+    from modules.core.seed_utils import current_rng, generate_seed, seeded_uniform
     from modules.core.audit_manager import compute_trust_score
     from modules.core.presets import get_profile
 
@@ -46,12 +45,9 @@ except ImportError:  # pragma: no cover - fallback for script execution
     from modules.executor import relaxed_bitrate_delta
 # END REGION AI
 
-SOFTWARE_POOL = [
-    "CapCut 12.4.1",
-    "VN 2.13.6",
-    "iMovie 3.1.0",
-    "Premiere Rush 2.5",
-]
+SOFTWARE_POOL = ["CapCut", "VN", "InShot", "iMovie"]
+QT_DEVICE_POOL = [("Apple", "iPhone 14 Pro", "iPhone15,2"), ("Apple", "iPhone 13 mini", "iPhone14,4"), ("Samsung", "Galaxy S23 Ultra", "SM-S918B"), ("Samsung", "Galaxy S21", "SM-G991B")]
+_SOFTWARE_BUILDERS = {"CapCut": lambda r: f"12.{r.randint(2, 6)}.{r.randint(0, 9)}", "VN": lambda r: f"2.{r.randint(10, 16)}.{r.randint(0, 9)}", "InShot": lambda r: f"1.{r.randint(70, 99)}.{r.randint(0, 9)}", "iMovie": lambda r: f"3.{r.randint(0, 3)}.{r.randint(0, 9)}"}
 _VIDEO_MICRO_FILTERS = [
     ("soft_glow", "unsharp=lx=5:ly=5:la=0.25"),
     ("teal_orange", "colorbalance=bs=-0.015:rs=0.02"),
@@ -135,17 +131,20 @@ def build_audio_eq(freq: float = 1831.0, gain: float = -0.4, ffmpeg_log: Optiona
         uniform = random.uniform
     bands = []
     for idx in range(1, 7):
-        raw_val = uniform(-0.5, 1.5)
-        clamped_val = max(0.0, min(raw_val, 20.0))
-        if not math.isclose(raw_val, clamped_val, rel_tol=1e-9, abs_tol=1e-9):
-            band_name = f"{idx}b"
+        band_name = f"{idx}b"
+        raw_val = uniform(-1.5, 21.5)
+        if not math.isfinite(raw_val):
+            logger.warning("Non-finite superequalizer value for %s", band_name)
+            raw_val = 0.0
+        clamped = max(0.0, min(raw_val, 20.0))
+        if not math.isclose(raw_val, clamped, rel_tol=1e-9, abs_tol=1e-9):
             logger.warning(
                 "Adjusted %s from %.3f to %.3f to satisfy FFmpeg superequalizer range",
                 band_name,
                 raw_val,
-                clamped_val,
+                clamped,
             )
-        bands.append(f"{idx}b={clamped_val:.3f}")
+        bands.append(f"{band_name}={clamped:.3f}")
     supereq = f"superequalizer={':'.join(bands)}"
     return f"{supereq},anequalizer=f={freq}:t=q:w=1:g={gain}"
 
@@ -197,6 +196,8 @@ class VariantConfig:
     audio_pitch: float = 1.0
     audio_micro_filter: Optional[str] = None
     lut_descriptor: Optional[str] = None
+    qt_make: Optional[str] = None
+    qt_model: Optional[str] = None
 
     def to_dict(self) -> Dict[str, object]:
         payload: Dict[str, object] = {
@@ -247,6 +248,10 @@ class VariantConfig:
             payload["filesystem_epoch"] = self.filesystem_epoch
         if self.max_duration is not None:
             payload["max_duration"] = self.max_duration
+        if self.qt_make:
+            payload["qt_make"] = self.qt_make
+        if self.qt_model:
+            payload["qt_model"] = self.qt_model
         return payload
 
 
@@ -287,16 +292,24 @@ def _pick_lut_descriptor(filters: Iterable[str]) -> Optional[str]:
     return None
 
 
-def _build_audio_micro_filter(sample_rate: int, tempo: float, pitch: float) -> str:
+def _build_audio_micro_filter(
+    sample_rate: int, tempo: float, pitch: float, seed: Optional[int] = None
+) -> str:
+    seeded = random.Random(seed) if seed is not None else None
+    pick = (seeded.uniform if seeded else random.uniform)
+
     pitch_factor = _clamp(pitch, 0.94, 1.06)
     tempo_factor = _clamp(tempo, 0.94, 1.06)
     eq_filter = build_audio_eq(1831.0, -0.4)
+    volume = pick(0.96, 1.02)
+    echo_delay = int(round(pick(700, 1100)))
+    echo_decay = pick(0.25, 0.35)
     chain = [
         "acompressor=threshold=-16dB:ratio=2.4",
         f"aresample={sample_rate:.0f}",
         eq_filter,
-        "volume=0.99",
-        "aecho=0.8:0.9:1000:0.3",
+        f"volume={volume:.2f}",
+        f"aecho=0.8:0.9:{echo_delay}:{echo_decay:.2f}",
         f"asetrate={sample_rate:.0f}*{pitch_factor:.4f}",
         f"aresample={sample_rate:.0f}",
         f"atempo={tempo_factor:.4f}",
@@ -405,27 +418,35 @@ def generate_variant(
     crop_margin_h = max(0, _ensure_even(int((base_height - crop_h) / 2)))
     crop_offset_x, crop_offset_y = max(0, min(int(crop_x), crop_margin_w)), max(0, min(int(crop_y), crop_margin_h))
 
-    brightness = seeded_uniform(-0.03, 0.03)
-    contrast = 1.0 + seeded_uniform(-0.03, 0.03)
-    saturation = 1.0 + seeded_uniform(-0.03, 0.03)
+    video_rng = random.Random(rng.getrandbits(31))
+    brightness, contrast, saturation, gamma = (
+        video_rng.uniform(-0.035, 0.035),
+        1.0 + video_rng.uniform(-0.04, 0.04),
+        1.0 + video_rng.uniform(-0.04, 0.04),
+        1.0 + video_rng.uniform(-0.05, 0.05),
+    )
 
     noise_roll = rng.random()
     noise_strength = 0
     if noise_roll > 0.35:
         noise_strength = rng.randint(1, 2)
 
-    micro_filters = _pick_micro_variations(rng)
+    micro_filters = _pick_micro_variations(rng) + [f"eq=gamma={_clamp(gamma, 0.85, 1.15):.4f}"]
     lut_descriptor = _pick_lut_descriptor(micro_filters)
 
-    software = seeded_random_choice(SOFTWARE_POOL)
+    software_base = rng.choice(SOFTWARE_POOL)
+    software = f"{software_base} {_SOFTWARE_BUILDERS[software_base](rng)}"
     encoder = _encoder_from_rng(rng)
 
-    timestamps = random_past_timestamp(rng, min_days=3, max_days=14)
+    qt_make, qt_model, _ = rng.choice(QT_DEVICE_POOL)
+
+    timestamps = random_past_timestamp(rng, min_days=1, max_days=10)
     filesystem_epoch = filesystem_epoch_from(timestamps, rng)
 
-    audio_tempo = seeded_uniform(0.97, 1.03)
-    audio_pitch = seeded_uniform(0.97, 1.03)
-    audio_micro_filter = _build_audio_micro_filter(audio_sample_rate, audio_tempo, audio_pitch)
+    audio_rng = random.Random(rng.getrandbits(31)); audio_tempo = _clamp(audio_rng.uniform(0.96, 1.04), 0.94, 1.06); audio_pitch = _clamp(audio_rng.uniform(0.96, 1.04), 0.94, 1.06)
+    audio_micro_filter = _build_audio_micro_filter(
+        audio_sample_rate, audio_tempo, audio_pitch, seed=audio_rng.getrandbits(24)
+    )
 
     return VariantConfig(
         seed=seed,
@@ -455,6 +476,8 @@ def generate_variant(
         audio_pitch=audio_pitch,
         audio_micro_filter=audio_micro_filter,
         lut_descriptor=lut_descriptor,
+        qt_make=qt_make,
+        qt_model=qt_model,
         codec=video_codec,
         video_profile=video_profile,
         video_level=video_level,

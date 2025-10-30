@@ -61,7 +61,7 @@ _BLUR_FILTERS = [
 
 
 # REGION AI: audio filter helpers
-_ANEQ_FAILURE_MARKERS = ("Option not found", "Invalid argument")
+_ANEQ_FAILURE_MARKERS = ("Option not found", "Invalid argument", "Result too large")
 _ANEQ_RUNTIME_LOG = "[Audio] anequalizer failed validation, switching to equalizer (runtime recovery)"
 _ANEQ_VALIDATED: Optional[bool] = None
 _ANEQ_RUNTIME_OVERRIDE = False

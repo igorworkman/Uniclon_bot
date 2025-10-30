@@ -73,8 +73,12 @@ BEGIN {
   if ffmpeg_supports_filter "anequalizer"; then
     AUDIO_FILTER="anequalizer=f=1831:t=q:w=1:g=-0.408"
   else
-    AUDIO_FILTER="aecho=0.8:0.9:1000:0.3"
-    log_warn "[Audio] 'anequalizer' not supported — fallback to 'aecho'"
+    AUDIO_FILTER=$(printf 'acompressor=threshold=-16dB:ratio=2.4,aresample=%s,atempo=1.0,volume=0.985,highpass=f=100,lowpass=f=8000' "${AUDIO_SR}")
+    local fallback_note="[Audio] Fallback filter applied (anequalizer unavailable, switched to highpass/lowpass)"
+    log_warn "$fallback_note"
+    if [ -n "${logfile:-}" ]; then
+      echo "$fallback_note" >>"$logfile"
+    fi
   fi
   SAFE_AF_CHAIN=$(printf 'aresample=%s:resampler=soxr:precision=28:dither_method=triangular,volume=%s,afftdn=nf=-30,asetrate=%s*%s,aresample=%s,atempo=%s' "$AUDIO_SR" "$safe_volume" "$AUDIO_SR" "$safe_rate" "$AUDIO_SR" "$safe_tempo")
   AFILTER_CORE=$(IFS=,; echo "${filters[*]}")

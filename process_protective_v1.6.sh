@@ -729,7 +729,9 @@ generate_copy() {
           continue
         fi
         if [[ "$variant_line_trimmed" == Adjusted:* ]]; then
-          echo "$variant_line_trimmed"
+          local adjusted_message="${variant_line_trimmed#Adjusted:}"
+          adjusted_message="${adjusted_message#"${adjusted_message%%[![:space:]]*}"}"
+          echo "Adjusted: ${adjusted_message}"
           continue
         fi
         eval "$variant_line_trimmed"

@@ -1,13 +1,20 @@
 import asyncio
+import csv
 import logging
 import os
+
 import re
+
+import json
+import random
+import time
+
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # REGION AI: imports
 from adaptive_tuner import get_tuned_params, record_render_result
-from config import SCRIPT_PATH, OUTPUT_DIR, NO_DEVICE_INFO, PLATFORM_PRESETS
+from config import ECO_MODE, SCRIPT_PATH, OUTPUT_DIR, NO_DEVICE_INFO, PLATFORM_PRESETS
 from report_builder import build_uniqueness_report
 from render_queue import acquire_render_slot
 from orchestrator import add_task as orchestrator_add_task, finish_task as orchestrator_finish_task
@@ -16,9 +23,84 @@ from orchestrator import add_task as orchestrator_add_task, finish_task as orche
 
 logger = logging.getLogger(__name__)
 
+
 _SAVED_LINE_RE = re.compile(
     r"^\[Uniclon v1\.7\] Saved as: (?P<name>[A-Z]{3}_\d{8}_\d{6}_(?P<hash>[0-9a-f]{4})\.mp4)\s+\(seed=(?P<seed>[0-9.]+),\s*software=(?P<software>.+)\)$"
 )
+
+RUN_LOG_PATH = OUTPUT_DIR / "uniclon_run.log"
+_CPU_CORES = os.cpu_count() or 1
+_BASE_MAX_JOBS = max(1, min(2, (_CPU_CORES // 2) or 1))
+_FFMPEG_LIMITS = {False: asyncio.Semaphore(_BASE_MAX_JOBS), True: asyncio.Semaphore(1)}
+
+
+def _load_manifest_metadata(files: List[str]) -> Dict[str, Dict[str, str]]:
+    manifest_path = OUTPUT_DIR / "manifest.csv"
+    targets = {Path(item).name for item in files if item}
+    if not manifest_path.exists() or not targets:
+        return {}
+    try:
+        with manifest_path.open("r", encoding="utf-8") as handle:
+            return {
+                Path(raw).name: {
+                    "seed": (row.get("seed") or "").strip(),
+                    "software": (row.get("software") or "").strip(),
+                }
+                for row in csv.DictReader(handle)
+                if (raw := (row.get("filename") or row.get("file") or "").strip())
+                and Path(raw).name in targets
+            }
+    except Exception:
+        logger.debug("Manifest read failed for run log", exc_info=True)
+        return {}
+
+
+def _log_copy_run(
+    copy_meta: Dict[int, Dict[str, str]],
+    success_files: List[str],
+    copies: int,
+    eco_active: bool,
+    eco_delay: Optional[float],
+) -> None:
+    manifest_sources = success_files + [meta.get("file", "") for meta in copy_meta.values()]
+    manifest_data = _load_manifest_metadata(manifest_sources)
+    entries: List[Dict[str, object]] = []
+    for idx in range(1, copies + 1):
+        info = copy_meta.get(idx, {})
+        file_name = info.get("file") or (success_files[idx - 1] if idx - 1 < len(success_files) else "")
+        manifest_key = Path(file_name).name if file_name else ""
+        manifest_row = manifest_data.get(manifest_key, {})
+        seed = info.get("seed") or manifest_row.get("seed", "")
+        software = info.get("software") or manifest_row.get("software", "")
+        message = (
+            f"[Uniclon v1.7] Copy #{idx}: seed={seed or '-'}, "
+            f"software={software or '-'}, file={file_name or '-'}"
+        )
+        if eco_active and eco_delay:
+            message += f", EcoMode active ({eco_delay:.1f}s delay)"
+        elif eco_active:
+            message += ", EcoMode active"
+        logger.info(message)
+        entries.append(
+            {
+                "copy": idx,
+                "file": file_name,
+                "seed": seed,
+                "software": software,
+                "eco_mode": eco_active,
+                "eco_delay": round(eco_delay, 3) if eco_delay else None,
+                "timestamp": time.time(),
+            }
+        )
+    if not entries:
+        return
+    try:
+        with RUN_LOG_PATH.open("a", encoding="utf-8") as handle:
+            for entry in entries:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        logger.debug("Run log write failed", exc_info=True)
+
 
 # REGION AI: adaptive tuning bootstrap
 _ADAPTIVE_ENV, _ADAPTIVE_META = get_tuned_params()
@@ -88,6 +170,10 @@ async def _run_script_core(
 
     if orchestrator_ticket is not None:
         orchestrator_ticket["metrics"] = None
+
+    eco_active = bool(ECO_MODE or copies > 4)
+    eco_delay: Optional[float] = None
+    copy_meta: Dict[int, Dict[str, str]] = {}
 
     # ensure +x
     try:
@@ -178,19 +264,25 @@ async def _run_script_core(
     env["OUTPUT_DIR"] = str(OUTPUT_DIR)
     env["PREVIEW_DIR"] = str(OUTPUT_DIR / "previews")
 
-    proc = await asyncio.create_subprocess_exec(
-        str(SCRIPT_PATH),
-        input_file.name,
-        str(int(copies)),
-        *profile_args,
-        *quality_args,
-        *device_args,
-        *music_variant_args,
-        cwd=str(cwd),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        env=env,
-    )
+    sem = _FFMPEG_LIMITS[eco_active]
+    await sem.acquire()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            str(SCRIPT_PATH),
+            input_file.name,
+            str(int(copies)),
+            *profile_args,
+            *quality_args,
+            *device_args,
+            *music_variant_args,
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+        )
+    except Exception:
+        sem.release()
+        raise
 
     lines: List[str] = []
     last_nonempty: Optional[str] = None
@@ -238,6 +330,36 @@ async def _run_script_core(
                 f"{normalized_profile or '-'}|q={normalized_quality}",
             )
 
+        if stripped.startswith("DEBUG copy="):
+            tokens = {}
+            for segment in stripped.replace("DEBUG", "", 1).strip().split():
+                if "=" in segment:
+                    key, value = segment.split("=", 1)
+                    tokens[key] = value.rstrip(",")
+            try:
+                copy_idx = int(tokens.get("copy", "0"))
+            except ValueError:
+                copy_idx = 0
+            if copy_idx:
+                info = copy_meta.setdefault(copy_idx, {})
+                if tokens.get("seed"):
+                    info["seed"] = tokens["seed"]
+
+        if stripped.startswith("▶️"):
+            target = ""
+            try:
+                header, rhs = stripped.split("→", 1)
+                block = header.split("[", 1)[1].split("]", 1)[0]
+                copy_idx = int(block.split("/", 1)[0])
+                target = rhs.split("|", 1)[0].strip()
+            except Exception:
+                copy_idx = len(copy_meta) + 1
+                if "→" in stripped:
+                    target = stripped.split("→", 1)[1].split("|", 1)[0].strip()
+            if target:
+                info = copy_meta.setdefault(copy_idx, {})
+                info["file"] = target
+
         if stripped and "clip_start=" in stripped:
             token = stripped.split("clip_start=", 1)[1].split()[0].rstrip(",")
             clip_hint = token[:-1] if token.endswith("s") else token
@@ -263,10 +385,13 @@ async def _run_script_core(
                 failure_names.append(failure)
 
     rc = await proc.wait()
+    sem.release()
     logger.info("✅ %s копии успешно", len(success_files))
     if failure_names:
         logger.error("❌ %s копии с ошибкой: %s", len(failure_names), ", ".join(failure_names))
     tail = "".join(lines[-10:])
+    if eco_active:
+        eco_delay = random.uniform(1.0, 3.0)
     if rc != 0:
 # REGION AI: tolerant script exit
         if last_target:
@@ -285,6 +410,10 @@ async def _run_script_core(
         )
         if orchestrator_ticket is not None:
             orchestrator_ticket["metrics"] = None
+        _log_copy_run(copy_meta, success_files, copies, eco_active, eco_delay)
+        if eco_active and eco_delay:
+            logger.info("[EcoMode] Cooling CPU load between runs (delay=%.1fs)", eco_delay)
+            await asyncio.get_running_loop().run_in_executor(None, time.sleep, eco_delay)
         return rc, "".join(lines)
 # END REGION AI
 
@@ -318,6 +447,11 @@ async def _run_script_core(
         elif orchestrator_ticket is not None:
             orchestrator_ticket["metrics"] = None
     # END REGION AI
+
+    _log_copy_run(copy_meta, success_files, copies, eco_active, eco_delay)
+    if eco_active and eco_delay:
+        logger.info("[EcoMode] Cooling CPU load between runs (delay=%.1fs)", eco_delay)
+        await asyncio.get_running_loop().run_in_executor(None, time.sleep, eco_delay)
 
     return rc, "".join(lines)
 

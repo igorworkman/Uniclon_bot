@@ -111,4 +111,5 @@ BOT_API_BASE = os.getenv("BOT_API_BASE", "").strip()
 
 NO_DEVICE_INFO = _env_flag("UNICLON_NO_DEVICE_INFO", False)
 FORCE_ZIP_ARCHIVE = _env_flag("UNICLON_FORCE_ZIP", False)
+ECO_MODE = _env_flag("UNICLON_ECO_MODE", False)
 # END REGION AI

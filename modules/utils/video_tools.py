@@ -159,18 +159,18 @@ class VariantConfig:
     audio_codec: str
     audio_bitrate: str
     audio_rate: int
+    profile_name: str
 # REGION AI: encode quality controls
     crf: int = 20
     tune: str = "film"
 # END REGION AI
-    major_brand: str
-    compatible_brands: str
-    max_duration: Optional[int]
-    profile_name: str
+    major_brand: str = "mp42"
+    compatible_brands: str = "isommp42"
+    max_duration: Optional[int] = None
     micro_filters: List[str] = field(default_factory=list)
     blur_filter: Optional[str] = None
-    software: str = ""
-    encoder: str = ""
+    software: str = "iMovie 3.1.0"
+    encoder: str = "Lavf62.3.82"
     timestamps: Optional[TimestampBundle] = None
     filesystem_epoch: Optional[float] = None
     audio_tempo: float = 1.0

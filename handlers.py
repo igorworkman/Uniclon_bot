@@ -884,6 +884,7 @@ async def _run_and_send(
                     psutil.cpu_percent(),
                     path,
                 )
+                await message.answer(f"✅ Копия {idx}/{copies} готова!")
                 continue
             if item.get("error") == "timeout":
                 await message.answer(
@@ -891,7 +892,7 @@ async def _run_and_send(
                 )
             else:
                 await message.answer(
-                    f"❌ Ошибка при создании копии #{idx}: {item.get('error', 'unknown')}"
+                    f"⚠️ Ошибка при создании копии #{idx}: {item.get('error', 'unknown')}"
                 )
         failed_count = copies - success_count
         rc = 0 if failed_count == 0 else rc

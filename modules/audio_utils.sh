@@ -70,11 +70,11 @@ BEGIN {
     printf "%.6f", (base + 0) / (rate + 0)
   }')
   # END REGION AI
-  if ffmpeg_supports_filter "anequalizer"; then
-    AUDIO_FILTER="anequalizer=f=1831:t=q:w=1:g=-0.408"
+  if ffmpeg_supports_filter "highpass"; then
+    AUDIO_FILTER="highpass=f=300,lowpass=f=3000"
   else
     AUDIO_FILTER=$(printf 'acompressor=threshold=-16dB:ratio=2.4,aresample=%s,atempo=1.0,volume=0.985,highpass=f=100,lowpass=f=8000' "${AUDIO_SR}")
-    local fallback_note="[Audio] Fallback filter applied (anequalizer unavailable, switched to highpass/lowpass)"
+    local fallback_note="[Audio] Fallback filter applied (highpass unavailable, switched to safe chain)"
     log_warn "$fallback_note"
     if [ -n "${logfile:-}" ]; then
       echo "$fallback_note" >>"$logfile"

@@ -18,6 +18,7 @@ from config import ECO_MODE, SCRIPT_PATH, OUTPUT_DIR, NO_DEVICE_INFO, PLATFORM_P
 from report_builder import build_uniqueness_report
 from render_queue import acquire_render_slot
 from orchestrator import add_task as orchestrator_add_task, finish_task as orchestrator_finish_task
+from services.video_processor import run_protective_process_async
 # END REGION AI
 
 
@@ -511,7 +512,7 @@ async def process_copies_sequentially(
     *,
     timeout: float = 300.0,
     retries: int = 1,
-):
+) -> List[Dict[str, object]]:
     results = []
     for idx in range(1, copies + 1):
         attempt = 0
@@ -537,8 +538,11 @@ async def process_copies_sequentially(
                 break
             except Exception as exc:  # noqa: BLE001
                 if attempt >= retries:
+                    logger.exception("Copy #%d failed: %s", idx, exc)
                     results.append({"index": idx, "error": str(exc)})
                     break
                 attempt += 1
                 await asyncio.sleep(2)
+        if idx < copies:
+            await asyncio.sleep(random.uniform(0.5, 1.2))
     return results

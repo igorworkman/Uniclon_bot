@@ -690,7 +690,16 @@ generate_copy() {
       --base-height "$TARGET_H" \
       --audio-sample-rate "$variant_audio_sr" \
       --format shell 2>&1); then
-      eval "$variant_payload"
+      while IFS= read -r variant_line; do
+        if [[ -z "$variant_line" ]]; then
+          continue
+        fi
+        if [[ "$variant_line" == Adjusted:* ]]; then
+          echo "Adjusted: ${variant_line#Adjusted: }"
+          continue
+        fi
+        eval "$variant_line"
+      done <<<"$variant_payload"
       variant_ok=1
       variant_fs_epoch="${RAND_FILESYSTEM_EPOCH:-}"
     else

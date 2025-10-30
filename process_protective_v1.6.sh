@@ -727,8 +727,8 @@ generate_copy() {
         if [[ -z "$variant_line" ]]; then
           continue
         fi
-        if [[ "$variant_line" == Adjusted:* ]]; then
-          echo "Adjusted: ${variant_line#Adjusted: }"
+        if [[ "$variant_line" =~ ^[[:space:]]*Adjusted:[[:space:]]*(.*)$ ]]; then
+          echo "Adjusted: ${BASH_REMATCH[1]}"
           continue
         fi
         eval "$variant_line"

@@ -62,8 +62,8 @@ _BLUR_FILTERS = [
 
 # REGION AI: audio filter helpers
 _ANEQ_FAILURE_MARKERS = ("Option not found", "Invalid argument")
-_ANEQ_RUNTIME_LOG = "[Audio] anequalizer failed validation, switching to equalizer (runtime recovery)"
-_ANEQ_VALIDATED: Optional[bool] = None
+_ANEQ_RUNTIME_LOG = "[Audio] Audio filter fallback engaged (highpass/lowpass)"
+_ANEQ_VALIDATED: Optional[bool] = True
 _ANEQ_RUNTIME_OVERRIDE = False
 _ANEQ_RUNTIME_LOGGED = False
 
@@ -73,7 +73,7 @@ def _audio_eq_safe_chain(freq: float, gain: float, *, runtime: bool = False) -> 
     if runtime and not _ANEQ_RUNTIME_LOGGED:
         logging.warning(_ANEQ_RUNTIME_LOG)
         _ANEQ_RUNTIME_LOGGED = True
-    return f"equalizer=f={freq}:t=q:w=1:g={gain}"
+    return "highpass=f=300,lowpass=f=3000"
 
 
 def build_audio_eq(freq: float = 1831.0, gain: float = -0.4, ffmpeg_log: Optional[str] = None) -> str:
@@ -89,38 +89,6 @@ def build_audio_eq(freq: float = 1831.0, gain: float = -0.4, ffmpeg_log: Optiona
 
     if _ANEQ_RUNTIME_OVERRIDE:
         return _audio_eq_safe_chain(freq, gain)
-
-    if _ANEQ_VALIDATED is None:
-        test_cmd = [
-            "ffmpeg",
-            "-hide_banner",
-            "-f",
-            "lavfi",
-            "-i",
-            f"anequalizer=f={freq}:t=q:w=1:g={gain}",
-            "-t",
-            "0.1",
-            "-f",
-            "null",
-            "-",
-        ]
-        try:
-            probe = subprocess.run(
-                test_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=3,
-                check=False,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            _ANEQ_VALIDATED = False
-        else:
-            stderr = probe.stderr or ""
-            if probe.returncode != 0 or any(marker in stderr for marker in _ANEQ_FAILURE_MARKERS):
-                _ANEQ_VALIDATED = False
-            else:
-                _ANEQ_VALIDATED = True
 
     if not _ANEQ_VALIDATED:
         return _audio_eq_safe_chain(freq, gain)
@@ -146,7 +114,7 @@ def build_audio_eq(freq: float = 1831.0, gain: float = -0.4, ffmpeg_log: Optiona
             )
         bands.append(f"{band_name}={clamped:.3f}")
     supereq = f"superequalizer={':'.join(bands)}"
-    return f"{supereq},anequalizer=f={freq}:t=q:w=1:g={gain}"
+    return f"{supereq},highpass=f=300,lowpass=f=3000"
 
 
 # END REGION AI

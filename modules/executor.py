@@ -119,7 +119,7 @@ def fix_final_crop_chain(filter_chain: str) -> str:
 
 def sanitize_audio_filter(filter_chain: str) -> str:
     replacements = {
-        "anequalizer": "aecho=0.8:0.9:1000:0.3",
+        "anequalizer": "highpass=f=300,lowpass=f=3000",
         "apulsator": "aecho=0.8:0.9:1000:0.3",
         "afir": "atempo=1.0",
         "afreqshift": "atempo=1.0",

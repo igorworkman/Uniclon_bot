@@ -1,13 +1,14 @@
 import asyncio
 import logging
 import os
+import random
 import re
 import subprocess
 import time
 from pathlib import Path
 from typing import List, Optional
 
-from config import BASE_DIR
+from config import BASE_DIR, ECO_SLEEP, MAX_CONCURRENT_JOBS
 from modules.executor import fix_final_crop_chain
 from modules.utils.video_tools import build_audio_eq
 
@@ -19,7 +20,69 @@ OUTPUT_DIR = PROJECT_DIR / "output"
 _SCRIPT_PATH = (PROJECT_DIR / "process_protective_v1.6.sh").resolve()
 # END REGION AI
 
-_SEMAPHORE = asyncio.Semaphore(2)
+_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
+
+
+def _scrub_metadata(target: Path) -> None:
+    temp_path = target.with_suffix(target.suffix + ".tmp")
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-y",
+        "-i",
+        str(target),
+        "-map",
+        "0",
+        "-c",
+        "copy",
+        "-map_metadata",
+        "-1",
+        "-metadata",
+        "location=",
+        "-metadata",
+        "handler_name=",
+        "-metadata",
+        "com.apple.quicktime.location.ISO6709=",
+        "-movflags",
+        "use_metadata_tags",
+        str(temp_path),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        logger.warning("FFmpeg not found for metadata scrub: %s", target)
+        return
+
+    if proc.returncode != 0:
+        logger.warning(
+            "Metadata scrub failed for %s: %s",
+            target,
+            (proc.stderr or proc.stdout or "").strip(),
+        )
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                logger.debug("Failed to remove temporary metadata file %s", temp_path, exc_info=True)
+        return
+
+    if not temp_path.exists():
+        logger.warning("Metadata scrub produced no output for %s", target)
+        return
+
+    try:
+        temp_path.replace(target)
+    except OSError:
+        logger.exception("Failed to replace sanitized file for %s", target)
+        try:
+            temp_path.unlink()
+        except OSError:
+            logger.debug("Cleanup of temporary metadata file failed: %s", temp_path, exc_info=True)
 
 
 # REGION AI: synchronous protective runner
@@ -170,6 +233,11 @@ def run_protective_process(
             str(path)
             for path in sorted(after_outputs - initial_outputs)
         ]
+        for item in new_outputs:
+            try:
+                _scrub_metadata(Path(item))
+            except Exception:  # noqa: BLE001
+                logger.debug("Metadata scrub skipped for %s", item, exc_info=True)
         lines = combined.splitlines()
         tail20 = "\n".join(lines[-20:]) if lines else combined
         success_count = len(re.findall(r"Generated copy #\\d+", combined))
@@ -259,6 +327,7 @@ async def run_protective_process_async(
     quality: str = "",
 ) -> dict:
     async with _SEMAPHORE:
+        await asyncio.sleep(random.uniform(*ECO_SLEEP))
         return await asyncio.to_thread(
             run_protective_process,
             filename,

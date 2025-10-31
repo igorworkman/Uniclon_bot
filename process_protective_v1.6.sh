@@ -1061,6 +1061,10 @@ EOF
   CSOFT=""
   MINOR_VERSION_TAG=$(rand_int 0 512)
   COMPAT_BRANDS_TAG="mp42isom"
+  case "${COMPAT_BRANDS_TAG}" in
+    *"${MAJOR_BRAND_TAG}"*) ;;
+    *) COMPAT_BRANDS_TAG="${MAJOR_BRAND_TAG}${COMPAT_BRANDS_TAG}" ;;
+  esac
 
   if [ -n "${RAND_CREATION_TIME:-}" ]; then
     CREATION_TIME="${RAND_CREATION_TIME}"

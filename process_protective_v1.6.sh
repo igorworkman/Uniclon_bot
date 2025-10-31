@@ -1380,6 +1380,12 @@ EOF
   # REGION AI: safe ffmpeg execution via bash wrapper
   local FFMPEG_CMD="$ffmpeg_cmd_preview"
   local ffmpeg_exit_code=0
+
+  if ! bash -c "$FFMPEG_CMD"; then
+    ffmpeg_exit_code=${PIPESTATUS[0]:-$?}
+    echo "[ERROR] FFmpeg crashed during copy #$copy_index (exit $ffmpeg_exit_code)"
+    ffmpeg_error=true
+
   bash -c "$FFMPEG_CMD"
   ffmpeg_exit_code=$?
   if [ "$ffmpeg_exit_code" -ne 0 ]; then
@@ -1394,6 +1400,7 @@ EOF
     fi
     echo "[WARN] Retrying copy ${copy_index} (${render_retry}/$max_render_retry)…"
     attempt=$((attempt + 1))
+
     continue
   fi
   # END REGION AI

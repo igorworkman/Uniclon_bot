@@ -97,24 +97,29 @@ async def _reset_state(state: FSMContext) -> None:
         await state.clear()
 
 
+
 @router.message(Command("start"), StateFilter("*"))
+
+@router.message(Command("start"))
+
 async def start_command(message: types.Message, state: FSMContext) -> None:
     await _reset_state(state)
     _cleanup_restart_data()
     text = (
         "👋 Привет! Я Uniclon — бот для создания уникализированных копий видео.\n\n"
-        "📤 Отправь мне видеофайл и напиши число копий (например: 10), чтобы я сделал уникальные версии.\n\n"
+        "📤 Отправь мне видео и укажи количество копий (например: 10).\n\n"
         "💡 Используй кнопку '🔄 Restart', если хочешь начать заново."
     )
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="🔄 Restart", callback_data="restart")]]
     )
     await message.answer(text, reply_markup=keyboard)
-    await state.set_state(VideoUpload.waiting_for_video)
+    await state.set_state("waiting_for_video")
 
 
-@router.message(F.text == "🔄 RESTART")
+@router.message(F.text == "🔄 Restart")
 async def restart_bot(message: Message, state: FSMContext) -> None:
+    await _reset_state(state)
     await start_command(message, state)
     user_id = message.from_user.id if message.from_user else None
     _log_restart_event(user_id)

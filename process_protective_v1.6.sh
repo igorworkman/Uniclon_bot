@@ -7,6 +7,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$SCRIPT_DIR"
 IFS=$'\n\t'
 
+TARGET_FPS_INPUT="${TARGET_FPS:-}"
+TARGET_FPS=${TARGET_FPS:-30}
+
 # process_protective_v1.6.sh (macOS совместимая версия)
 # Делает N уникальных копий из одного видео, сохраняет в OUTPUT_DIR/
 chmod +x "$BASE_DIR"/modules/*.sh 2>/dev/null || true
@@ -35,6 +38,7 @@ QT_META=1
 STRICT_CLEAN=0
 QUALITY="std"
 AUTO_CLEAN=0
+TARGET_FPS_ENV="${TARGET_FPS_INPUT:-}"
 ENABLE_MIRROR=${ENABLE_MIRROR:-0}
 ENABLE_INTRO=${ENABLE_INTRO:-0}
 ENABLE_LUT=${ENABLE_LUT:-0}
@@ -713,6 +717,7 @@ generate_copy() {
     local variant_audio_sr="${AUDIO_SR_OPTIONS[0]:-44100}"
     variant_input_basename="$(basename "$SRC")"
     local variant_fs_epoch=""
+    local ffmpeg_error=false
     if variant_payload=$(python3 "$BASE_DIR/modules/utils/video_tools.py" generate \
       --input "$variant_input_basename" \
       --copy-index "$copy_index" \
@@ -761,6 +766,15 @@ generate_copy() {
     elif [ -n "${RAND_FPS:-}" ]; then
       FPS="${RAND_FPS}"
     fi
+
+    # FPS Sync Control
+    TARGET_FPS=${TARGET_FPS:-30}
+    if [ -n "${TARGET_FPS_ENV:-}" ]; then
+      TARGET_FPS="$TARGET_FPS_ENV"
+    elif [ -n "${FPS:-}" ]; then
+      TARGET_FPS="$FPS"
+    fi
+    FPS="$TARGET_FPS"
 
     local base_br
     base_br=$(rand_int "$BR_MIN" "$BR_MAX")
@@ -1112,17 +1126,19 @@ EOF
   brightness_val=$(awk -v v="${RAND_BRIGHTNESS:-0.005}" 'BEGIN{printf "%.4f", v+0}')
   contrast_val=$(awk -v v="${RAND_CONTRAST:-1.010}" 'BEGIN{printf "%.4f", v+0}')
   saturation_val=$(awk -v v="${RAND_SATURATION:-1.010}" 'BEGIN{printf "%.4f", v+0}')
-  VF="setpts=${STRETCH_FACTOR}*PTS,scale=${SCALE_W}:${SCALE_H}:flags=lanczos,setsar=1"  # fix: корректный синтаксис setpts
-  VF="${VF},eq=brightness=${brightness_val}:contrast=${contrast_val}:saturation=${saturation_val}"
-  if [ "$NOISE" -eq 1 ] && [ "${NOISE_STRENGTH:-0}" -gt 0 ]; then
-    VF="${VF},noise=alls=${NOISE_STRENGTH}:allf=t"
-  elif [ "$NOISE" -eq 1 ]; then
-    VF="${VF},noise=alls=1:allf=t"
+  local brightness="$brightness_val"
+  local contrast="$contrast_val"
+  local saturation="$saturation_val"
+  local scale_w="$SCALE_W"
+  local scale_h="$SCALE_H"
+  if ! [[ "$scale_w" =~ ^-?[0-9]+$ ]]; then
+    scale_w="$TARGET_W"
   fi
-  local micro_filter
-  for micro_filter in "${VARIANT_MICRO_FILTERS[@]}"; do
-    [ -n "$micro_filter" ] && VF="${VF},${micro_filter}"
-  done
+  if ! [[ "$scale_h" =~ ^-?[0-9]+$ ]]; then
+    scale_h="$TARGET_H"
+  fi
+  local crop_width_candidate="$scale_w"
+  local crop_height_candidate="$scale_h"
   if [ "$CROP_TOTAL_W" -gt 0 ] || [ "$CROP_TOTAL_H" -gt 0 ]; then
     CROP_WIDTH=$((TARGET_W - CROP_TOTAL_W))
     CROP_HEIGHT=$((TARGET_H - CROP_TOTAL_H))
@@ -1130,9 +1146,41 @@ EOF
     if [ "$CROP_HEIGHT" -lt 16 ]; then CROP_HEIGHT=$((TARGET_H - CROP_H)); fi
     if [ "$CROP_WIDTH" -lt 16 ]; then CROP_WIDTH=$TARGET_W; fi
     if [ "$CROP_HEIGHT" -lt 16 ]; then CROP_HEIGHT=$TARGET_H; fi
-    VF="${VF},crop=${CROP_WIDTH}:${CROP_HEIGHT}:${CROP_X}:${CROP_Y}"
+    crop_width_candidate="$CROP_WIDTH"
+    crop_height_candidate="$CROP_HEIGHT"
+  else
+    CROP_WIDTH="$scale_w"
+    CROP_HEIGHT="$scale_h"
   fi
+  local crop_w="$crop_width_candidate"
+  local crop_h="$crop_height_candidate"
+  local crop_x="$CROP_X"
+  local crop_y="$CROP_Y"
+  # --- CropSafe Validation ---
+  if [ "$crop_w" -gt "$scale_w" ]; then
+    echo "[WARN] crop_w ($crop_w) > scale_w ($scale_w), уменьшено"
+    crop_w="$scale_w"
+  fi
+  if [ "$crop_h" -gt "$scale_h" ]; then
+    echo "[WARN] crop_h ($crop_h) > scale_h ($scale_h), уменьшено"
+    crop_h="$scale_h"
+  fi
+  [ "$crop_w" -le 0 ] && crop_w=2
+  [ "$crop_h" -le 0 ] && crop_h=2
+  CROP_WIDTH="$crop_w"
+  CROP_HEIGHT="$crop_h"
+
+  local crop_filter="crop='min(iw,${crop_w}):min(ih,${crop_h}):${crop_x}:${crop_y}'"
+  local VF="setpts=${STRETCH_FACTOR}*PTS,scale=${scale_w}:${scale_h}:flags=lanczos,setsar=1,${crop_filter}"
+
+  local crop_filter="crop=min(iw,${crop_w}):min(ih,${crop_h}):${crop_x}:${crop_y}"
+  local VF="fps=${TARGET_FPS},setpts=${STRETCH_FACTOR}*PTS,scale=w=-2:h=${scale_h}:flags=lanczos,setsar=1,${crop_filter}"
+
+  local micro_filter
   local extras_chain=""
+  for micro_filter in "${VARIANT_MICRO_FILTERS[@]}"; do
+    [ -n "$micro_filter" ] && extras_chain=$(compose_vf_chain "$extras_chain" "$micro_filter")
+  done
   if [ "$MIRROR_ACTIVE" -eq 1 ]; then
     extras_chain=$(compose_vf_chain "$extras_chain" "$MIRROR_FILTER")
   fi
@@ -1140,7 +1188,9 @@ EOF
     extras_chain=$(compose_vf_chain "$extras_chain" "$LUT_FILTER")
   fi
   extras_chain=$(compose_vf_chain "$extras_chain" "$CUR_VF_EXTRA")
-  VF=$(compose_vf_chain "$VF" "$extras_chain")
+  if [ -n "$extras_chain" ]; then
+    VF=$(compose_vf_chain "$VF" "$extras_chain")
+  fi
   if [ -n "${RAND_LUT_DESCRIPTOR:-}" ]; then
     if [ -n "$LUT_DESC" ]; then
       LUT_DESC="${LUT_DESC};${RAND_LUT_DESCRIPTOR}"
@@ -1159,9 +1209,19 @@ EOF
     pad_y_expr="${pad_y_expr}+${pad_offset_y}"
   fi
   VF="${VF},pad=${TARGET_W}:${TARGET_H}:${pad_x_expr}:${pad_y_expr}:black"
+  VF="${VF},eq=brightness=${brightness}:contrast=${contrast}:saturation=${saturation}"
+  VF="${VF},unsharp=lx=5:ly=5:la=0.25"
+  if [ "$NOISE" -eq 1 ]; then
+    local noise_strength="${NOISE_STRENGTH:-1}"
+    if [ "$noise_strength" -le 0 ]; then
+      noise_strength=1
+    fi
+    VF="${VF},noise=alls=${noise_strength}:allf=t"
+  fi
   PAD_X="$pad_offset_x"
   PAD_Y="$pad_offset_y"
   VF="${VF},drawtext=text='${UID_TAG}':fontcolor=white@0.08:fontsize=16:x=10:y=H-30"
+  VF="${VF},format=yuv420p"
 
   if [ -z "${CLIP_DURATION:-}" ]; then
     CLIP_DURATION="1.0"
@@ -1219,6 +1279,34 @@ EOF
   fi
   combined_audio_filters=$(sanitize_audio_filters "$combined_audio_filters")
   combined_audio_filters=$(ensure_superequalizer_bounds "$combined_audio_filters")
+  if [[ "$combined_audio_filters" != *"aresample=async=1:first_pts=0"* ]]; then
+    if [ -n "$combined_audio_filters" ]; then
+      combined_audio_filters="${combined_audio_filters},aresample=async=1:first_pts=0"
+    else
+      combined_audio_filters="aresample=async=1:first_pts=0"
+    fi
+  fi
+  if [[ "$combined_audio_filters" != *"atempo=1.0"* ]]; then
+    if [ -n "$combined_audio_filters" ]; then
+      combined_audio_filters="${combined_audio_filters},atempo=1.0"
+    else
+      combined_audio_filters="atempo=1.0"
+    fi
+  fi
+  combined_audio_filters=$(sanitize_audio_filters "$combined_audio_filters")
+  combined_audio_filters=$(ensure_superequalizer_bounds "$combined_audio_filters")
+
+  # 🎛️ Рандомизация encoder/software метаданных
+  local -a SOFTWARES=(
+    "CapCut 12.3.3"
+    "VN 2.14.2"
+    "KineMaster 7.1.1"
+    "InShot 3.2.0"
+    "AlightMotion 5.0.9"
+  )
+  local RANDOM_SOFTWARE="${SOFTWARES[$RANDOM % ${#SOFTWARES[@]}]}"
+  SOFTWARE_TAG="$RANDOM_SOFTWARE"
+
   FFMPEG_ARGS=(
     -y -hide_banner -loglevel warning -ignore_unknown
     -analyzeduration 200M -probesize 200M
@@ -1240,7 +1328,7 @@ EOF
     FFMPEG_ARGS+=(-map "${audio_input_index}:a:0" -shortest)
   fi
   FFMPEG_ARGS+=(-t "$CLIP_DURATION" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$CODEC_LEVEL" -crf "$CRF"
-    -r "$FPS" -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k"
+    -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k"
     -vf "$vf_payload"
     -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$combined_audio_filters"
     -movflags +faststart
@@ -1255,7 +1343,7 @@ EOF
     -metadata minor_version="$MINOR_VERSION_TAG"
     -metadata compatible_brands="$COMPAT_BRANDS_TAG"
     -metadata encoder="$ENCODER_TAG"
-    -metadata software="$SOFTWARE_TAG"
+    -metadata software="$RANDOM_SOFTWARE"
     -metadata creation_time="$CREATION_TIME"
     -metadata title="$TITLE"
     -metadata description="$DESCRIPTION"
@@ -1274,13 +1362,17 @@ EOF
   ffmpeg_cmd_preview=${ffmpeg_cmd_preview% }
   echo "ℹ️ clip_start=$CLIP_START duration=$CLIP_DURATION"
   echo "ℹ️ ffmpeg command: $ffmpeg_cmd_preview"
+  echo "[INFO] Safe crop: ${crop_w}x${crop_h}, scale: ${scale_w}x${scale_h}, pad: ${TARGET_W}x${TARGET_H}"
 
   # REGION AI: safe ffmpeg execution via bash wrapper
   local FFMPEG_CMD="$ffmpeg_cmd_preview"
+  local ffmpeg_exit_code=0
   bash -c "$FFMPEG_CMD"
-  if [[ $? -ne 0 ]]; then
-    log_error "FFmpeg command failed: $FFMPEG_CMD"
-    exit 2
+  ffmpeg_exit_code=$?
+  if [ "$ffmpeg_exit_code" -ne 0 ]; then
+    echo "[ERROR] FFmpeg crashed during copy #$copy_index"
+    ffmpeg_error=true
+    continue
   fi
   # END REGION AI
 
@@ -1302,10 +1394,10 @@ EOF
     fi
 
     intro_args+=(
-      -vf "scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1,format=yuv420p"
-      -r "$FPS" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$VIDEO_LEVEL" -crf "$CRF"
+      -vf "fps=${TARGET_FPS},scale=w=-2:h=${TARGET_H}:flags=lanczos,setsar=1,format=yuv420p"
+      -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$VIDEO_LEVEL" -crf "$CRF"
       -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2
-      -af "aresample=${AUDIO_SR},apad,atrim=0:${INTRO_DURATION}" -movflags +faststart "$INTRO_OUTPUT_PATH"
+      -af "aresample=async=1:first_pts=0,atempo=1.0,aresample=${AUDIO_SR},apad,atrim=0:${INTRO_DURATION}" -movflags +faststart "$INTRO_OUTPUT_PATH"
     )
 
     ffmpeg_exec "${intro_args[@]}"
@@ -1321,6 +1413,21 @@ EOF
     OUT="$FINAL_OUT"
   else
     OUT="$ENCODE_TARGET"
+  fi
+
+  # REGION AI: normalize timestamps after render
+  if [ -f "$OUT" ]; then
+    local output_path="$OUT"
+    local sync_path="${output_path%.mp4}_sync.mp4"
+    if [ "$sync_path" = "$output_path" ]; then
+      sync_path="${output_path}_sync.mp4"
+    fi
+    if ffmpeg_exec -y -hide_banner -loglevel warning -i "$output_path" -map 0 -c copy -fflags +genpts "$sync_path"; then
+      mv -f "$sync_path" "$output_path"
+    else
+      echo "⚠️ Не удалось нормализовать таймштампы для $OUT"
+      rm -f "$sync_path" 2>/dev/null || true
+    fi
   fi
 
   # REGION AI: exif randomization bindings
@@ -1554,6 +1661,22 @@ EOF
       fallback_af_chain=$(compose_af_chain "$base_af" "$fallback_af_extra")
       fallback_af_chain=$(ensure_superequalizer_bounds "$fallback_af_chain")
       fallback_af_chain=$(sanitize_audio_filters "$fallback_af_chain")
+      if [[ "$fallback_af_chain" != *"aresample=async=1:first_pts=0"* ]]; then
+        if [ -n "$fallback_af_chain" ]; then
+          fallback_af_chain="${fallback_af_chain},aresample=async=1:first_pts=0"
+        else
+          fallback_af_chain="aresample=async=1:first_pts=0"
+        fi
+      fi
+      if [[ "$fallback_af_chain" != *"atempo=1.0"* ]]; then
+        if [ -n "$fallback_af_chain" ]; then
+          fallback_af_chain="${fallback_af_chain},atempo=1.0"
+        else
+          fallback_af_chain="atempo=1.0"
+        fi
+      fi
+      fallback_af_chain=$(sanitize_audio_filters "$fallback_af_chain")
+      fallback_af_chain=$(ensure_superequalizer_bounds "$fallback_af_chain")
       ffmpeg_exec -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC" \
         -t "$CLIP_DURATION" -c:v libx264 -preset medium -crf 24 \
         -vf "$fallback_vf_chain" \

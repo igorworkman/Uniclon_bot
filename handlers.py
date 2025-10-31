@@ -48,6 +48,7 @@ from executor import (
     probe_video_duration,
     process_copies_sequentially,
     enforce_quality_gate,
+    ERROR_MAP,
 )
 # END REGION AI
 from locales import get_text
@@ -58,6 +59,24 @@ if TYPE_CHECKING:
 
 router = Router(name="main_router")
 logger = logging.getLogger(__name__)
+
+
+async def collect_preview_files(base_dir: Path, video_stems: List[str]) -> List[Path]:
+    preview_files: List[Path] = []
+    potential_dirs = [
+        base_dir / "previews",
+        CHECKS_DIR / "previews",
+        OUTPUT_DIR / "previews",
+    ]
+    for stem in video_stems:
+        for directory in potential_dirs:
+            if not directory.exists():
+                continue
+            for file in directory.glob(f"{stem}*.png"):
+                if file.exists():
+                    preview_files.append(file)
+    preview_files = sorted(set(preview_files), key=lambda f: f.stat().st_mtime, reverse=True)
+    return preview_files[: len(video_stems)]
 
 
 def _cleanup_restart_data() -> None:
@@ -896,6 +915,17 @@ async def _run_and_send(
         await message.answer("Произошла ошибка при обработке. Попробуйте ещё раз.")
         raise
 
+    tail_lines: List[str] = []
+    tail_text = ""
+    last_log_line = ""
+    if logs_text.strip():
+        tail_lines = logs_text.strip().splitlines()[-10:]
+        if tail_lines:
+            last_log_line = tail_lines[-1]
+        while tail_lines and sum(len(line) + 1 for line in tail_lines) > LOG_TAIL_CHARS:
+            tail_lines.pop(0)
+        tail_text = "\n".join(tail_lines)
+
     temporary_error = rc != 0 and (
         "RETRY" in logs_text or "UniqScore=0.0" in logs_text
     )
@@ -954,10 +984,9 @@ async def _run_and_send(
     if "⚠️ Обнаружены слишком похожие копии" in logs_text:
         await message.answer("⚠️ Обнаружены слишком похожие копии, выполняется перегенерация…")
 
-    if logs_text.strip():
-        tail = logs_text[-LOG_TAIL_CHARS:]
+    if tail_text.strip():
         await message.answer(
-            get_text(lang, "logs_tail", logs=hcode(tail))
+            get_text(lang, "logs_tail", logs=hcode(tail_text))
         )
 
     if rc != 0:
@@ -977,13 +1006,31 @@ async def _run_and_send(
                 copies,
                 profile,
             )
+            error_reason = ERROR_MAP.get(rc, "Unknown error")
+            try:
+                from uniclon_bot import log_render_error
+            except ImportError:
+                log_render_error = None
+            if callable(log_render_error):
+                try:
+                    log_render_error(input_path, rc)
+                except Exception:
+                    logger.debug("Failed to log render error centrally", exc_info=True)
+            user_error_text = f"❌ Ошибка обработки ({rc}): {error_reason}"
+            await message.answer(user_error_text)
+            if last_log_line:
+                await message.answer(
+                    f"🪵 Последняя строка лога:\n{hcode(last_log_line)}",
+                    parse_mode="HTML",
+                )
             error_text = get_text(
                 lang,
                 "script_failed",
                 rc=rc,
                 output_dir=OUTPUT_DIR.name,
             )
-            await message.answer("Произошла ошибка при обработке. Попробуйте ещё раз.")
+            if error_reason:
+                error_text = f"{error_text}\nПричина: {error_reason}"
             await ack.edit_text(error_text)
             await message.answer(error_text)
             return
@@ -1032,18 +1079,7 @@ async def _run_and_send(
 
     preview_files: List[Path] = []
     if save_preview:
-        preview_roots: List[Path] = [preview_dir, CHECKS_DIR / "previews"]
-        seen_previews: Set[Path] = set()
-        for file_path in new_files:
-            stem = file_path.stem
-            for root in preview_roots:
-                if not root.exists():
-                    continue
-                candidate = root / f"{stem}.png"
-                for extra in (candidate, *root.glob(f"{stem}_final_v*.png")):
-                    if extra.exists() and extra not in seen_previews:
-                        seen_previews.add(extra)
-                        preview_files.append(extra)
+        preview_files = await collect_preview_files(CHECKS_DIR, [p.stem for p in new_files])
     else:
         removed_previews = 0
         user_id = message.from_user.id if message.from_user else 0
@@ -1177,6 +1213,11 @@ async def _run_and_send(
     await ack.edit_text(
         get_text(lang, "files_sent_summary", sent=sent, total=len(new_files))
     )
+
+    try:
+        asyncio.create_task(asyncio.to_thread(auto_cleanup_temp_dirs))
+    except Exception:
+        logger.debug("Failed to schedule temp cleanup", exc_info=True)
 
     audit_summary = None
     try:

@@ -15,7 +15,14 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 # REGION AI: imports
 from adaptive_tuner import get_tuned_params, record_render_result
-from config import ECO_MODE, SCRIPT_PATH, OUTPUT_DIR, NO_DEVICE_INFO, PLATFORM_PRESETS
+from config import (
+    ECO_MODE,
+    SCRIPT_PATH,
+    OUTPUT_DIR,
+    NO_DEVICE_INFO,
+    PLATFORM_PRESETS,
+    CHECKS_DIR,
+)
 from report_builder import build_uniqueness_report
 from render_queue import acquire_render_slot
 from orchestrator import add_task as orchestrator_add_task, finish_task as orchestrator_finish_task
@@ -25,6 +32,14 @@ from qc_analyzer import CopyQCResult, QC_MIN_REQUIRED_COPIES, load_qc_report
 
 
 logger = logging.getLogger(__name__)
+
+
+ERROR_MAP = {
+    1: "FFmpeg generic failure",
+    2: "Shell syntax error",
+    8: "Invalid FFmpeg filter or video chain",
+    234: "Crop or scaling validation failed",
+}
 
 
 _SAVED_LINE_RE = re.compile(
@@ -162,7 +177,16 @@ async def run_script_with_logs(
                 logger.debug("Orchestrator finalize on error failed", exc_info=True)
             raise
         await orchestrator_finish_task(ticket, ticket.get("metrics"))
-        return result
+        rc, logs_text = result
+        if rc != 0:
+            reason = ERROR_MAP.get(rc, "Unknown")
+            logger.error(
+                "[ERROR %s] %s — during: %s",
+                rc,
+                reason,
+                input_file.name,
+            )
+        return rc, logs_text
     finally:
         if release:
             release()
@@ -542,7 +566,15 @@ async def process_copies_sequentially(
                 outputs = [Path(p) for p in payload.get("outputs", []) if p]
                 if not outputs:
                     raise RuntimeError("no output produced")
-                results.append({"index": idx, "path": outputs[0]})
+                output_path = outputs[0]
+                results.append({"index": idx, "path": output_path})
+                try:
+                    logger.info("[Preview] Marking %s for preview export", output_path.name)
+                    (Path(CHECKS_DIR) / "preview_flags").mkdir(parents=True, exist_ok=True)
+                    flag_file = CHECKS_DIR / "preview_flags" / f"{output_path.stem}.flag"
+                    flag_file.touch(exist_ok=True)
+                except Exception:
+                    logger.exception("Failed to mark %s for preview export", output_path.name)
                 break
             except asyncio.TimeoutError:
                 results.append({"index": idx, "error": "timeout"})

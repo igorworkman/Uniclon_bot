@@ -38,6 +38,37 @@ CHECKS_DIR.mkdir(parents=True, exist_ok=True)
 logger = logging.getLogger(__name__)
 
 
+
+async def periodic_preview_scan(interval: int = 120):
+    from utils import BASE_DIR as _base_dir, CHECKS_DIR as _utils_checks_dir  # noqa: F401
+
+    while True:
+        flags = (CHECKS_DIR / "preview_flags").glob("*.flag")
+        for flag in flags:
+            stem = flag.stem
+            previews = list((CHECKS_DIR / "previews").glob(f"{stem}*.png"))
+            if previews:
+                logger.info("[Preview] Confirmed for %s (%d found)", stem, len(previews))
+                flag.unlink(missing_ok=True)
+        await asyncio.sleep(interval)
+
+def log_render_error(input_path: Path, code: int) -> None:
+    """Log rendering errors with a shared format for downstream diagnostics."""
+
+    try:
+        from executor import ERROR_MAP
+    except ImportError:
+        ERROR_MAP = {}
+    reason = ERROR_MAP.get(code, "Unknown")
+    logger.error(
+        "[Uniclon Error] File: %s | Code: %s | Reason: %s",
+        input_path.name,
+        code,
+        reason,
+    )
+
+
+
 @dataclass
 class AuditSummary:
     copies_created: int
@@ -437,12 +468,21 @@ async def _perform_self_audit_impl(
 
     if invalid_metrics_detected and trust_score > 5.0:
         adjusted_score = max(3.0, trust_score - 2.0)
+
         logger.info(
             "[QC] TrustScore adjusted: %.1f → %.1f (invalid metrics detected)",
             trust_score,
             adjusted_score,
         )
         trust_score = adjusted_score
+
+        if adjusted_score < trust_score:
+            logger.info(
+                "[AutoAdjust] TrustScore lowered due to invalid metrics: %.1f",
+                adjusted_score,
+            )
+            trust_score = adjusted_score
+
 
     trust_label, trust_emoji = _derive_trust_label(trust_score, profile_label)
 
@@ -673,6 +713,7 @@ def make_dispatcher() -> Dispatcher:
     dp.include_router(router)
     dp.message.register(handle_clean_command, Command("clean"))
     dp.message.register(handle_video)
+    dp.startup.register(lambda _: asyncio.create_task(periodic_preview_scan()))
     logger.info("✅ Dispatcher initialized (start/restart ready)")
     make_dispatcher._configured = True  # type: ignore[attr-defined]
     return dp

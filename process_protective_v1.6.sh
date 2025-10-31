@@ -1431,9 +1431,10 @@ PY
   vf_payload=$(ensure_vf_format "$VF")
   local VF_CHAIN="$vf_payload"
   if ! ffmpeg -hide_banner -loglevel error -f lavfi -i "color=c=black:s=16x16:d=0.1" -vf "$VF_CHAIN" -f null - 2>/dev/null; then
-    echo "[FATAL] Invalid VF chain detected — attempting safe fallback."
-    cleanup_output_dir_on_failure
-    cleanup_temp_artifacts
+    # --- Safe cleanup block (POSIX-compatible, no function calls) ---
+    echo "[WARN] VF chain invalid — performing safe cleanup"
+    find "$OUTPUT_DIR" -maxdepth 1 -type f -name "*.tmp" -delete 2>/dev/null
+    find "$OUTPUT_DIR" -maxdepth 1 -type f -name "*.lock" -delete 2>/dev/null
     echo "[FATAL] VF chain validation failed. Exiting with code 2."
     exit 2
   fi

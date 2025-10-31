@@ -12,12 +12,7 @@ import psutil
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
-from aiogram.types import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardMarkup,
-)
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.markdown import hcode
@@ -58,26 +53,20 @@ router = Router(name="main_router")
 logger = logging.getLogger(__name__)
 
 
+_RESTART_INLINE_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[[InlineKeyboardButton(text="🔄 Restart", callback_data="restart")]]
+)
+
+
 async def _send_welcome_message(message: Message) -> None:
     await message.answer(
         "👋 Привет, я **Uniclon v1.8** — бот для уникализации видео.\n\n"
         "🎥 Отправь MP4-файл и в подписи укажи количество копий (1–5).\n"
         "Каждая копия будет приходить по одной, как только готова.\n\n"
         "🔄 Для сброса состояния нажми **RESTART**.",
-        reply_markup=ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="🔄 RESTART")]],
-            resize_keyboard=True,
-        ),
+        reply_markup=_RESTART_INLINE_KEYBOARD,
         parse_mode="Markdown",
     )
-
-
-@command_router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    _cleanup_restart_data()
-    await _send_welcome_message(message)
-    await state.set_state(VideoUpload.waiting_for_video)
 
 
 def _cleanup_restart_data() -> None:
@@ -97,12 +86,54 @@ def _cleanup_restart_data() -> None:
             logger.exception("Failed to remove state file %s", state_file)
 
 
-@command_router.message(F.text == "🔄 RESTART")
-async def restart_bot(message: Message, state: FSMContext) -> None:
+def _log_restart_event(user_id: Optional[int]) -> None:
+    try:
+        logs_dir = OUTPUT_DIR / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        restart_log = logs_dir / "restart.log"
+        with restart_log.open("a", encoding="utf-8") as fh:
+            fh.write(
+                f"[INFO] User {user_id if user_id is not None else 'unknown'} restarted bot at {timestamp}\n"
+            )
+    except Exception:
+        logger.exception("Failed to log restart event for user %s", user_id)
+
+
+async def _initialize_start_flow(message: Message, state: FSMContext) -> None:
     await state.clear()
     _cleanup_restart_data()
     await _send_welcome_message(message)
     await state.set_state(VideoUpload.waiting_for_video)
+
+
+@command_router.message(CommandStart())
+async def start_command(message: Message, state: FSMContext) -> None:
+    await _initialize_start_flow(message, state)
+
+
+@command_router.message(F.text == "🔄 RESTART")
+async def restart_bot(message: Message, state: FSMContext) -> None:
+    await _initialize_start_flow(message, state)
+    user_id = message.from_user.id if message.from_user else None
+    _log_restart_event(user_id)
+
+
+@router.callback_query(lambda c: c.data == "restart")
+async def restart_callback(call: CallbackQuery, state: FSMContext):
+    if hasattr(state, "finish"):
+        await state.finish()
+    else:
+        await state.clear()
+    message = call.message
+    if message is None:
+        logger.warning("Restart callback received without an associated message")
+        await call.answer("Не удалось перезапустить бот. Попробуйте ещё раз через /start.", show_alert=True)
+        return
+    await start_command(message, state)
+    user_id = call.from_user.id if call.from_user else None
+    _log_restart_event(user_id)
+    await call.answer("Бот успешно перезапущен 🔄")
 
 
 async def finalize_video(message: Message, output_path: Path) -> None:

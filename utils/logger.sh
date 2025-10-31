@@ -31,3 +31,8 @@ log() {
       ;;
   esac
 }
+
+log_restart() {
+  mkdir -p output/logs
+  echo "[INFO] User $(id) restarted bot at $(date)" >> output/logs/restart.log
+}

@@ -1717,7 +1717,8 @@ EOF
     break
   done
   if [ "$copy_failed" = true ]; then
-    return 1
+    echo "[WARN] Copy $copy_index marked as failed — continuing with remaining copies."
+    return 0
   fi
   fallback_soft_register_result "$copy_index" "$uniqueness_verdict"
   local uniqueness_attempts=$((fallback_attempts + 1))

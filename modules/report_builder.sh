@@ -148,6 +148,15 @@ build_report() {
   report_builder_finalize "$@"
 }
 
+report_builder__log_pipeline_failure() {
+  local exit_code="$?"
+  if [ "$exit_code" -ne 0 ]; then
+    echo "[FATAL] FFmpeg pipeline terminated with code $exit_code"
+  fi
+}
+
+trap 'report_builder__log_pipeline_failure' EXIT
+
 report_builder_template_statistics() {
   local manifest_path="$1"
   [ -f "$manifest_path" ] || return

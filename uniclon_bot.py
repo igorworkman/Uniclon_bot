@@ -38,6 +38,22 @@ CHECKS_DIR.mkdir(parents=True, exist_ok=True)
 logger = logging.getLogger(__name__)
 
 
+def log_render_error(input_path: Path, code: int) -> None:
+    """Log rendering errors with a shared format for downstream diagnostics."""
+
+    try:
+        from executor import ERROR_MAP
+    except ImportError:
+        ERROR_MAP = {}
+    reason = ERROR_MAP.get(code, "Unknown")
+    logger.error(
+        "[Uniclon Error] File: %s | Code: %s | Reason: %s",
+        input_path.name,
+        code,
+        reason,
+    )
+
+
 @dataclass
 class AuditSummary:
     copies_created: int
@@ -436,11 +452,10 @@ async def _perform_self_audit_impl(
     )
 
     if invalid_metrics_detected and trust_score > 5.0:
-        adjusted_score = min(trust_score, 5.0)
+        adjusted_score = max(3.0, trust_score - 2.0)
         if adjusted_score < trust_score:
             logger.info(
-                "[QC] TrustScore adjusted: %.1f → %.1f (invalid metrics)",
-                trust_score,
+                "[AutoAdjust] TrustScore lowered due to invalid metrics: %.1f",
                 adjusted_score,
             )
             trust_score = adjusted_score

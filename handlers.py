@@ -39,6 +39,7 @@ from utils import (
     parse_filename_and_copies,
     perform_self_audit,
     cleanup_user_outputs,
+    auto_cleanup_temp_dirs,
 )
 from downloader import download_telegram_file
 from executor import (
@@ -47,6 +48,7 @@ from executor import (
     probe_video_duration,
     process_copies_sequentially,
     enforce_quality_gate,
+    ERROR_MAP,
 )
 # END REGION AI
 from locales import get_text
@@ -895,6 +897,17 @@ async def _run_and_send(
         await message.answer("Произошла ошибка при обработке. Попробуйте ещё раз.")
         raise
 
+    tail_lines: List[str] = []
+    tail_text = ""
+    last_log_line = ""
+    if logs_text.strip():
+        tail_lines = logs_text.strip().splitlines()[-10:]
+        if tail_lines:
+            last_log_line = tail_lines[-1]
+        while tail_lines and sum(len(line) + 1 for line in tail_lines) > LOG_TAIL_CHARS:
+            tail_lines.pop(0)
+        tail_text = "\n".join(tail_lines)
+
     temporary_error = rc != 0 and (
         "RETRY" in logs_text or "UniqScore=0.0" in logs_text
     )
@@ -953,10 +966,9 @@ async def _run_and_send(
     if "⚠️ Обнаружены слишком похожие копии" in logs_text:
         await message.answer("⚠️ Обнаружены слишком похожие копии, выполняется перегенерация…")
 
-    if logs_text.strip():
-        tail = logs_text[-LOG_TAIL_CHARS:]
+    if tail_text.strip():
         await message.answer(
-            get_text(lang, "logs_tail", logs=hcode(tail))
+            get_text(lang, "logs_tail", logs=hcode(tail_text))
         )
 
     if rc != 0:
@@ -976,13 +988,31 @@ async def _run_and_send(
                 copies,
                 profile,
             )
+            error_reason = ERROR_MAP.get(rc, "Unknown error")
+            try:
+                from uniclon_bot import log_render_error
+            except ImportError:
+                log_render_error = None
+            if callable(log_render_error):
+                try:
+                    log_render_error(input_path, rc)
+                except Exception:
+                    logger.debug("Failed to log render error centrally", exc_info=True)
+            user_error_text = f"❌ Ошибка обработки ({rc}): {error_reason}"
+            await message.answer(user_error_text)
+            if last_log_line:
+                await message.answer(
+                    f"🪵 Последняя строка лога:\n{hcode(last_log_line)}",
+                    parse_mode="HTML",
+                )
             error_text = get_text(
                 lang,
                 "script_failed",
                 rc=rc,
                 output_dir=OUTPUT_DIR.name,
             )
-            await message.answer("Произошла ошибка при обработке. Попробуйте ещё раз.")
+            if error_reason:
+                error_text = f"{error_text}\nПричина: {error_reason}"
             await ack.edit_text(error_text)
             await message.answer(error_text)
             return
@@ -1176,6 +1206,11 @@ async def _run_and_send(
     await ack.edit_text(
         get_text(lang, "files_sent_summary", sent=sent, total=len(new_files))
     )
+
+    try:
+        asyncio.create_task(asyncio.to_thread(auto_cleanup_temp_dirs))
+    except Exception:
+        logger.debug("Failed to schedule temp cleanup", exc_info=True)
 
     audit_summary = None
     try:

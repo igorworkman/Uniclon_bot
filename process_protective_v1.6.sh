@@ -35,6 +35,7 @@ QT_META=1
 STRICT_CLEAN=0
 QUALITY="std"
 AUTO_CLEAN=0
+TARGET_FPS_ENV="${TARGET_FPS:-}"
 ENABLE_MIRROR=${ENABLE_MIRROR:-0}
 ENABLE_INTRO=${ENABLE_INTRO:-0}
 ENABLE_LUT=${ENABLE_LUT:-0}
@@ -763,6 +764,15 @@ generate_copy() {
       FPS="${RAND_FPS}"
     fi
 
+    # FPS Sync Control
+    TARGET_FPS=${TARGET_FPS:-30}
+    if [ -n "${TARGET_FPS_ENV:-}" ]; then
+      TARGET_FPS="$TARGET_FPS_ENV"
+    elif [ -n "${FPS:-}" ]; then
+      TARGET_FPS="$FPS"
+    fi
+    FPS="$TARGET_FPS"
+
     local base_br
     base_br=$(rand_int "$BR_MIN" "$BR_MAX")
     if [ -z "${RAND_BITRATE_KBPS:-}" ]; then
@@ -1200,7 +1210,7 @@ EOF
     fi
     VF="${VF},noise=alls=${noise_strength}:allf=t"
   fi
-  VF="${VF},fps=${FPS}"
+  VF="${VF},fps=${TARGET_FPS}"
   PAD_X="$pad_offset_x"
   PAD_Y="$pad_offset_y"
   VF="${VF},drawtext=text='${UID_TAG}':fontcolor=white@0.08:fontsize=16:x=10:y=H-30"
@@ -1259,6 +1269,15 @@ EOF
   local combined_audio_filters="$AUDIO_CHAIN"
   if [ -n "$AUDIO_FILTER" ]; then
     combined_audio_filters="${combined_audio_filters:+$combined_audio_filters,}$AUDIO_FILTER"
+  fi
+  combined_audio_filters=$(sanitize_audio_filters "$combined_audio_filters")
+  combined_audio_filters=$(ensure_superequalizer_bounds "$combined_audio_filters")
+  if [[ "$combined_audio_filters" != *"aresample=async=1:first_pts=0"* ]]; then
+    if [ -n "$combined_audio_filters" ]; then
+      combined_audio_filters="${combined_audio_filters},aresample=async=1:first_pts=0"
+    else
+      combined_audio_filters="aresample=async=1:first_pts=0"
+    fi
   fi
   combined_audio_filters=$(sanitize_audio_filters "$combined_audio_filters")
   combined_audio_filters=$(ensure_superequalizer_bounds "$combined_audio_filters")
@@ -1361,7 +1380,7 @@ EOF
     fi
 
     intro_args+=(
-      -vf "scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1,fps=${FPS},format=yuv420p"
+      -vf "scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1,fps=${TARGET_FPS},format=yuv420p"
       -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$VIDEO_LEVEL" -crf "$CRF"
       -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2
       -af "aresample=${AUDIO_SR},apad,atrim=0:${INTRO_DURATION}" -movflags +faststart "$INTRO_OUTPUT_PATH"
@@ -1380,6 +1399,17 @@ EOF
     OUT="$FINAL_OUT"
   else
     OUT="$ENCODE_TARGET"
+  fi
+
+  # REGION AI: normalize timestamps after render
+  if [ -f "$OUT" ]; then
+    local normalized_output="${OUT}.fixed.mp4"
+    if ffmpeg_exec -y -hide_banner -loglevel warning -i "$OUT" -map 0 -c copy -fflags +genpts "$normalized_output"; then
+      mv -f "$normalized_output" "$OUT"
+    else
+      echo "⚠️ Не удалось нормализовать таймштампы для $OUT"
+      rm -f "$normalized_output" 2>/dev/null || true
+    fi
   fi
 
   # REGION AI: exif randomization bindings
@@ -1613,6 +1643,15 @@ EOF
       fallback_af_chain=$(compose_af_chain "$base_af" "$fallback_af_extra")
       fallback_af_chain=$(ensure_superequalizer_bounds "$fallback_af_chain")
       fallback_af_chain=$(sanitize_audio_filters "$fallback_af_chain")
+      if [[ "$fallback_af_chain" != *"aresample=async=1:first_pts=0"* ]]; then
+        if [ -n "$fallback_af_chain" ]; then
+          fallback_af_chain="${fallback_af_chain},aresample=async=1:first_pts=0"
+        else
+          fallback_af_chain="aresample=async=1:first_pts=0"
+        fi
+      fi
+      fallback_af_chain=$(sanitize_audio_filters "$fallback_af_chain")
+      fallback_af_chain=$(ensure_superequalizer_bounds "$fallback_af_chain")
       ffmpeg_exec -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC" \
         -t "$CLIP_DURATION" -c:v libx264 -preset medium -crf 24 \
         -vf "$fallback_vf_chain" \

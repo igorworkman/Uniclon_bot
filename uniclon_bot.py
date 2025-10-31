@@ -643,6 +643,8 @@ async def run_polling() -> None:
     try:
         bot = make_bot()
         dp = make_dispatcher()
+        import handlers
+        print("[INIT] Handlers successfully imported and registered ✅")
         logging.info("Outputs and manifest stored in %s", OUTPUT_DIR)
         task_queue = UserTaskQueue()
         set_task_queue(task_queue)

@@ -40,8 +40,6 @@ logger = logging.getLogger(__name__)
 
 
 async def periodic_preview_scan(interval: int = 120):
-    from utils import BASE_DIR as _base_dir, CHECKS_DIR as _utils_checks_dir  # noqa: F401
-
     while True:
         flags = (CHECKS_DIR / "preview_flags").glob("*.flag")
         for flag in flags:

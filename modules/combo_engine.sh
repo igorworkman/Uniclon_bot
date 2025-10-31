@@ -176,7 +176,10 @@ ffmpeg_command_preview() {
 }
 
 ensure_run_combos() {
-  local total=${#RUN_COMBOS[@]:-0}
+  local total=0
+  if [ "${RUN_COMBOS+x}" ]; then
+    total=${#RUN_COMBOS[@]}
+  fi
   [ "$RUN_COMBO_POS" -ge "$total" ] && total=0
   [ "$total" -ge 8 ] && return
   RUN_COMBOS=(

@@ -268,7 +268,11 @@ remove_indices_for_regen() {
     RUN_VARIANT_KEYS=("${RUN_VARIANT_KEYS[@]:0:$idx}" "${RUN_VARIANT_KEYS[@]:$((idx + 1))}")
   done <<<"$sorted"
   LAST_COMBOS=()
-  if [ "${#RUN_COMBO_HISTORY[@]:-0}" -gt 0 ]; then
+  local combo_history_count=0
+  if [ "${RUN_COMBO_HISTORY+x}" ]; then
+    combo_history_count=${#RUN_COMBO_HISTORY[@]}
+  fi
+  if [ "$combo_history_count" -gt 0 ]; then
     for combo in "${RUN_COMBO_HISTORY[@]}"; do
       LAST_COMBOS+=("$combo")
     done

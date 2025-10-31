@@ -84,10 +84,18 @@ fallback_can_retry() {
 
 fallback_try_regen_quality() {
   ensure_run_combos
-  if [ ${#QUALITY_ISSUES[@]:-0} -eq 0 ] || [ ${#QUALITY_COPY_IDS[@]:-0} -eq 0 ]; then
+  local quality_issue_count=0
+  local quality_copy_count=0
+  if [ "${QUALITY_ISSUES+x}" ]; then
+    quality_issue_count=${#QUALITY_ISSUES[@]}
+  fi
+  if [ "${QUALITY_COPY_IDS+x}" ]; then
+    quality_copy_count=${#QUALITY_COPY_IDS[@]}
+  fi
+  if [ "$quality_issue_count" -eq 0 ] || [ "$quality_copy_count" -eq 0 ]; then
     return 0
   fi
-  echo "⚠️ Перегенерация по качеству: ${#QUALITY_ISSUES[@]} копий"
+  echo "⚠️ Перегенерация по качеству: ${quality_issue_count} копий"
   REGEN_OCCURRED=1
   remove_indices_for_regen "${QUALITY_ISSUES[@]}"
   REGEN_ITER=$((REGEN_ITER + 1))

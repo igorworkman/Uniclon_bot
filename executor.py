@@ -27,6 +27,14 @@ from qc_analyzer import CopyQCResult, QC_MIN_REQUIRED_COPIES, load_qc_report
 logger = logging.getLogger(__name__)
 
 
+ERROR_MAP = {
+    1: "FFmpeg generic failure",
+    2: "Shell syntax error",
+    8: "Invalid FFmpeg filter or video chain",
+    234: "Crop or scaling validation failed",
+}
+
+
 _SAVED_LINE_RE = re.compile(
     r"^\[Uniclon v1\.7\] Saved as: (?P<name>[A-Z]{3}_\d{8}_\d{6}_(?P<hash>[0-9a-f]{4})\.mp4)\s+\(seed=(?P<seed>[0-9.]+),\s*software=(?P<software>.+)\)$"
 )
@@ -162,7 +170,16 @@ async def run_script_with_logs(
                 logger.debug("Orchestrator finalize on error failed", exc_info=True)
             raise
         await orchestrator_finish_task(ticket, ticket.get("metrics"))
-        return result
+        rc, logs_text = result
+        if rc != 0:
+            reason = ERROR_MAP.get(rc, "Unknown")
+            logger.error(
+                "[ERROR %s] %s — during: %s",
+                rc,
+                reason,
+                input_file.name,
+            )
+        return rc, logs_text
     finally:
         if release:
             release()

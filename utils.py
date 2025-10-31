@@ -1,16 +1,23 @@
 
+import logging
+import random
 import re
+import shutil
+import time
 from pathlib import Path
 from typing import Optional, Sequence, Tuple
 
 # REGION AI: imports
-from config import BASE_DIR
+from config import BASE_DIR, CHECKS_DIR, OUTPUT_DIR
 # END REGION AI
 
 
 # REGION AI: dynamic imports
 from importlib import import_module
 # END REGION AI
+
+
+logger = logging.getLogger(__name__)
 
 
 def parse_copies_from_caption(caption: Optional[str]) -> Optional[int]:
@@ -55,3 +62,40 @@ def cleanup_user_outputs(
         max_mtime=max_mtime,
     )
 # END REGION AI
+
+
+def auto_cleanup_temp_dirs(threshold_hours: int = 6) -> int:
+    now = time.time()
+    cleaned = 0
+    for folder in [BASE_DIR / "temp", OUTPUT_DIR / "tmp", CHECKS_DIR / "tmp"]:
+        if not folder.exists():
+            continue
+        for item in folder.iterdir():
+            try:
+                age = now - item.stat().st_mtime
+            except OSError:
+                continue
+            if age <= threshold_hours * 3600:
+                continue
+            if item.is_file():
+                try:
+                    item.unlink()
+                    cleaned += 1
+                except Exception:
+                    pass
+            elif item.is_dir():
+                try:
+                    shutil.rmtree(item)
+                    cleaned += 1
+                except Exception:
+                    pass
+    return cleaned
+
+
+if random.random() < 0.15:
+    try:
+        cleaned = auto_cleanup_temp_dirs()
+    except Exception:
+        logger.debug("Auto-cleanup temp dirs failed", exc_info=True)
+    else:
+        logger.info("[Cleanup] Auto-removed %s old temp files", cleaned)

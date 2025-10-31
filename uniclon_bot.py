@@ -14,10 +14,6 @@ from typing import Awaitable, Callable, Dict, Iterable, List, Optional, Sequence
 from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.client.default import DefaultBotProperties
-from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.client.telegram import TelegramAPIServer
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -26,7 +22,7 @@ from aiohttp import ClientError
 load_dotenv()
 
 # REGION AI: local imports
-from config import BOT_TOKEN, BOT_API_BASE
+from loader import bot as loader_bot, dp as loader_dp
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -438,7 +434,6 @@ async def _perform_self_audit_impl(
 # REGION AI: handlers imports
 from utils import cleanup_user_outputs
 from handlers import (
-    command_router,
     get_user_output_paths,
     router,
     set_task_queue,
@@ -620,19 +615,18 @@ async def handle_clean_command(message: Message) -> None:
 
 
 def make_bot() -> Bot:
-    if BOT_API_BASE:
-        session = AiohttpSession(api=TelegramAPIServer.from_base(BOT_API_BASE))
-        return Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"), session=session)
-    return Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+    return loader_bot
 
 
 def make_dispatcher() -> Dispatcher:
-    dp = Dispatcher(storage=MemoryStorage())
-    dp.include_router(command_router)
+    dp = loader_dp
+    if getattr(make_dispatcher, "_configured", False):
+        return dp
     dp.include_router(router)
     dp.message.register(handle_clean_command, Command("clean"))
     dp.message.register(handle_video)
-    logger.info("✅ Command router initialized (start/restart ready)")
+    logger.info("✅ Dispatcher initialized (start/restart ready)")
+    make_dispatcher._configured = True  # type: ignore[attr-defined]
     return dp
 
 

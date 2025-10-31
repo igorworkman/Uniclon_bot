@@ -266,7 +266,12 @@ async def _perform_self_audit_impl(
         reader = csv.DictReader(fh)
         for row in reader:
             report_rows.append(row)
-            name = (row.get("file") or row.get("filename") or "").strip()
+            name = (
+                row.get("file")
+                or row.get("filename")
+                or row.get("copy")
+                or ""
+            ).strip()
             if name:
                 metrics_map[name] = row
 
@@ -281,27 +286,53 @@ async def _perform_self_audit_impl(
     statuses: List[str] = []
     encoder_pairs: List[Tuple[str, str]] = []
     creation_values: List[str] = []
+    invalid_metrics_detected = False
 
     for name in target_names:
         row = metrics_map.get(name)
         if not row:
             continue
+        status_raw = (row.get("status") or row.get("verdict") or "").strip()
+        if status_raw:
+            statuses.append(status_raw)
         ssim_data = _extract_float([row.get("SSIM"), row.get("ssim")])
-        if ssim_data:
-            ssim_values.append(ssim_data[0])
         psnr_data = _extract_float([row.get("PSNR"), row.get("psnr")])
-        if psnr_data:
-            psnr_values.append(psnr_data[0])
         phash_data = _extract_float([row.get("pHash"), row.get("phash"), row.get("phash_diff")])
-        if phash_data:
-            phash_values.append(phash_data[0])
         bitrate_data = _extract_float([row.get("bitrate_kbps"), row.get("bitrate")])
-        if bitrate_data:
-            value = bitrate_data[0]
-            if value > 100000:
-                value /= 1000.0
-            bitrate_values.append(value)
-        statuses.append((row.get("status") or "").strip())
+
+        ssim_value = ssim_data[0] if ssim_data else None
+        psnr_value = psnr_data[0] if psnr_data else None
+        phash_value = phash_data[0] if phash_data else None
+        bitrate_value = bitrate_data[0] if bitrate_data else None
+
+        metrics_invalid = False
+        if status_raw.strip().lower() == "error":
+            metrics_invalid = True
+        if ssim_value is None or ssim_value <= 0:
+            metrics_invalid = True
+        if psnr_value is None or psnr_value <= 0:
+            metrics_invalid = True
+        if bitrate_value is None or bitrate_value <= 0:
+            metrics_invalid = True
+        if phash_value is not None and phash_value <= 0:
+            metrics_invalid = True
+
+        if metrics_invalid:
+            invalid_metrics_detected = True
+            if not status_raw:
+                statuses.append("error")
+        else:
+            if ssim_value is not None:
+                ssim_values.append(ssim_value)
+            if psnr_value is not None:
+                psnr_values.append(psnr_value)
+            if phash_value is not None:
+                phash_values.append(phash_value)
+            if bitrate_value is not None:
+                value = bitrate_value
+                if value > 100000:
+                    value /= 1000.0
+                bitrate_values.append(value)
         encoder_pairs.append((row.get("encoder") or "", row.get("software") or ""))
         creation_values.append(row.get("creation_time") or "")
 
@@ -309,23 +340,23 @@ async def _perform_self_audit_impl(
         with quality_path.open("r", encoding="utf-8", newline="") as fh:
             reader = csv.DictReader(fh)
             for row in reader:
-                name = (row.get("file") or row.get("filename") or "").strip()
+                name = (row.get("file") or row.get("filename") or row.get("copy") or "").strip()
                 if name and name in target_names:
                     ssim_data = _extract_float([row.get("SSIM"), row.get("ssim")])
-                    if ssim_data:
+                    if ssim_data and ssim_data[0] > 0:
                         ssim_values.append(ssim_data[0])
                     psnr_data = _extract_float([row.get("PSNR"), row.get("psnr")])
-                    if psnr_data:
+                    if psnr_data and psnr_data[0] > 0:
                         psnr_values.append(psnr_data[0])
 
     if not phash_values and phash_path.exists():
         with phash_path.open("r", encoding="utf-8", newline="") as fh:
             reader = csv.DictReader(fh)
             for row in reader:
-                name = (row.get("file") or row.get("filename") or "").strip()
+                name = (row.get("file") or row.get("filename") or row.get("copy") or "").strip()
                 if name and name in target_names:
                     phash_data = _extract_float([row.get("phash_diff"), row.get("phash")])
-                    if phash_data:
+                    if phash_data and phash_data[0] > 0:
                         phash_values.append(phash_data[0])
 
     mean_ssim = round(mean(ssim_values), 3) if ssim_values else 0.0
@@ -344,9 +375,13 @@ async def _perform_self_audit_impl(
 
     status_warnings: List[str] = []
     for status in statuses:
-        upper = status.upper()
-        if "WARNING" in upper and status not in status_warnings:
-            status_warnings.append(status)
+        normalized = (status or "").strip()
+        if not normalized:
+            continue
+        lower = normalized.lower()
+        if "warning" in lower or lower in {"low_quality", "error"}:
+            if normalized not in status_warnings:
+                status_warnings.append(normalized)
     if fallback_triggered and fallback_message not in status_warnings:
         status_warnings.append(fallback_message)
 
@@ -399,6 +434,16 @@ async def _perform_self_audit_impl(
         has_phash=bool(phash_values),
         has_psnr=bool(psnr_values),
     )
+
+    if invalid_metrics_detected and trust_score > 5.0:
+        adjusted_score = min(trust_score, 5.0)
+        if adjusted_score < trust_score:
+            logger.info(
+                "[QC] TrustScore adjusted: %.1f → %.1f (invalid metrics)",
+                trust_score,
+                adjusted_score,
+            )
+            trust_score = adjusted_score
 
     trust_label, trust_emoji = _derive_trust_label(trust_score, profile_label)
 

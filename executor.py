@@ -9,8 +9,9 @@ import json
 import random
 import time
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 # REGION AI: imports
 from adaptive_tuner import get_tuned_params, record_render_result
@@ -19,6 +20,7 @@ from report_builder import build_uniqueness_report
 from render_queue import acquire_render_slot
 from orchestrator import add_task as orchestrator_add_task, finish_task as orchestrator_finish_task
 from services.video_processor import run_protective_process_async
+from qc_analyzer import CopyQCResult, QC_MIN_REQUIRED_COPIES, load_qc_report
 # END REGION AI
 
 
@@ -34,6 +36,15 @@ _CPU_CORES = os.cpu_count() or 1
 _BASE_MAX_JOBS = max(1, min(2, (_CPU_CORES // 2) or 1))
 _FFMPEG_LIMITS = {False: asyncio.Semaphore(_BASE_MAX_JOBS), True: asyncio.Semaphore(1)}
 _COPY_SEMAPHORE = asyncio.Semaphore(1)
+_QC_SOFT_RETRY_LIMIT = max(1, int(os.getenv("UNICLON_QC_SOFT_RETRIES", "2")))
+
+
+@dataclass
+class QCEnforcementResult:
+    valid_files: List[Path]
+    evaluations: Dict[str, CopyQCResult]
+    invalid: Dict[str, CopyQCResult]
+    retries: int = 0
 
 
 def _load_manifest_metadata(files: List[str]) -> Dict[str, Dict[str, str]]:
@@ -546,3 +557,122 @@ async def process_copies_sequentially(
         if idx < copies:
             await asyncio.sleep(random.uniform(0.5, 1.2))
     return results
+
+
+async def rerun_ffmpeg_with_soft_retry(
+    input_path: Path,
+    copies: int,
+    profile: str,
+    quality: str,
+    *,
+    timeout: float = 300.0,
+) -> List[Path]:
+    if copies <= 0:
+        return []
+    logger.info("[QC] Initiating soft retry for %s (copies=%s)", input_path.name, copies)
+    deliveries = await process_copies_sequentially(
+        input_path,
+        copies,
+        profile,
+        quality,
+        timeout=timeout,
+        retries=1,
+    )
+    regenerated: List[Path] = []
+    for item in deliveries:
+        path = item.get("path")
+        if isinstance(path, Path) and path.exists():
+            regenerated.append(path)
+    return regenerated
+
+
+async def enforce_quality_gate(
+    input_path: Path,
+    candidate_files: Sequence[Path],
+    requested_copies: int,
+    profile: str,
+    quality: str,
+) -> QCEnforcementResult:
+    unique_candidates: List[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidate_files:
+        path = Path(candidate)
+        if path in seen:
+            continue
+        seen.add(path)
+        unique_candidates.append(path)
+
+    required_copies = max(1, requested_copies)
+    min_threshold = min(required_copies, QC_MIN_REQUIRED_COPIES)
+    retries = 0
+    logged_invalid: set[str] = set()
+    evaluations: Dict[str, CopyQCResult] = {}
+
+    while True:
+        report = load_qc_report()
+        current_valid: List[Path] = []
+        evaluations = {}
+        for idx, path in enumerate(unique_candidates, start=1):
+            result = report.get(path.name)
+            if result is None:
+                result = CopyQCResult(name=path.name, status="error")
+            result.normalize_status()
+            evaluations[path.name] = result
+            if result.status != "error":
+                current_valid.append(path)
+            else:
+                if path.name not in logged_invalid:
+                    logger.warning("[QC] Copy %s rejected (%s)", idx, result.metrics_for_log())
+                    logged_invalid.add(path.name)
+
+        if len(current_valid) >= required_copies:
+            unique_candidates = current_valid
+            break
+
+        if retries >= _QC_SOFT_RETRY_LIMIT:
+            unique_candidates = current_valid
+            if len(current_valid) < min_threshold:
+                logger.warning(
+                    "[QC] Soft retry limit reached (%s). Valid copies: %s/%s",
+                    _QC_SOFT_RETRY_LIMIT,
+                    len(current_valid),
+                    required_copies,
+                )
+            break
+
+        missing = required_copies - len(current_valid)
+        if missing <= 0:
+            unique_candidates = current_valid
+            break
+
+        retries += 1
+        logger.info(
+            "[QC] Insufficient valid copies (%s/%s). Soft retry attempt %s/%s.",
+            len(current_valid),
+            required_copies,
+            retries,
+            _QC_SOFT_RETRY_LIMIT,
+        )
+        regenerated = await rerun_ffmpeg_with_soft_retry(
+            input_path,
+            missing,
+            profile,
+            quality,
+        )
+        if not regenerated:
+            logger.warning("[QC] Soft retry produced no additional copies.")
+            unique_candidates = current_valid
+            break
+
+        merged = current_valid[:]
+        seen_paths = {path.resolve() for path in merged}
+        for extra in regenerated:
+            resolved = extra.resolve()
+            if resolved in seen_paths:
+                continue
+            seen_paths.add(resolved)
+            merged.append(extra)
+        unique_candidates = merged
+
+    final_invalid = {name: res for name, res in evaluations.items() if res.status == "error"}
+    return QCEnforcementResult(unique_candidates, evaluations, final_invalid, retries)

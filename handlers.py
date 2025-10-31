@@ -10,13 +10,13 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple, TYPE_CHECKING
 
 import psutil
 from aiogram import Bot, F, Router, types
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.types import CallbackQuery, Message
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.markdown import hcode
 from aiogram.types.input_file import FSInputFile
 
-from loader import bot, dp
+from loader import bot
 
 import aiogram.dispatcher as _dispatcher_module
 from aiogram.fsm.context import FSMContext as _FSMContext
@@ -97,7 +97,7 @@ async def _reset_state(state: FSMContext) -> None:
         await state.clear()
 
 
-@dp.message_handler(commands=["start"], state="*")
+@router.message(Command("start"), StateFilter("*"))
 async def start_command(message: types.Message, state: FSMContext) -> None:
     await _reset_state(state)
     _cleanup_restart_data()
@@ -106,8 +106,9 @@ async def start_command(message: types.Message, state: FSMContext) -> None:
         "📤 Отправь мне видеофайл и напиши число копий (например: 10), чтобы я сделал уникальные версии.\n\n"
         "💡 Используй кнопку '🔄 Restart', если хочешь начать заново."
     )
-    keyboard = InlineKeyboardMarkup()
-    keyboard.add(InlineKeyboardButton(text="🔄 Restart", callback_data="restart"))
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🔄 Restart", callback_data="restart")]]
+    )
     await message.answer(text, reply_markup=keyboard)
     await state.set_state(VideoUpload.waiting_for_video)
 
@@ -119,7 +120,7 @@ async def restart_bot(message: Message, state: FSMContext) -> None:
     _log_restart_event(user_id)
 
 
-@dp.callback_query_handler(lambda c: c.data == "restart")
+@router.callback_query(F.data == "restart")
 async def restart_callback(call: types.CallbackQuery, state: FSMContext) -> None:
     await _reset_state(state)
     message = call.message

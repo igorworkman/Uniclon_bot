@@ -1169,8 +1169,13 @@ EOF
   [ "$crop_h" -le 0 ] && crop_h=2
   CROP_WIDTH="$crop_w"
   CROP_HEIGHT="$crop_h"
+
+  local crop_filter="crop='min(iw,${crop_w}):min(ih,${crop_h}):${crop_x}:${crop_y}'"
+  local VF="setpts=${STRETCH_FACTOR}*PTS,scale=${scale_w}:${scale_h}:flags=lanczos,setsar=1,${crop_filter}"
+
   local crop_filter="crop=min(iw,${crop_w}):min(ih,${crop_h}):${crop_x}:${crop_y}"
   local VF="fps=${TARGET_FPS},setpts=${STRETCH_FACTOR}*PTS,scale=w=-2:h=${scale_h}:flags=lanczos,setsar=1,${crop_filter}"
+
   local micro_filter
   local extras_chain=""
   for micro_filter in "${VARIANT_MICRO_FILTERS[@]}"; do

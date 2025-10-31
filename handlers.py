@@ -10,7 +10,7 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple, TYPE_CHECKING
 
 import psutil
 from aiogram import Bot, F, Router, types
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.types import CallbackQuery, Message
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.markdown import hcode
@@ -97,7 +97,11 @@ async def _reset_state(state: FSMContext) -> None:
         await state.clear()
 
 
+
+@router.message(Command("start"), StateFilter("*"))
+
 @router.message(Command("start"))
+
 async def start_command(message: types.Message, state: FSMContext) -> None:
     await _reset_state(state)
     _cleanup_restart_data()

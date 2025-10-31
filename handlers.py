@@ -46,6 +46,7 @@ from executor import (
     list_new_mp4s,
     probe_video_duration,
     process_copies_sequentially,
+    enforce_quality_gate,
 )
 # END REGION AI
 from locales import get_text
@@ -1003,6 +1004,30 @@ async def _run_and_send(
     new_files = sorted(new_files)[:copies]
     if sequential_delivery and delivered_files:
         new_files = delivered_files
+
+    qc_result = None
+    if not sequential_delivery:
+        qc_result = await enforce_quality_gate(
+            input_path,
+            new_files,
+            copies,
+            profile,
+            quality,
+        )
+        new_files = qc_result.valid_files
+        if not new_files:
+            logger.error("QC rejected all copies for %s", input_path.name)
+            await ack.edit_text(
+                get_text(lang, "no_new_files", output_dir=OUTPUT_DIR.name)
+            )
+            await message.answer(
+                "❌ Все сгенерированные копии отклонены проверкой качества. Попробуйте ещё раз."
+            )
+            return
+        if len(new_files) < copies:
+            await message.answer(
+                f"⚠️ QC отклонил {copies - len(new_files)} копий. Будут отправлены только валидные файлы."
+            )
 
     preview_files: List[Path] = []
     if save_preview:

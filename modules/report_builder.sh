@@ -44,10 +44,11 @@ report_builder_register_copy() {
   local regen_flag="$9"
   local target_bitrate="${10:-}"
 
-  local ssim_num phash_num bitrate_num uniq_num uniq_json uniq_value
+  local ssim_num phash_num bitrate_num psnr_num uniq_num uniq_json uniq_value
   ssim_num=$(report_builder__normalize_metric "$ssim_raw" "0" "%.6f")
   phash_num=$(report_builder__normalize_metric "$phash_raw" "0" "%.2f")
   bitrate_num=$(report_builder__normalize_metric "$bitrate_raw" "0" "%.0f")
+  psnr_num=$(report_builder__normalize_metric "$psnr_raw" "0" "%.2f")
 
   uniq_num="0"
   uniq_json="null"
@@ -85,11 +86,27 @@ report_builder_register_copy() {
     REPORT_ACCEPTED=$((REPORT_ACCEPTED + 1))
   fi
 
+  local status="ok"
+  if awk -v s="$ssim_num" -v p="$psnr_num" -v b="$bitrate_num" -v h="$phash_num" 'BEGIN{exit (s<=0 || p<=0 || b<=0 || h<=0?0:1)}'; then
+    status="error"
+  else
+    local quality_flag
+    quality_flag=$(printf '%s' "$quality_pass" | tr 'A-Z' 'a-z')
+    case "$quality_flag" in
+      false|0|no)
+        status="low_quality"
+        ;;
+    esac
+    if [ "$accepted_flag" = "rejected" ]; then
+      status="low_quality"
+    fi
+  fi
+
   local escaped_name
   escaped_name=$(printf '%s' "$copy_name" | sed 's/"/\\"/g')
   REPORT_RESULTS+=("{\"copy\":\"$escaped_name\",\"ssim\":$ssim_num,\"phash\":$phash_num,\"bitrate\":$bitrate_num,\"uniqscore\":$uniq_json}")
 
-  REPORT_CSV_ROWS+=("$copy_name,$ssim_num,$psnr_raw,$phash_num,$bitrate_num,$target_bitrate,$uniq_json,$validated,$quality_pass,$regen_flag,$accepted_flag")
+  REPORT_CSV_ROWS+=("$copy_name,$ssim_num,$psnr_num,$phash_num,$bitrate_num,$target_bitrate,$uniq_json,$validated,$quality_pass,$regen_flag,$accepted_flag,$status")
 }
 
 report_builder_finalize() {
@@ -115,7 +132,7 @@ report_builder_finalize() {
   } > "$report_path"
 
   {
-    echo "copy,ssim,psnr,phash,bitrate,target_bitrate,uniqscore,validated,quality_pass,regen,verdict"
+    echo "copy,ssim,psnr,phash,bitrate,target_bitrate,uniqscore,validated,quality_pass,regen,verdict,status"
     local row
     for row in "${REPORT_CSV_ROWS[@]}"; do
       echo "$row"

@@ -1362,6 +1362,7 @@ EOF
 
   # REGION AI: primary ffmpeg command with stable stream mapping
   local audio_input_index=0 audio_stream_present=0
+  local effective_audio_mode="${AUDIO_MODE:-normal}"
   AUDIO_CODEC="none"
   local audio_info=""
   if audio_info=$(ffmpeg_audio_stream_info "$SRC"); then
@@ -1397,7 +1398,13 @@ EOF
   fi
   combined_audio_filters=$(sanitize_audio_filters "$combined_audio_filters")
   combined_audio_filters=$(ensure_superequalizer_bounds "$combined_audio_filters")
-  if [ "${AUDIO_MODE:-normal}" = "mute" ]; then
+  if [ "$audio_stream_present" -eq 0 ] && [ "$effective_audio_mode" != "mute" ]; then
+    effective_audio_mode="mute"
+  fi
+  if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
+    effective_audio_mode="normal"
+  fi
+  if [ "$effective_audio_mode" = "mute" ]; then
     audio_stream_present=0
     combined_audio_filters=""
   fi
@@ -1418,7 +1425,7 @@ EOF
     -analyzeduration 200M -probesize 200M
     -ss "$CLIP_START" -i "$SRC"
   )
-  if [ "${AUDIO_MODE:-normal}" != "mute" ]; then
+  if [ "$effective_audio_mode" != "mute" ]; then
     if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
       FFMPEG_ARGS+=(-analyzeduration 200M -probesize 200M -ss "$CLIP_START" -i "$MUSIC_VARIANT_TRACK")
       audio_input_index=1
@@ -1428,7 +1435,7 @@ EOF
     fi
   fi
   FFMPEG_ARGS+=(-map 0:v:0)
-  if [ "${AUDIO_MODE:-normal}" != "mute" ]; then
+  if [ "$effective_audio_mode" != "mute" ]; then
     if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
       FFMPEG_ARGS+=(-map "${audio_input_index}:a:0?" -shortest)
     elif [ "$audio_stream_present" -eq 1 ]; then
@@ -1440,7 +1447,7 @@ EOF
   FFMPEG_ARGS+=(-t "$CLIP_DURATION" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$CODEC_LEVEL" -crf "$CRF"
     -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k"
     -vf "$vf_payload")
-  if [ "${AUDIO_MODE:-normal}" = "mute" ]; then
+  if [ "$effective_audio_mode" = "mute" ]; then
     FFMPEG_ARGS+=(-an)
   else
     FFMPEG_ARGS+=(-c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2)

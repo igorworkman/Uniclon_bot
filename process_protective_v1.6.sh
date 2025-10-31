@@ -7,6 +7,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$SCRIPT_DIR"
 IFS=$'\n\t'
 
+TARGET_FPS_INPUT="${TARGET_FPS:-}"
+TARGET_FPS=${TARGET_FPS:-30}
+
 # process_protective_v1.6.sh (macOS совместимая версия)
 # Делает N уникальных копий из одного видео, сохраняет в OUTPUT_DIR/
 chmod +x "$BASE_DIR"/modules/*.sh 2>/dev/null || true
@@ -35,7 +38,7 @@ QT_META=1
 STRICT_CLEAN=0
 QUALITY="std"
 AUTO_CLEAN=0
-TARGET_FPS_ENV="${TARGET_FPS:-}"
+TARGET_FPS_ENV="${TARGET_FPS_INPUT:-}"
 ENABLE_MIRROR=${ENABLE_MIRROR:-0}
 ENABLE_INTRO=${ENABLE_INTRO:-0}
 ENABLE_LUT=${ENABLE_LUT:-0}
@@ -1167,7 +1170,7 @@ EOF
   CROP_WIDTH="$crop_w"
   CROP_HEIGHT="$crop_h"
   local crop_filter="crop=min(iw,${crop_w}):min(ih,${crop_h}):${crop_x}:${crop_y}"
-  local VF="setpts=${STRETCH_FACTOR}*PTS,scale=${scale_w}:${scale_h}:flags=lanczos,setsar=1,${crop_filter}"
+  local VF="fps=${TARGET_FPS},setpts=${STRETCH_FACTOR}*PTS,scale=w=-2:h=${scale_h}:flags=lanczos,setsar=1,${crop_filter}"
   local micro_filter
   local extras_chain=""
   for micro_filter in "${VARIANT_MICRO_FILTERS[@]}"; do
@@ -1210,7 +1213,6 @@ EOF
     fi
     VF="${VF},noise=alls=${noise_strength}:allf=t"
   fi
-  VF="${VF},fps=${TARGET_FPS}"
   PAD_X="$pad_offset_x"
   PAD_Y="$pad_offset_y"
   VF="${VF},drawtext=text='${UID_TAG}':fontcolor=white@0.08:fontsize=16:x=10:y=H-30"
@@ -1277,6 +1279,13 @@ EOF
       combined_audio_filters="${combined_audio_filters},aresample=async=1:first_pts=0"
     else
       combined_audio_filters="aresample=async=1:first_pts=0"
+    fi
+  fi
+  if [[ "$combined_audio_filters" != *"atempo=1.0"* ]]; then
+    if [ -n "$combined_audio_filters" ]; then
+      combined_audio_filters="${combined_audio_filters},atempo=1.0"
+    else
+      combined_audio_filters="atempo=1.0"
     fi
   fi
   combined_audio_filters=$(sanitize_audio_filters "$combined_audio_filters")
@@ -1380,10 +1389,10 @@ EOF
     fi
 
     intro_args+=(
-      -vf "scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1,fps=${TARGET_FPS},format=yuv420p"
+      -vf "fps=${TARGET_FPS},scale=w=-2:h=${TARGET_H}:flags=lanczos,setsar=1,format=yuv420p"
       -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$VIDEO_LEVEL" -crf "$CRF"
       -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2
-      -af "aresample=${AUDIO_SR},apad,atrim=0:${INTRO_DURATION}" -movflags +faststart "$INTRO_OUTPUT_PATH"
+      -af "aresample=async=1:first_pts=0,atempo=1.0,aresample=${AUDIO_SR},apad,atrim=0:${INTRO_DURATION}" -movflags +faststart "$INTRO_OUTPUT_PATH"
     )
 
     ffmpeg_exec "${intro_args[@]}"
@@ -1403,12 +1412,16 @@ EOF
 
   # REGION AI: normalize timestamps after render
   if [ -f "$OUT" ]; then
-    local normalized_output="${OUT}.fixed.mp4"
-    if ffmpeg_exec -y -hide_banner -loglevel warning -i "$OUT" -map 0 -c copy -fflags +genpts "$normalized_output"; then
-      mv -f "$normalized_output" "$OUT"
+    local output_path="$OUT"
+    local sync_path="${output_path%.mp4}_sync.mp4"
+    if [ "$sync_path" = "$output_path" ]; then
+      sync_path="${output_path}_sync.mp4"
+    fi
+    if ffmpeg_exec -y -hide_banner -loglevel warning -i "$output_path" -map 0 -c copy -fflags +genpts "$sync_path"; then
+      mv -f "$sync_path" "$output_path"
     else
       echo "⚠️ Не удалось нормализовать таймштампы для $OUT"
-      rm -f "$normalized_output" 2>/dev/null || true
+      rm -f "$sync_path" 2>/dev/null || true
     fi
   fi
 
@@ -1648,6 +1661,13 @@ EOF
           fallback_af_chain="${fallback_af_chain},aresample=async=1:first_pts=0"
         else
           fallback_af_chain="aresample=async=1:first_pts=0"
+        fi
+      fi
+      if [[ "$fallback_af_chain" != *"atempo=1.0"* ]]; then
+        if [ -n "$fallback_af_chain" ]; then
+          fallback_af_chain="${fallback_af_chain},atempo=1.0"
+        else
+          fallback_af_chain="atempo=1.0"
         fi
       fi
       fallback_af_chain=$(sanitize_audio_filters "$fallback_af_chain")

@@ -1404,7 +1404,7 @@ EOF
   # REGION AI: normalize timestamps after render
   if [ -f "$OUT" ]; then
     local normalized_output="${OUT}.fixed.mp4"
-    if ffmpeg_exec -y -hide_banner -loglevel warning -i "$OUT" -map 0 -c copy -fflags +genpts "$normalized_output"; then
+    if ffmpeg_exec -y -hide_banner -loglevel warning -i "$OUT" -map 0 -c copy -fflags +genpts -movflags +faststart "$normalized_output"; then
       mv -f "$normalized_output" "$OUT"
     else
       echo "⚠️ Не удалось нормализовать таймштампы для $OUT"

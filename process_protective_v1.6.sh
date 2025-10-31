@@ -245,6 +245,20 @@ validate_video_params() {
   echo "$width $height"
 }
 
+cleanup_output_dir_on_failure() {
+  local out_dir="${OUTPUT_DIR:-}"
+  if [ -z "$out_dir" ] || [ ! -d "$out_dir" ]; then
+    return
+  fi
+  while IFS= read -r -d '' entry; do
+    if [ -d "$entry" ]; then
+      rm -rf "$entry" 2>/dev/null || true
+    else
+      rm -f "$entry" 2>/dev/null || true
+    fi
+  done < <(find "$out_dir" -mindepth 1 -maxdepth 1 ! -path "$out_dir/logs" -print0)
+}
+
 validate_fps() {
   local fps="${1:-0}"
   if ! printf '%s' "$fps" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
@@ -1286,7 +1300,7 @@ PY
   fi
   local crop_width_candidate="$scale_w"
   local crop_height_candidate="$scale_h"
-  if [ "$CROP_TOTAL_W" -gt 0 ] || [ "$CROP_TOTAL_H" -gt 0 ]; then
+  if [ "${CROP_TOTAL_W:-0}" -gt 0 ] 2>/dev/null || [ "${CROP_TOTAL_H:-0}" -gt 0 ] 2>/dev/null; then
     CROP_WIDTH=$((TARGET_W - CROP_TOTAL_W))
     CROP_HEIGHT=$((TARGET_H - CROP_TOTAL_H))
     if [ "$CROP_WIDTH" -lt 16 ]; then CROP_WIDTH=$((TARGET_W - CROP_W)); fi
@@ -1308,12 +1322,29 @@ PY
   CROP_H="$SAFE_H"
   local crop_x="$CROP_X"
   local crop_y="$CROP_Y"
+  echo "[INFO] ⚙️ Safe numeric checks initialized"
+  crop_x="${crop_x:-0}"
+  crop_y="${crop_y:-0}"
+  crop_w="${crop_w:-0}"
+  crop_h="${crop_h:-0}"
+  if ! [[ "$crop_x" =~ ^-?[0-9]+$ ]]; then
+    crop_x=0
+  fi
+  if ! [[ "$crop_y" =~ ^-?[0-9]+$ ]]; then
+    crop_y=0
+  fi
+  if ! [[ "$crop_w" =~ ^-?[0-9]+$ ]]; then
+    crop_w=0
+  fi
+  if ! [[ "$crop_h" =~ ^-?[0-9]+$ ]]; then
+    crop_h=0
+  fi
   # --- CropSafe Validation ---
-  if [ "$crop_w" -gt "$scale_w" ]; then
+  if [ "${crop_w:-0}" -gt "${scale_w:-0}" ] 2>/dev/null; then
     echo "[WARN] crop_w ($crop_w) > scale_w ($scale_w), уменьшено"
     crop_w="$scale_w"
   fi
-  if [ "$crop_h" -gt "$scale_h" ]; then
+  if [ "${crop_h:-0}" -gt "${scale_h:-0}" ] 2>/dev/null; then
     echo "[WARN] crop_h ($crop_h) > scale_h ($scale_h), уменьшено"
     crop_h="$scale_h"
   fi
@@ -1401,7 +1432,10 @@ PY
   local VF_CHAIN="$vf_payload"
   if ! ffmpeg -hide_banner -loglevel error -f lavfi -i "color=c=black:s=16x16:d=0.1" -vf "$VF_CHAIN" -f null - 2>/dev/null; then
     echo "[FATAL] Invalid VF chain detected — attempting safe fallback."
-    VF_CHAIN="scale=1080:1920:flags=lanczos,fps=$FPS,format=yuv420p"
+    cleanup_output_dir_on_failure
+    cleanup_temp_artifacts
+    echo "[FATAL] VF chain validation failed. Exiting with code 2."
+    exit 2
   fi
   vf_payload="$VF_CHAIN"
   VF="$VF_CHAIN"

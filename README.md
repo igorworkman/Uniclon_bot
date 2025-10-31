@@ -48,39 +48,102 @@ Uniclon — это автономный Telegram-бот и CLI-инструме�
 
 ---
 
-## 📂 Архитектура проекта (v1.6 Modular Split)
+## 📂 Архитектура проекта (v1.7 Verified)
+
+> Структура соответствует коммиту “feat: echo adjusted variant logs and safe array defaults” (27 минут назад).
 
 ```
 Uniclon_bot/
+├── .env
+├── .gitignore
+├── README.md
+├── adaptive_tuner.py
+├── audit.py
+├── bootstrap_compat.sh
 ├── bot.py
+├── codex/
+│   └── describe/
+│       └── bot_purpose.yaml
+├── codex_contract.yml
+├── codex_rules.md
+├── collect_meta.sh
+├── config.py
+├── downloader.py
 ├── executor.py
 ├── handlers.py
-├── process_protective_v1.6.sh
+├── init.py
+├── locales/
+│   ├── __init__.py
+│   ├── en.json
+│   └── ru.json
 ├── modules/
+│   ├── _index.sh
+│   ├── audio_utils.sh
+│   ├── combo_engine.sh
 │   ├── core_init.sh
+│   ├── creative_utils.sh
+│   ├── executor.py
+│   ├── fallback_manager.sh
+│   ├── ffmpeg_driver.sh
+│   ├── file_ops.sh
+│   ├── helpers.sh
+│   ├── manifest.sh
+│   ├── metadata.py
+│   ├── metrics.sh
+│   ├── orchestrator.py
+│   ├── permissions.sh
+│   ├── report_builder.sh
 │   ├── rng_utils.sh
 │   ├── time_utils.sh
-│   ├── file_ops.sh
-│   ├── ffmpeg_driver.sh
-│   ├── audio_utils.sh
-│   ├── creative_utils.sh
-│   ├── combo_engine.sh
-│   ├── metrics.sh
-│   ├── manifest.sh
-│   ├── report_builder.sh
-│   └── fallback_manager.sh
-├── utils/
-│   ├── logger.sh
-│   ├── helpers.sh
-│   ├── safe_exec.sh
+│   ├── core/
+│   │   ├── audit_manager.py
+│   │   ├── presets.py
+│   │   └── seed_utils.py
+│   └── utils/
+│       ├── __init__.py
+│       ├── meta_utils.py
+│       └── video_tools.py
+├── orchestrator.py
+├── phash_check.py
+├── process_protective_v1.6.sh
+├── quality_check.sh
+├── render_queue.py
+├── report_builder.py
+├── requirements.txt
+├── scan_unescaped_parentheses.sh
+├── services/
+│   ├── __init__.py
+│   └── video_processor.py
 ├── tools/
-│   ├── verify_modular_env.sh
-│   ├── uniclon_audit.sh
-│   └── verify_report.log
-└── codex/
-    ├── codex_rules.md
-    └── codex_contract.yml
+│   ├── check_bindings.sh
+│   └── extract_contract.sh
+├── uniclon_audit.sh
+├── uniclon_bot.py
+├── utils/
+│   ├── helpers.sh
+│   ├── logger.sh
+│   └── safe_exec.sh
+├── utils.py
+└── verify_modular_env.sh
 ```
+
+### 🧩 Core Modules
+
+- `modules/core/` — управление аудитом, предустановками и генерацией семян уникализации.
+- `modules/utils/` — общие утилиты для работы с метаданными и видеопост-обработкой.
+
+### 🌐 Localization
+
+- `locales/en.json` и `locales/ru.json` — ключи интерфейса на английском и русском, инициализируемые через `locales/__init__.py`.
+
+### 🛠 Service & Diagnostic Tools
+
+- Скрипты обслуживания: `bootstrap_compat.sh`, `collect_meta.sh`, `process_protective_v1.6.sh`, `quality_check.sh`, `scan_unescaped_parentheses.sh`, `uniclon_audit.sh`, `verify_modular_env.sh`.
+- Инструменты интеграции: `tools/check_bindings.sh`, `tools/extract_contract.sh`.
+
+### 🧠 Services
+
+- `services/video_processor.py` — сервисный слой для высокоуровневой оркестрации рендеринга.
 
 ---
 

@@ -60,6 +60,7 @@ ENABLE_INTRO=${ENABLE_INTRO:-0}
 ENABLE_LUT=${ENABLE_LUT:-0}
 DEVICE_INFO=1
 DRY_RUN=${DRY_RUN:-0}
+: "${VF_FAILURE_PURGE:=0}"
 if ! parse_args "$@"; then
   exit 1
 fi
@@ -246,6 +247,10 @@ validate_video_params() {
 }
 
 cleanup_output_dir_on_failure() {
+  if [ "${VF_FAILURE_PURGE:-0}" -ne 1 ]; then
+    echo "[INFO] Preserving output directory contents (VF_FAILURE_PURGE=0)."
+    return
+  fi
   local out_dir="${OUTPUT_DIR:-}"
   if [ -z "$out_dir" ] || [ ! -d "$out_dir" ]; then
     return

@@ -1357,9 +1357,8 @@ EOF
   # END REGION AI
 
   if [ -z "${FFMPEG_CROP_VALIDATED:-}" ]; then
-    ffmpeg -hide_banner -f lavfi -i testsrc=size=1280x720 \
-      -vf "crop='if(gt(iw,100),100,iw):if(gt(ih,100),100,ih):0:0'" -f null - >/dev/null 2>&1
-    if [ $? -ne 0 ]; then
+    if ! ffmpeg -hide_banner -f lavfi -i testsrc=size=1280x720 \
+      -vf "crop='if(gt(iw,100),100,iw):if(gt(ih,100),100,ih):0:0'" -f null - >/dev/null 2>&1; then
       echo "[WARN] FFmpeg crop validation fallback passed."
       FFMPEG_CROP_VALIDATED=1
       continue

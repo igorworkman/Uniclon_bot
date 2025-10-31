@@ -33,7 +33,7 @@ normalize_ss_value() {
   local fallback="$2"
   local label="$3"
   local context="$4"
-  local sanitized candidate final token_count=0
+  local sanitized candidate="" final token_count=0
 
   sanitized=$(printf '%s' "$raw" | tr -s '[:space:]' ' ')
   sanitized=${sanitized# }
@@ -83,7 +83,7 @@ normalize_duration_value() {
   local fallback="$2"
   local label="$3"
   local context="$4"
-  local sanitized candidate final token_count=0
+  local sanitized candidate="" final token_count=0
   local fallback_value fallback_candidate="" fallback_seconds="" candidate_seconds=""
 
   sanitized=$(printf '%s' "$raw" | tr -s '[:space:]' ' ')

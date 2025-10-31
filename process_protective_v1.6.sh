@@ -1390,6 +1390,7 @@ EOF
     ffmpeg_exit_code=${PIPESTATUS[0]:-$?}
     echo "[ERROR] FFmpeg crashed during copy #$copy_index (exit $ffmpeg_exit_code)"
     ffmpeg_error=true
+  fi
 
   bash -c "$FFMPEG_CMD"
   ffmpeg_exit_code=$?

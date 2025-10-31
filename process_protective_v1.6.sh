@@ -7,6 +7,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$SCRIPT_DIR"
 IFS=$'\n\t'
 
+TARGET_FPS_INPUT="${TARGET_FPS:-}"
+TARGET_FPS=${TARGET_FPS:-30}
+
 # process_protective_v1.6.sh (macOS совместимая версия)
 # Делает N уникальных копий из одного видео, сохраняет в OUTPUT_DIR/
 chmod +x "$BASE_DIR"/modules/*.sh 2>/dev/null || true
@@ -35,6 +38,7 @@ QT_META=1
 STRICT_CLEAN=0
 QUALITY="std"
 AUTO_CLEAN=0
+TARGET_FPS_ENV="${TARGET_FPS_INPUT:-}"
 ENABLE_MIRROR=${ENABLE_MIRROR:-0}
 ENABLE_INTRO=${ENABLE_INTRO:-0}
 ENABLE_LUT=${ENABLE_LUT:-0}
@@ -180,6 +184,10 @@ SRC="$1"
 [ -f "$SRC" ] || { echo "❌ Нет файла: $SRC"; exit 1; }
 COUNT="${2:-1}"
 [[ "$COUNT" =~ ^[0-9]+$ ]] || { echo "❌ count должен быть числом"; exit 1; }
+TOTAL_COPIES="$COUNT"
+SUCCESS_COUNT=0
+FAILED_COUNT=0
+TRUST_SCORE=1.00
 
 SRC_BITRATE="None"
 SRC_BITRATE_RAW=$(ffprobe_exec -v error -select_streams v:0 -show_entries stream=bit_rate -of csv=p=0 "$SRC" 2>/dev/null || true)
@@ -188,6 +196,8 @@ if [ -n "$SRC_BITRATE_RAW" ] && awk -v val="$SRC_BITRATE_RAW" 'BEGIN{val+=0; exi
 fi
 
 ensure_dir "$OUTPUT_DIR"
+OUTPUT_LOG="${OUTPUT_LOG:-$OUTPUT_DIR/process.log}"
+: >"$OUTPUT_LOG"
 
 manifest_init "$MANIFEST_PATH"
 
@@ -687,6 +697,9 @@ generate_copy() {
   local attempt=0
   local combo_preview=""
   local combo_applied=0
+  local render_retry=0
+  local max_render_retry=3
+  local copy_failed=false
   while :; do
     if [ "$combo_applied" -eq 0 ] && [ -n "$CUR_COMBO_STRING" ]; then
       if ! apply_combo_context "$CUR_COMBO_STRING"; then
@@ -713,7 +726,6 @@ generate_copy() {
     local variant_audio_sr="${AUDIO_SR_OPTIONS[0]:-44100}"
     variant_input_basename="$(basename "$SRC")"
     local variant_fs_epoch=""
-    local ffmpeg_error=false
     if variant_payload=$(python3 "$BASE_DIR/modules/utils/video_tools.py" generate \
       --input "$variant_input_basename" \
       --copy-index "$copy_index" \
@@ -762,6 +774,15 @@ generate_copy() {
     elif [ -n "${RAND_FPS:-}" ]; then
       FPS="${RAND_FPS}"
     fi
+
+    # FPS Sync Control
+    TARGET_FPS=${TARGET_FPS:-30}
+    if [ -n "${TARGET_FPS_ENV:-}" ]; then
+      TARGET_FPS="$TARGET_FPS_ENV"
+    elif [ -n "${FPS:-}" ]; then
+      TARGET_FPS="$FPS"
+    fi
+    FPS="$TARGET_FPS"
 
     local base_br
     base_br=$(rand_int "$BR_MIN" "$BR_MAX")
@@ -1156,8 +1177,10 @@ EOF
   [ "$crop_h" -le 0 ] && crop_h=2
   CROP_WIDTH="$crop_w"
   CROP_HEIGHT="$crop_h"
-  local crop_filter="crop=min(iw,${crop_w}):min(ih,${crop_h}):${crop_x}:${crop_y}"
-  local VF="setpts=${STRETCH_FACTOR}*PTS,scale=${scale_w}:${scale_h}:flags=lanczos,setsar=1,${crop_filter}"
+
+  local crop_filter="crop='min(iw,${crop_w}):min(ih,${crop_h}):${crop_x}:${crop_y}'"
+  local VF="fps=${TARGET_FPS},setpts=${STRETCH_FACTOR}*PTS,scale=w=-2:h=${scale_h}:flags=lanczos,setsar=1,${crop_filter}"
+
   local micro_filter
   local extras_chain=""
   for micro_filter in "${VARIANT_MICRO_FILTERS[@]}"; do
@@ -1200,7 +1223,6 @@ EOF
     fi
     VF="${VF},noise=alls=${noise_strength}:allf=t"
   fi
-  VF="${VF},fps=${FPS}"
   PAD_X="$pad_offset_x"
   PAD_Y="$pad_offset_y"
   VF="${VF},drawtext=text='${UID_TAG}':fontcolor=white@0.08:fontsize=16:x=10:y=H-30"
@@ -1262,6 +1284,22 @@ EOF
   fi
   combined_audio_filters=$(sanitize_audio_filters "$combined_audio_filters")
   combined_audio_filters=$(ensure_superequalizer_bounds "$combined_audio_filters")
+  if [[ "$combined_audio_filters" != *"aresample=async=1:first_pts=0"* ]]; then
+    if [ -n "$combined_audio_filters" ]; then
+      combined_audio_filters="${combined_audio_filters},aresample=async=1:first_pts=0"
+    else
+      combined_audio_filters="aresample=async=1:first_pts=0"
+    fi
+  fi
+  if [[ "$combined_audio_filters" != *"atempo=1.0"* ]]; then
+    if [ -n "$combined_audio_filters" ]; then
+      combined_audio_filters="${combined_audio_filters},atempo=1.0"
+    else
+      combined_audio_filters="atempo=1.0"
+    fi
+  fi
+  combined_audio_filters=$(sanitize_audio_filters "$combined_audio_filters")
+  combined_audio_filters=$(ensure_superequalizer_bounds "$combined_audio_filters")
 
   # 🎛️ Рандомизация encoder/software метаданных
   local -a SOFTWARES=(
@@ -1318,6 +1356,14 @@ EOF
     "$ENCODE_TARGET")
   # END REGION AI
 
+  if [ -z "${FFMPEG_CROP_VALIDATED:-}" ]; then
+    if ! ffmpeg -hide_banner -filter_complex "crop='min(iw,100):min(ih,100):0:0'" -f null - < /dev/null 2>/dev/null; then
+      echo "[FATAL] FFmpeg crop filter validation failed. Aborting run."
+      exit 234
+    fi
+    FFMPEG_CROP_VALIDATED=1
+  fi
+
   if [ "$DEBUG" -eq 1 ]; then
     echo "DEBUG copy=$copy_index seed=$SEED fps=$FPS br=${BR}k crf=$CRF maxrate=${MAXRATE}k bufsize=${BUFSIZE}k clip_start=${CLIP_START}s target_duration=$TARGET_DURATION stretch=$STRETCH_FACTOR audio=$AUDIO_PROFILE af='$af_payload' music_track=${MUSIC_VARIANT_TRACK:-none} noise=$NOISE crop=${CROP_W}x${CROP_H}@${CROP_X},${CROP_Y} pad=${PAD_X},${PAD_Y} quality=$QUALITY profile=${PROFILE_VALUE} mirror=${MIRROR_DESC} lut=${LUT_DESC} intro=${INTRO_DESC}"
   fi
@@ -1334,10 +1380,27 @@ EOF
   # REGION AI: safe ffmpeg execution via bash wrapper
   local FFMPEG_CMD="$ffmpeg_cmd_preview"
   local ffmpeg_exit_code=0
+
   if ! bash -c "$FFMPEG_CMD"; then
     ffmpeg_exit_code=${PIPESTATUS[0]:-$?}
     echo "[ERROR] FFmpeg crashed during copy #$copy_index (exit $ffmpeg_exit_code)"
     ffmpeg_error=true
+
+  bash -c "$FFMPEG_CMD"
+  ffmpeg_exit_code=$?
+  if [ "$ffmpeg_exit_code" -ne 0 ]; then
+    render_retry=$((render_retry + 1))
+    echo "❌ FFmpeg failed with exit code $ffmpeg_exit_code"
+    echo "[ERROR] Copy ${copy_index} failed during processing." >>"$OUTPUT_LOG"
+    if [ "$render_retry" -ge "$max_render_retry" ]; then
+      echo "[WARN] Skipped due to FFmpeg failure."
+      FAILED_COUNT=$((FAILED_COUNT + 1))
+      copy_failed=true
+      break
+    fi
+    echo "[WARN] Retrying copy ${copy_index} (${render_retry}/$max_render_retry)…"
+    attempt=$((attempt + 1))
+
     continue
   fi
   # END REGION AI
@@ -1360,10 +1423,10 @@ EOF
     fi
 
     intro_args+=(
-      -vf "scale=${TARGET_W}:${TARGET_H}:flags=lanczos,setsar=1,fps=${FPS},format=yuv420p"
+      -vf "fps=${TARGET_FPS},scale=w=-2:h=${TARGET_H}:flags=lanczos,setsar=1,format=yuv420p"
       -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$VIDEO_LEVEL" -crf "$CRF"
       -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2
-      -af "aresample=${AUDIO_SR},apad,atrim=0:${INTRO_DURATION}" -movflags +faststart "$INTRO_OUTPUT_PATH"
+      -af "aresample=async=1:first_pts=0,atempo=1.0,aresample=${AUDIO_SR},apad,atrim=0:${INTRO_DURATION}" -movflags +faststart "$INTRO_OUTPUT_PATH"
     )
 
     ffmpeg_exec "${intro_args[@]}"
@@ -1379,6 +1442,21 @@ EOF
     OUT="$FINAL_OUT"
   else
     OUT="$ENCODE_TARGET"
+  fi
+
+  # REGION AI: normalize timestamps after render
+  if [ -f "$OUT" ]; then
+    local output_path="$OUT"
+    local sync_path="${output_path%.mp4}_sync.mp4"
+    if [ "$sync_path" = "$output_path" ]; then
+      sync_path="${output_path}_sync.mp4"
+    fi
+    if ffmpeg_exec -y -hide_banner -loglevel warning -i "$output_path" -map 0 -c copy -fflags +genpts "$sync_path"; then
+      mv -f "$sync_path" "$output_path"
+    else
+      echo "⚠️ Не удалось нормализовать таймштампы для $OUT"
+      rm -f "$sync_path" 2>/dev/null || true
+    fi
   fi
 
   # REGION AI: exif randomization bindings
@@ -1558,11 +1636,22 @@ EOF
   fi
   local uniqueness_verdict="OK" manager_output="" reason_line="" fallback_reason_entry=""
   local combo_used_label="${combo_preview:-${CUR_COMBO_STRING:-base}}"
-  while :; do
-    metrics=$(metrics_compute_copy_metrics "$SRC" "$OUT"); IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
-    if (( uniqueness_guard )); then
-      echo "[WARN] Uniqueness low but accepted (first copies)."
-      fallback_reason_entry="first_copies"
+    while :; do
+      metrics=$(metrics_compute_copy_metrics "$SRC" "$OUT"); IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
+      if [[ -z "$metrics_ssim" || "$metrics_ssim" == "0.000" || "$metrics_ssim" == "0.0" || "$metrics_psnr" == "0.0" || "$metrics_psnr" == "0.000" ]]; then
+        echo "⚠️ Metrics missing for copy ${copy_index}, marking as failed."
+        echo "[ERROR] Copy ${copy_index} metrics unavailable." >>"$OUTPUT_LOG"
+        if [ "${#RUN_FILES[@]}" -gt 0 ]; then
+          remove_last_generated 1
+        fi
+        rm -f "$OUT" 2>/dev/null || true
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        copy_failed=true
+        break 2
+      fi
+      if (( uniqueness_guard )); then
+        echo "[WARN] Uniqueness low but accepted (first copies)."
+        fallback_reason_entry="first_copies"
       uniqueness_verdict="OK"
       break
     fi
@@ -1612,6 +1701,22 @@ EOF
       fallback_af_chain=$(compose_af_chain "$base_af" "$fallback_af_extra")
       fallback_af_chain=$(ensure_superequalizer_bounds "$fallback_af_chain")
       fallback_af_chain=$(sanitize_audio_filters "$fallback_af_chain")
+      if [[ "$fallback_af_chain" != *"aresample=async=1:first_pts=0"* ]]; then
+        if [ -n "$fallback_af_chain" ]; then
+          fallback_af_chain="${fallback_af_chain},aresample=async=1:first_pts=0"
+        else
+          fallback_af_chain="aresample=async=1:first_pts=0"
+        fi
+      fi
+      if [[ "$fallback_af_chain" != *"atempo=1.0"* ]]; then
+        if [ -n "$fallback_af_chain" ]; then
+          fallback_af_chain="${fallback_af_chain},atempo=1.0"
+        else
+          fallback_af_chain="atempo=1.0"
+        fi
+      fi
+      fallback_af_chain=$(sanitize_audio_filters "$fallback_af_chain")
+      fallback_af_chain=$(ensure_superequalizer_bounds "$fallback_af_chain")
       ffmpeg_exec -y -hide_banner -loglevel warning -ss "$CLIP_START" -i "$SRC" \
         -t "$CLIP_DURATION" -c:v libx264 -preset medium -crf 24 \
         -vf "$fallback_vf_chain" \
@@ -1623,6 +1728,9 @@ EOF
     fi
     break
   done
+  if [ "$copy_failed" = true ]; then
+    return 1
+  fi
   fallback_soft_register_result "$copy_index" "$uniqueness_verdict"
   local uniqueness_attempts=$((fallback_attempts + 1))
   RUN_FALLBACK_REASON+=("$fallback_reason_entry")
@@ -1643,6 +1751,7 @@ EOF
     trust_score_value=$(python3 "$BASE_DIR/modules/utils/video_tools.py" score --ssim "$metrics_ssim" --phash "$metrics_phash" 2>/dev/null || printf '0.00')
   fi
   RUN_TRUST_SCORE+=("$trust_score_value")
+  SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
 
   echo "✅ done: $OUT"
   printf '[Uniclon v1.7] Saved as: %s  (seed=%s, software=%s)\n' \
@@ -1786,6 +1895,28 @@ run_self_audit_pipeline() {
 }
 
 run_self_audit_pipeline
+
+SUCCESS_COUNT=${#RUN_FILES[@]}
+echo "✅ Успешно: $SUCCESS_COUNT/$TOTAL_COPIES"
+echo "⚠️ Ошибки: $FAILED_COUNT"
+if [ "${#RUN_TRUST_SCORE[@]}" -gt 0 ]; then
+  TRUST_SCORE=$(printf '%s\n' "${RUN_TRUST_SCORE[@]}" | awk '
+    BEGIN { sum = 0; count = 0 }
+    /^[0-9]+(\.[0-9]+)?$/ { sum += $1; count++ }
+    END {
+      if (count > 0) {
+        printf "%.2f", sum / count
+      }
+    }
+  ')
+  if [ -z "$TRUST_SCORE" ]; then
+    TRUST_SCORE=1.00
+  fi
+fi
+if [ "$FAILED_COUNT" -gt 0 ]; then
+  TRUST_SCORE=$(awk -v score="$TRUST_SCORE" 'BEGIN{printf "%.2f", score * 0.6}')
+fi
+echo "TrustScore: $TRUST_SCORE"
 
 echo "Audit Report:"
 total_outputs=${#RUN_FILES[@]}

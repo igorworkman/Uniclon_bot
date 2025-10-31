@@ -193,11 +193,13 @@ need() { command -v "$1" >/dev/null 2>&1 || { echo "❌ Требуется $1"; 
 need ffmpeg
 need ffprobe
 need exiftool
+need bc
 
 usage() { echo "Usage: $0 <input_video> [count]"; exit 1; }
 [ "${1:-}" ] || usage
 SRC="$1"
 [ -f "$SRC" ] || { echo "❌ Нет файла: $SRC"; exit 1; }
+INPUT_FILE="$SRC"
 COUNT="${2:-1}"
 [[ "$COUNT" =~ ^[0-9]+$ ]] || { echo "❌ count должен быть числом"; exit 1; }
 TOTAL_COPIES="$COUNT"
@@ -214,6 +216,86 @@ fi
 ensure_dir "$OUTPUT_DIR"
 OUTPUT_LOG="${OUTPUT_LOG:-$OUTPUT_DIR/process.log}"
 : >"$OUTPUT_LOG"
+
+AUDIO_MODE="normal"
+
+validate_video_params() {
+  local width="${1:-0}"
+  local height="${2:-0}"
+
+  if ! [[ "$width" =~ ^[0-9]+$ ]]; then
+    width=0
+  fi
+  if ! [[ "$height" =~ ^[0-9]+$ ]]; then
+    height=0
+  fi
+
+  if [ "$width" -lt 320 ]; then
+    echo "[WARN] Width too small ($width), corrected to 320"
+    width=320
+  fi
+  if [ "$height" -lt 480 ]; then
+    echo "[WARN] Height too small ($height), corrected to 480"
+    height=480
+  fi
+
+  width=$((width - width % 2))
+  height=$((height - height % 2))
+
+  echo "$width $height"
+}
+
+validate_fps() {
+  local fps="${1:-0}"
+  if ! printf '%s' "$fps" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
+    fps=30
+  fi
+  if (( $(echo "$fps < 15" | bc -l) )); then
+    echo "[WARN] FPS too low ($fps), adjusted to 24"
+    fps=24
+  elif (( $(echo "$fps > 60" | bc -l) )); then
+    echo "[WARN] FPS too high ($fps), adjusted to 60"
+    fps=60
+  fi
+  printf '%s\n' "$fps"
+}
+
+validate_bitrate() {
+  local br="${1:-0}"
+  if ! [[ "$br" =~ ^[0-9]+$ ]]; then
+    br=0
+  fi
+  if [ "$br" -lt 800 ]; then
+    echo "[WARN] Bitrate too low ($br kbps), raised to 1200"
+    br=1200
+  elif [ "$br" -gt 20000 ]; then
+    echo "[WARN] Bitrate too high ($br kbps), limited to 12000"
+    br=12000
+  fi
+  printf '%s\n' "$br"
+}
+
+validate_audio() {
+  local input_file="${1:-}" 
+  if [ -z "$input_file" ]; then
+    AUDIO_MODE="mute"
+    return
+  fi
+  local audio_present
+  if ffprobe -v error -select_streams a:0 -show_entries stream=codec_type -of csv=p=0 "$input_file" 2>/dev/null | grep -q audio; then
+    audio_present=1
+  else
+    audio_present=0
+  fi
+  if [ "$audio_present" -eq 0 ]; then
+    echo "[WARN] No audio stream detected — switching to silent mode."
+    AUDIO_MODE="mute"
+  else
+    AUDIO_MODE="normal"
+  fi
+}
+
+validate_audio "$INPUT_FILE"
 
 manifest_init "$MANIFEST_PATH"
 
@@ -817,6 +899,8 @@ generate_copy() {
       TARGET_FPS="$FPS"
     fi
     FPS="$TARGET_FPS"
+    FPS=$(validate_fps "$FPS")
+    TARGET_FPS="$FPS"
 
     local base_br
     base_br=$(rand_int "$BR_MIN" "$BR_MAX")
@@ -836,6 +920,7 @@ generate_copy() {
     if [ -n "$CBR" ]; then
       BR=$(awk -v b="$BR" -v m="$CBR" 'BEGIN{b+=0;m+=0;if(m<=0)m=1;printf "%.0f",b*m}')
     fi
+    BR=$(validate_bitrate "$BR")
 
     compute_duration_profile
 
@@ -1216,6 +1301,11 @@ PY
   fi
   local crop_w="$crop_width_candidate"
   local crop_h="$crop_height_candidate"
+  read SAFE_W SAFE_H < <(validate_video_params "$crop_w" "$crop_h")
+  crop_w="$SAFE_W"
+  crop_h="$SAFE_H"
+  CROP_W="$SAFE_W"
+  CROP_H="$SAFE_H"
   local crop_x="$CROP_X"
   local crop_y="$CROP_Y"
   # --- CropSafe Validation ---
@@ -1308,6 +1398,13 @@ PY
 
   local vf_payload
   vf_payload=$(ensure_vf_format "$VF")
+  local VF_CHAIN="$vf_payload"
+  if ! ffmpeg -hide_banner -loglevel error -f lavfi -i "color=c=black:s=16x16:d=0.1" -vf "$VF_CHAIN" -f null - 2>/dev/null; then
+    echo "[FATAL] Invalid VF chain detected — attempting safe fallback."
+    VF_CHAIN="scale=1080:1920:flags=lanczos,fps=$FPS,format=yuv420p"
+  fi
+  vf_payload="$VF_CHAIN"
+  VF="$VF_CHAIN"
   local af_payload
   af_payload=$(compose_af_chain "$AFILTER" "$CUR_AF_EXTRA")
   af_payload=$(ensure_superequalizer_bounds "$af_payload")
@@ -1363,31 +1460,47 @@ PY
   fi
   combined_audio_filters=$(sanitize_audio_filters "$combined_audio_filters")
   combined_audio_filters=$(ensure_superequalizer_bounds "$combined_audio_filters")
+  if [ "${AUDIO_MODE:-normal}" = "mute" ]; then
+    audio_stream_present=0
+    combined_audio_filters=""
+  fi
 
   FFMPEG_ARGS=(
     -y -hide_banner -loglevel warning -ignore_unknown
     -analyzeduration 200M -probesize 200M
     -ss "$CLIP_START" -i "$SRC"
   )
-  if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
-    FFMPEG_ARGS+=(-analyzeduration 200M -probesize 200M -ss "$CLIP_START" -i "$MUSIC_VARIANT_TRACK")
-    audio_input_index=1
-  elif [ "$audio_stream_present" -eq 0 ]; then
-    FFMPEG_ARGS+=(-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100)
-    audio_input_index=1
+  if [ "${AUDIO_MODE:-normal}" != "mute" ]; then
+    if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
+      FFMPEG_ARGS+=(-analyzeduration 200M -probesize 200M -ss "$CLIP_START" -i "$MUSIC_VARIANT_TRACK")
+      audio_input_index=1
+    elif [ "$audio_stream_present" -eq 0 ]; then
+      FFMPEG_ARGS+=(-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100)
+      audio_input_index=1
+    fi
   fi
   FFMPEG_ARGS+=(-map 0:v:0)
-  if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
-    FFMPEG_ARGS+=(-map "${audio_input_index}:a:0?" -shortest)
-  elif [ "$audio_stream_present" -eq 1 ]; then
-    FFMPEG_ARGS+=(-map "0:a:0?")
-  else
-    FFMPEG_ARGS+=(-map "${audio_input_index}:a:0" -shortest)
+  if [ "${AUDIO_MODE:-normal}" != "mute" ]; then
+    if [ "$MUSIC_VARIANT" -eq 1 ] && [ -n "$MUSIC_VARIANT_TRACK" ]; then
+      FFMPEG_ARGS+=(-map "${audio_input_index}:a:0?" -shortest)
+    elif [ "$audio_stream_present" -eq 1 ]; then
+      FFMPEG_ARGS+=(-map "0:a:0?")
+    else
+      FFMPEG_ARGS+=(-map "${audio_input_index}:a:0" -shortest)
+    fi
   fi
   FFMPEG_ARGS+=(-t "$CLIP_DURATION" -c:v libx264 -preset slow -profile:v "$VIDEO_PROFILE" -level "$CODEC_LEVEL" -crf "$CRF"
     -b:v "${BR}k" -maxrate "${MAXRATE}k" -bufsize "${BUFSIZE}k"
-    -vf "$vf_payload"
-    -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2 -af "$combined_audio_filters"
+    -vf "$vf_payload")
+  if [ "${AUDIO_MODE:-normal}" = "mute" ]; then
+    FFMPEG_ARGS+=(-an)
+  else
+    FFMPEG_ARGS+=(-c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2)
+    if [ -n "$combined_audio_filters" ]; then
+      FFMPEG_ARGS+=(-af "$combined_audio_filters")
+    fi
+  fi
+  FFMPEG_ARGS+=(
     -movflags +faststart
     -map_metadata -1
     -metadata location=""

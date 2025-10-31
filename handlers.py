@@ -39,6 +39,7 @@ from utils import (
     parse_filename_and_copies,
     perform_self_audit,
     cleanup_user_outputs,
+    auto_cleanup_temp_dirs,
 )
 from downloader import download_telegram_file
 from executor import (
@@ -1243,6 +1244,11 @@ async def _run_and_send(
                 )
             except Exception:
                 logger.exception("Failed to send audit file %s", audit_summary.report_path)
+
+    try:
+        asyncio.create_task(asyncio.to_thread(auto_cleanup_temp_dirs))
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[Cleanup] Auto cleanup failed to start: {e}")
 
     if CLEAN_UP_INPUT:
         try:

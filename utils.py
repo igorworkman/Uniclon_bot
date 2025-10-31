@@ -1,16 +1,47 @@
 
+import logging
+import random
 import re
+import shutil
+import time
 from pathlib import Path
 from typing import Optional, Sequence, Tuple
 
 # REGION AI: imports
-from config import BASE_DIR
+from config import BASE_DIR, CHECKS_DIR, OUTPUT_DIR
 # END REGION AI
 
 
 # REGION AI: dynamic imports
 from importlib import import_module
 # END REGION AI
+
+
+logger = logging.getLogger(__name__)
+
+
+def auto_cleanup_temp_dirs(threshold_hours: int = 6) -> int:
+    """Удаляет временные файлы и каталоги старше указанного порога (по умолчанию 6 часов)."""
+    now = time.time()
+    cleaned = 0
+    targets = [BASE_DIR / "temp", OUTPUT_DIR / "tmp", CHECKS_DIR / "tmp"]
+    for folder in targets:
+        if not folder.exists():
+            continue
+        for item in folder.iterdir():
+            try:
+                age_hours = (now - item.stat().st_mtime) / 3600
+                if age_hours > threshold_hours:
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+                    cleaned += 1
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[Cleanup] Failed to remove {item}: {e}")
+    if cleaned > 0:
+        logger.info(f"[Cleanup] Auto-removed {cleaned} old temp files (>{threshold_hours}h)")
+    return cleaned
 
 
 def parse_copies_from_caption(caption: Optional[str]) -> Optional[int]:
@@ -36,6 +67,9 @@ def parse_filename_and_copies(text: Optional[str]) -> Optional[Tuple[Path, int]]
 
 # REGION AI: bot helpers
 async def perform_self_audit(source: Path, generated_files: Sequence[Path]):
+    if random.random() < 0.15:
+        cleaned = auto_cleanup_temp_dirs()
+        logger.info(f"[Cleanup] Periodic cleanup triggered ({cleaned} items)")
     module = import_module("uniclon_bot")
     impl = getattr(module, "_perform_self_audit_impl")
     return await impl(source, generated_files)

@@ -436,14 +436,13 @@ async def _perform_self_audit_impl(
     )
 
     if invalid_metrics_detected and trust_score > 5.0:
-        adjusted_score = min(trust_score, 5.0)
-        if adjusted_score < trust_score:
-            logger.info(
-                "[QC] TrustScore adjusted: %.1f → %.1f (invalid metrics)",
-                trust_score,
-                adjusted_score,
-            )
-            trust_score = adjusted_score
+        adjusted_score = max(3.0, trust_score - 2.0)
+        logger.info(
+            "[QC] TrustScore adjusted: %.1f → %.1f (invalid metrics detected)",
+            trust_score,
+            adjusted_score,
+        )
+        trust_score = adjusted_score
 
     trust_label, trust_emoji = _derive_trust_label(trust_score, profile_label)
 
@@ -451,7 +450,7 @@ async def _perform_self_audit_impl(
     if copies_created == 0:
         copies_created = len(metrics_map)
 
-    return AuditSummary(
+    result = AuditSummary(
         copies_created=copies_created,
         avg_bitrate_kbps=round(avg_bitrate_kbps, 1) if avg_bitrate_kbps else 0.0,
         avg_bitrate_mbps=avg_bitrate_mbps,
@@ -475,9 +474,13 @@ async def _perform_self_audit_impl(
         low_uniqueness_message=fallback_message if fallback_triggered else None,
     )
 
+    asyncio.create_task(asyncio.to_thread(auto_cleanup_temp_dirs))
+
+    return result
+
 
 # REGION AI: handlers imports
-from utils import cleanup_user_outputs
+from utils import auto_cleanup_temp_dirs, cleanup_user_outputs
 from handlers import (
     get_user_output_paths,
     router,

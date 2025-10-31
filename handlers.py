@@ -9,14 +9,20 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple, TYPE_CHECKING
 
 import psutil
-from aiogram import Bot, F, Router
-from aiogram.filters import Command, CommandStart
+from aiogram import Bot, F, Router, types
+from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.markdown import hcode
 from aiogram.types.input_file import FSInputFile
+
+from loader import bot, dp
+
+import aiogram.dispatcher as _dispatcher_module
+from aiogram.fsm.context import FSMContext as _FSMContext
+from aiogram.fsm.state import State, StatesGroup
+
+FSMContext = getattr(_dispatcher_module, "FSMContext", None) or _FSMContext
 
 # REGION AI: imports
 from config import (
@@ -48,25 +54,8 @@ if TYPE_CHECKING:
     from uniclon_bot import UserTaskQueue
 
 
-command_router = Router(name="command_router")
 router = Router(name="main_router")
 logger = logging.getLogger(__name__)
-
-
-_RESTART_INLINE_KEYBOARD = InlineKeyboardMarkup(
-    inline_keyboard=[[InlineKeyboardButton(text="🔄 Restart", callback_data="restart")]]
-)
-
-
-async def _send_welcome_message(message: Message) -> None:
-    await message.answer(
-        "👋 Привет, я **Uniclon v1.8** — бот для уникализации видео.\n\n"
-        "🎥 Отправь MP4-файл и в подписи укажи количество копий (1–5).\n"
-        "Каждая копия будет приходить по одной, как только готова.\n\n"
-        "🔄 Для сброса состояния нажми **RESTART**.",
-        reply_markup=_RESTART_INLINE_KEYBOARD,
-        parse_mode="Markdown",
-    )
 
 
 def _cleanup_restart_data() -> None:
@@ -100,35 +89,46 @@ def _log_restart_event(user_id: Optional[int]) -> None:
         logger.exception("Failed to log restart event for user %s", user_id)
 
 
-async def _initialize_start_flow(message: Message, state: FSMContext) -> None:
-    await state.clear()
+async def _reset_state(state: FSMContext) -> None:
+    finish = getattr(state, "finish", None)
+    if callable(finish):
+        await finish()
+    else:
+        await state.clear()
+
+
+@dp.message_handler(commands=["start"], state="*")
+async def start_command(message: types.Message, state: FSMContext) -> None:
+    await _reset_state(state)
     _cleanup_restart_data()
-    await _send_welcome_message(message)
+    text = (
+        "👋 Привет! Я Uniclon — бот для создания уникализированных копий видео.\n\n"
+        "📤 Отправь мне видеофайл и напиши число копий (например: 10), чтобы я сделал уникальные версии.\n\n"
+        "💡 Используй кнопку '🔄 Restart', если хочешь начать заново."
+    )
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton(text="🔄 Restart", callback_data="restart"))
+    await message.answer(text, reply_markup=keyboard)
     await state.set_state(VideoUpload.waiting_for_video)
 
 
-@command_router.message(CommandStart())
-async def start_command(message: Message, state: FSMContext) -> None:
-    await _initialize_start_flow(message, state)
-
-
-@command_router.message(F.text == "🔄 RESTART")
+@router.message(F.text == "🔄 RESTART")
 async def restart_bot(message: Message, state: FSMContext) -> None:
-    await _initialize_start_flow(message, state)
+    await start_command(message, state)
     user_id = message.from_user.id if message.from_user else None
     _log_restart_event(user_id)
 
 
-@router.callback_query(lambda c: c.data == "restart")
-async def restart_callback(call: CallbackQuery, state: FSMContext):
-    if hasattr(state, "finish"):
-        await state.finish()
-    else:
-        await state.clear()
+@dp.callback_query_handler(lambda c: c.data == "restart")
+async def restart_callback(call: types.CallbackQuery, state: FSMContext) -> None:
+    await _reset_state(state)
     message = call.message
     if message is None:
         logger.warning("Restart callback received without an associated message")
-        await call.answer("Не удалось перезапустить бот. Попробуйте ещё раз через /start.", show_alert=True)
+        await call.answer(
+            "Не удалось перезапустить бот. Попробуйте ещё раз через /start.",
+            show_alert=True,
+        )
         return
     await start_command(message, state)
     user_id = call.from_user.id if call.from_user else None

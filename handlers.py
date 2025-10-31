@@ -1286,6 +1286,11 @@ async def _run_and_send(
             except Exception:
                 logger.exception("Failed to send audit file %s", audit_summary.report_path)
 
+    try:
+        asyncio.create_task(asyncio.to_thread(auto_cleanup_temp_dirs))
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[Cleanup] Auto cleanup failed to start: {e}")
+
     if CLEAN_UP_INPUT:
         try:
             os.remove(input_path)

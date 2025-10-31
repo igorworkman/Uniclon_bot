@@ -20,6 +20,7 @@ BRAND_TAGS=("mp42" "isom" "iso6" "avc1")
 
 TARGET_FPS_INPUT="${TARGET_FPS:-}"
 TARGET_FPS=${TARGET_FPS:-30}
+AUDIO_INTENSITY="${AUDIO_INTENSITY:-medium}" # gentle | medium | strong
 
 # process_protective_v1.6.sh (macOS совместимая версия)
 # Делает N уникальных копий из одного видео, сохраняет в OUTPUT_DIR/
@@ -580,6 +581,24 @@ sanitize_audio_filters() {
   chain="${chain%,}"
   [ -z "$chain" ] && chain="anull"
   printf '%s' "$chain"
+}
+
+generate_audio_chain() {
+  local level="${1:-medium}"
+  case "$level" in
+    gentle)
+      echo "atempo=$(awk -v r=\"$RANDOM\" 'BEGIN{s=(r%3-1)*0.01;print 1+s}')"
+      ;;
+    medium)
+      echo "highpass=f=150,lowpass=f=8000,volume=0.98,atempo=$(awk -v r=\"$RANDOM\" 'BEGIN{s=(r%5-2)*0.01;print 1+s}')"
+      ;;
+    strong)
+      echo "asetrate=44100*1.01,aresample=44100,atempo=0.97,aecho=0.8:0.9:100:0.3,highpass=f=200,lowpass=f=7500,volume=0.95"
+      ;;
+    *)
+      echo "anull"
+      ;;
+  esac
 }
 
 ensure_superequalizer_bounds() {
@@ -1309,6 +1328,15 @@ PY
     AUDIO_CODEC="$audio_info"
   fi
   AUDIO_CODEC=${AUDIO_CODEC:-none}
+
+  local audio_profile_chain="anull"
+  if ffprobe -v error -select_streams a:0 -show_entries stream=codec_type -of csv=p=0 "$SRC" | grep -q audio; then
+    audio_profile_chain="$(generate_audio_chain "$AUDIO_INTENSITY")"
+    echo "[AUDIO] Using intensity profile: $AUDIO_INTENSITY → $audio_profile_chain"
+  else
+    echo "[AUDIO] No audio stream detected — skipping audio filters."
+  fi
+  AUDIO_FILTER="$audio_profile_chain"
   AUDIO_CHAIN=$(audio_guard_chain "$AUDIO_CODEC" "$af_payload")
   if [ -z "${AUDIO_FILTER:-}" ]; then
     AUDIO_FILTER="anull"

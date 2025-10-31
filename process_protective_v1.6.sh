@@ -1334,10 +1334,9 @@ EOF
   # REGION AI: safe ffmpeg execution via bash wrapper
   local FFMPEG_CMD="$ffmpeg_cmd_preview"
   local ffmpeg_exit_code=0
-  bash -c "$FFMPEG_CMD"
-  ffmpeg_exit_code=$?
-  if [ "$ffmpeg_exit_code" -ne 0 ]; then
-    echo "[ERROR] FFmpeg crashed during copy #$copy_index"
+  if ! bash -c "$FFMPEG_CMD"; then
+    ffmpeg_exit_code=${PIPESTATUS[0]:-$?}
+    echo "[ERROR] FFmpeg crashed during copy #$copy_index (exit $ffmpeg_exit_code)"
     ffmpeg_error=true
     continue
   fi

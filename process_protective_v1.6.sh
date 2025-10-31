@@ -1219,6 +1219,18 @@ EOF
   fi
   combined_audio_filters=$(sanitize_audio_filters "$combined_audio_filters")
   combined_audio_filters=$(ensure_superequalizer_bounds "$combined_audio_filters")
+
+  # 🎛️ Рандомизация encoder/software метаданных
+  local -a SOFTWARES=(
+    "CapCut 12.3.3"
+    "VN 2.14.2"
+    "KineMaster 7.1.1"
+    "InShot 3.2.0"
+    "AlightMotion 5.0.9"
+  )
+  local RANDOM_SOFTWARE="${SOFTWARES[$RANDOM % ${#SOFTWARES[@]}]}"
+  SOFTWARE_TAG="$RANDOM_SOFTWARE"
+
   FFMPEG_ARGS=(
     -y -hide_banner -loglevel warning -ignore_unknown
     -analyzeduration 200M -probesize 200M
@@ -1255,7 +1267,7 @@ EOF
     -metadata minor_version="$MINOR_VERSION_TAG"
     -metadata compatible_brands="$COMPAT_BRANDS_TAG"
     -metadata encoder="$ENCODER_TAG"
-    -metadata software="$SOFTWARE_TAG"
+    -metadata software="$RANDOM_SOFTWARE"
     -metadata creation_time="$CREATION_TIME"
     -metadata title="$TITLE"
     -metadata description="$DESCRIPTION"

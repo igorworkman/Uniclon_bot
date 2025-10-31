@@ -108,25 +108,28 @@ compose_vf_chain() {
 
 ensure_vf_format() {
   local payload="$1"
-  local payload_safe payload_raw
+  local payload_safe payload_raw final_chain
   payload_safe=$(safe_vf "$payload")
   payload_raw=$(creative_unwrap_vf "$payload_safe")
   if [ -z "$payload_raw" ]; then
-    CREATIVE_LAST_VF_SAFE=$(safe_vf "format=yuv420p")
-    printf '%s' "format=yuv420p"
-    return
+    final_chain="format=yuv420p"
+  else
+    case ",${payload_raw}," in
+      *,format=yuv420p,*)
+        final_chain="$payload_raw"
+        ;;
+      *)
+        final_chain="${payload_raw},format=yuv420p"
+        ;;
+    esac
   fi
-  case ",${payload_raw}," in
-    *,format=yuv420p,*)
-      CREATIVE_LAST_VF_SAFE=$(safe_vf "$payload_raw")
-      printf '%s' "$payload_raw"
-      ;;
-    *)
-      payload_raw="${payload_raw},format=yuv420p"
-      CREATIVE_LAST_VF_SAFE=$(safe_vf "$payload_raw")
-      printf '%s' "$payload_raw"
-      ;;
-  esac
+
+  if [[ ",${final_chain}," != *",setpts=(1+(random(0)*0.001))*PTS,"* ]]; then
+    final_chain="${final_chain},setpts=(1+(random(0)*0.001))*PTS"
+  fi
+
+  CREATIVE_LAST_VF_SAFE=$(safe_vf "$final_chain")
+  printf '%s' "$final_chain"
 }
 
 creative_pick_mirror() {

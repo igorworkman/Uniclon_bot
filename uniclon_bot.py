@@ -52,6 +52,16 @@ async def periodic_preview_scan(interval: int = 120):
                 flag.unlink(missing_ok=True)
         await asyncio.sleep(interval)
 
+
+async def on_startup(bot: Bot) -> None:
+    asyncio.create_task(periodic_preview_scan())
+    logger.info("✅ Dispatcher started successfully")
+
+
+async def on_shutdown(bot: Bot) -> None:
+    logger.info("🧩 Dispatcher shutdown complete")
+
+
 def log_render_error(input_path: Path, code: int) -> None:
     """Log rendering errors with a shared format for downstream diagnostics."""
 
@@ -713,7 +723,8 @@ def make_dispatcher() -> Dispatcher:
     dp.include_router(router)
     dp.message.register(handle_clean_command, Command("clean"))
     dp.message.register(handle_video)
-    dp.startup.register(lambda _: asyncio.create_task(periodic_preview_scan()))
+    dp.startup.register(on_startup)
+    dp.shutdown.register(on_shutdown)
     logger.info("✅ Dispatcher initialized (start/restart ready)")
     make_dispatcher._configured = True  # type: ignore[attr-defined]
     return dp

@@ -38,6 +38,20 @@ CHECKS_DIR.mkdir(parents=True, exist_ok=True)
 logger = logging.getLogger(__name__)
 
 
+
+async def periodic_preview_scan(interval: int = 120):
+    from utils import BASE_DIR as _base_dir, CHECKS_DIR as _utils_checks_dir  # noqa: F401
+
+    while True:
+        flags = (CHECKS_DIR / "preview_flags").glob("*.flag")
+        for flag in flags:
+            stem = flag.stem
+            previews = list((CHECKS_DIR / "previews").glob(f"{stem}*.png"))
+            if previews:
+                logger.info("[Preview] Confirmed for %s (%d found)", stem, len(previews))
+                flag.unlink(missing_ok=True)
+        await asyncio.sleep(interval)
+
 def log_render_error(input_path: Path, code: int) -> None:
     """Log rendering errors with a shared format for downstream diagnostics."""
 
@@ -52,6 +66,7 @@ def log_render_error(input_path: Path, code: int) -> None:
         code,
         reason,
     )
+
 
 
 @dataclass
@@ -685,6 +700,7 @@ def make_dispatcher() -> Dispatcher:
     dp.include_router(router)
     dp.message.register(handle_clean_command, Command("clean"))
     dp.message.register(handle_video)
+    dp.startup.register(lambda _: asyncio.create_task(periodic_preview_scan()))
     logger.info("✅ Dispatcher initialized (start/restart ready)")
     make_dispatcher._configured = True  # type: ignore[attr-defined]
     return dp

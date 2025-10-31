@@ -15,7 +15,14 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 # REGION AI: imports
 from adaptive_tuner import get_tuned_params, record_render_result
-from config import ECO_MODE, SCRIPT_PATH, OUTPUT_DIR, NO_DEVICE_INFO, PLATFORM_PRESETS
+from config import (
+    ECO_MODE,
+    SCRIPT_PATH,
+    OUTPUT_DIR,
+    NO_DEVICE_INFO,
+    PLATFORM_PRESETS,
+    CHECKS_DIR,
+)
 from report_builder import build_uniqueness_report
 from render_queue import acquire_render_slot
 from orchestrator import add_task as orchestrator_add_task, finish_task as orchestrator_finish_task
@@ -559,7 +566,15 @@ async def process_copies_sequentially(
                 outputs = [Path(p) for p in payload.get("outputs", []) if p]
                 if not outputs:
                     raise RuntimeError("no output produced")
-                results.append({"index": idx, "path": outputs[0]})
+                output_path = outputs[0]
+                results.append({"index": idx, "path": output_path})
+                try:
+                    logger.info("[Preview] Marking %s for preview export", output_path.name)
+                    (Path(CHECKS_DIR) / "preview_flags").mkdir(parents=True, exist_ok=True)
+                    flag_file = CHECKS_DIR / "preview_flags" / f"{output_path.stem}.flag"
+                    flag_file.touch(exist_ok=True)
+                except Exception:
+                    logger.exception("Failed to mark %s for preview export", output_path.name)
                 break
             except asyncio.TimeoutError:
                 results.append({"index": idx, "error": "timeout"})

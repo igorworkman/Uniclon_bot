@@ -7,6 +7,17 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$SCRIPT_DIR"
 IFS=$'\n\t'
 
+SOFTWARE_POOL=(
+  "CapCut 12.3.3"
+  "VN 2.14.2"
+  "InShot 1.920"
+  "Clips 3.2.1"
+  "Filmora 12.1.0"
+  "Mobile Camera 1.0"
+)
+
+BRAND_TAGS=("mp42" "isom" "iso6" "avc1")
+
 TARGET_FPS_INPUT="${TARGET_FPS:-}"
 TARGET_FPS=${TARGET_FPS:-30}
 
@@ -15,6 +26,10 @@ TARGET_FPS=${TARGET_FPS:-30}
 chmod +x "$BASE_DIR"/modules/*.sh 2>/dev/null || true
 export OUTPUT_DIR="${OUTPUT_DIR:-$BASE_DIR/output}"
 mkdir -p "$OUTPUT_DIR"
+LOG_DIR="$OUTPUT_DIR/logs"
+LOG_FILE="$LOG_DIR/last_run.log"
+mkdir -p "$LOG_DIR"
+: >"$LOG_FILE"
 . "$BASE_DIR/bootstrap_compat.sh"
 . "$BASE_DIR/modules/fallback_manager.sh"
 . "$BASE_DIR/modules/manifest.sh"
@@ -1024,30 +1039,50 @@ EOF
     BUFSIZE=$((BR * 2 + RATE_PAD * 2))
   fi
 
-  if [ "$variant_ok" -eq 1 ] && [ -n "${RAND_SOFTWARE:-}" ] && [ -n "${RAND_ENCODER:-}" ]; then
+  if [ -n "${RAND_SOFTWARE:-}" ]; then
     SOFTWARE_TAG="${RAND_SOFTWARE}"
-    ENCODER_TAG="${RAND_ENCODER}"
-    if [ "$(rand_int 0 1)" -eq 0 ]; then
-      MAJOR_BRAND_TAG="mp42"
-    else
-      MAJOR_BRAND_TAG="isom"
-    fi
-    MINOR_VERSION_TAG=$(rand_int 0 512)
-    local compat_list=("isommp42" "mp42isom" "iso6mp42")
-    local compat_idx
-    compat_idx=$(rand_int 0 $(( ${#compat_list[@]} - 1 )))
-    COMPAT_BRANDS_TAG="${compat_list[$compat_idx]}"
   else
-    pick_software_encoder "$PROFILE_VALUE" "$SEED_HEX"; CSOFT=""
+    local software_idx=$((RANDOM % ${#SOFTWARE_POOL[@]}))
+    SOFTWARE_TAG="${SOFTWARE_POOL[$software_idx]}"
+  fi
+
+  if [ -n "${RAND_ENCODER:-}" ]; then
+    ENCODER_TAG="${RAND_ENCODER}"
+  else
+    ENCODER_TAG=$(printf 'Lavf62.%d.%d' $((RANDOM % 10 + 1)) $((RANDOM % 120)))
+  fi
+
+  if [ -n "${RAND_MAJOR_BRAND:-}" ]; then
+    MAJOR_BRAND_TAG="${RAND_MAJOR_BRAND}"
+  else
+    local brand_idx=$((RANDOM % ${#BRAND_TAGS[@]}))
+    MAJOR_BRAND_TAG="${BRAND_TAGS[$brand_idx]}"
   fi
   CSOFT=""
+  MINOR_VERSION_TAG=$(rand_int 0 512)
+  COMPAT_BRANDS_TAG="mp42isom"
 
   if [ -n "${RAND_CREATION_TIME:-}" ]; then
     CREATION_TIME="${RAND_CREATION_TIME}"
     CREATION_TIME_EXIF="${RAND_CREATION_TIME_EXIF:-$RAND_CREATION_TIME}"
   else
-    CREATION_TIME=$(generate_iso_timestamp)
-    CREATION_TIME=$(jitter_iso_timestamp "$CREATION_TIME")
+    local OFFSET_HOURS=$((RANDOM % 72))
+    local bsd_offset="-${OFFSET_HOURS}H"
+    if CREATION_TIME=$(date -u -v"${bsd_offset}" +"%Y-%m-%dT%H:%M:%S.%3NZ" 2>/dev/null); then
+      :
+    elif CREATION_TIME=$(date -u --date="-${OFFSET_HOURS} hour" +"%Y-%m-%dT%H:%M:%S.%3NZ" 2>/dev/null); then
+      :
+    else
+      CREATION_TIME=$(python3 - "$OFFSET_HOURS" <<'PY'
+import sys
+from datetime import datetime, timedelta, timezone
+
+hours = int(sys.argv[1])
+ts = datetime.now(timezone.utc) - timedelta(hours=hours)
+print(ts.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z")
+PY
+)
+    fi
     CREATION_TIME_EXIF="$CREATION_TIME"
   fi
   CURRENT_COPY_INDEX="$copy_index"
@@ -1301,17 +1336,6 @@ EOF
   combined_audio_filters=$(sanitize_audio_filters "$combined_audio_filters")
   combined_audio_filters=$(ensure_superequalizer_bounds "$combined_audio_filters")
 
-  # 🎛️ Рандомизация encoder/software метаданных
-  local -a SOFTWARES=(
-    "CapCut 12.3.3"
-    "VN 2.14.2"
-    "KineMaster 7.1.1"
-    "InShot 3.2.0"
-    "AlightMotion 5.0.9"
-  )
-  local RANDOM_SOFTWARE="${SOFTWARES[$RANDOM % ${#SOFTWARES[@]}]}"
-  SOFTWARE_TAG="$RANDOM_SOFTWARE"
-
   FFMPEG_ARGS=(
     -y -hide_banner -loglevel warning -ignore_unknown
     -analyzeduration 200M -probesize 200M
@@ -1344,12 +1368,12 @@ EOF
     -metadata project=""
     -metadata dir=""
     -metadata creation_app=""
+    -metadata software="$SOFTWARE_TAG"
+    -metadata creation_time="$CREATION_TIME"
+    -metadata encoder="$ENCODER_TAG"
     -metadata major_brand="$MAJOR_BRAND_TAG"
     -metadata minor_version="$MINOR_VERSION_TAG"
     -metadata compatible_brands="$COMPAT_BRANDS_TAG"
-    -metadata encoder="$ENCODER_TAG"
-    -metadata software="$RANDOM_SOFTWARE"
-    -metadata creation_time="$CREATION_TIME"
     -metadata title="$TITLE"
     -metadata description="$DESCRIPTION"
     -metadata comment="$UID_TAG"
@@ -1758,6 +1782,10 @@ EOF
   fi
   RUN_TRUST_SCORE+=("$trust_score_value")
   SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+
+  if [ -n "${LOG_FILE:-}" ]; then
+    echo "[META] Copy $copy_index → software=$SOFTWARE_TAG | creation_time=$CREATION_TIME | encoder=$ENCODER_TAG" >>"$LOG_FILE"
+  fi
 
   echo "✅ done: $OUT"
   printf '[Uniclon v1.7] Saved as: %s  (seed=%s, software=%s)\n' \

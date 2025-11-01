@@ -3,7 +3,8 @@
 set -euo pipefail
 trap 'rc=$?; echo "[SAFE EXIT] Ошибка обработки — код $rc"; exit $rc' ERR
 
-# --- Safe helper: clip_start (global initialization) ---
+# --- Safe helper: clip_start (global initialization, must be declared first) ---
+
 _clip_start_to_seconds() {
   local raw="${1:-}"
   awk -v t="$raw" '
@@ -22,11 +23,8 @@ _clip_start_to_seconds() {
       for (i = 1; i <= n; i++) {
         if (parts[i] !~ /^[0-9]+(\.[0-9]+)?$/) fail()
       }
-      if (n == 2) {
-        total = parts[1] * 60 + parts[2]
-      } else {
-        total = parts[1] * 3600 + parts[2] * 60 + parts[3]
-      }
+      if (n == 2) { total = parts[1] * 60 + parts[2] }
+      else { total = parts[1] * 3600 + parts[2] * 60 + parts[3] }
       printf "%.6f", total + 0
     }'
 }
@@ -58,8 +56,9 @@ clip_start() {
   printf "%s" "$fallback_seconds"
 }
 
+# Validate presence of clip_start
 if ! declare -f clip_start >/dev/null; then
-  echo "[FATAL] clip_start() not initialized"
+  echo "[FATAL] clip_start() not initialized — internal load error"
   exit 127
 fi
 

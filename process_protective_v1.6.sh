@@ -1039,7 +1039,7 @@ EOF
       fi
     fi
 
-    unset clip_start clip_duration CLIP_START CLIP_DURATION
+    unset -v clip_start clip_duration CLIP_START CLIP_DURATION
     local CLIP_START="0.000" CLIP_DURATION="$TARGET_DURATION"
     local clip_duration_fallback="$TARGET_DURATION"
     compute_clip_window "$TARGET_DURATION"

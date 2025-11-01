@@ -2273,7 +2273,7 @@ SUCCESS_COUNT=${#RUN_FILES[@]}
 echo "✅ Успешно: $SUCCESS_COUNT/$TOTAL_COPIES"
 echo "⚠️ Ошибки: $FAILED_COUNT"
 if [ "${#RUN_TRUST_SCORE[@]}" -gt 0 ]; then
-  TRUST_SCORE=$(printf '%s\n' "${RUN_TRUST_SCORE[@]}" | awk -f - <<'AWK'
+  TRUST_SCORE=$(printf '%s\n' "${RUN_TRUST_SCORE[@]}" | awk '
 BEGIN {
   sum = 0;
   count = 0;
@@ -2289,8 +2289,7 @@ END {
     printf "%.2f", sum / count;
   }
 }
-AWK
-  )
+')
   if [ -z "$TRUST_SCORE" ]; then
     TRUST_SCORE=1.00
   fi

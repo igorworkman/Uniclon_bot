@@ -1888,14 +1888,6 @@ PY
     touch_randomize_mtime "$OUT"
   fi
   register_copy_metadata
-# REGION AI: persist variant signature state
-  if [ -n "$CURRENT_VARIANT_KEY" ]; then
-    mark_variant_key "$CURRENT_VARIANT_KEY"
-    RUN_VARIANT_KEYS+=("$CURRENT_VARIANT_KEY")
-  else
-    RUN_VARIANT_KEYS+=("")
-  fi
-# END REGION AI
 
   # REGION AI: similarity fallback with reinforced effects
   local base_vf="$VF" base_af="$AFILTER" base_af_extra="${CUR_AF_EXTRA:-}"

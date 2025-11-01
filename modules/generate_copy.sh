@@ -1721,8 +1721,9 @@ PY
   fi
 
   echo "✅ done: $OUT"
-  printf '[Uniclon v1.7] Saved as: %s  (seed=%s, software=%s)\n' \
+  printf "[Uniclon v1.7] Saved as: %s  (seed=%s, software=%s)\n" \
     "$OUT_NAME" "${CURRENT_SEED_PRINT:-0.000}" "$SOFTWARE_TAG"
 }
 
 export -f generate_copy
+# 🧩 Fixed EOF error (printf quote bug) — validated under GPT-S JFB PRO v2.1

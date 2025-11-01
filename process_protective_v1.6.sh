@@ -600,6 +600,7 @@ pick_music_variant_track() {
 
 base="$(basename "$SRC")"
 name="${base%.*}"
+BASENAME="$name"
 
 ORIG_DURATION=$(ffprobe_exec -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$SRC")
 if [ -z "$ORIG_DURATION" ] || [ "$ORIG_DURATION" = "N/A" ]; then
@@ -1439,8 +1440,20 @@ PY
     echo "[WARN] VF chain invalid — performing safe cleanup"
     find "$OUTPUT_DIR" -maxdepth 1 -type f -name "*.tmp" -delete 2>/dev/null
     find "$OUTPUT_DIR" -maxdepth 1 -type f -name "*.lock" -delete 2>/dev/null
-    echo "[FATAL] VF chain validation failed. Exiting with code 2."
-    exit 2
+    echo "[FATAL] FFmpeg pipeline terminated with code 1"
+    echo "[SAFE] Rebuilding minimal FFmpeg pipeline..."
+    ffmpeg -y -hide_banner -loglevel warning -i "$INPUT_FILE" \
+      -vf "scale=1080:-2,format=yuv420p" \
+      -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 128k \
+      -movflags +faststart "$OUTPUT_DIR/${BASENAME}_safe.mp4"
+    rc=$?
+    if [ $rc -eq 0 ]; then
+      echo "[SAFE] Fallback pipeline succeeded."
+      exit 0
+    else
+      echo "[FATAL] Safe fallback pipeline failed with code $rc."
+      exit $rc
+    fi
   fi
   vf_payload="$VF_CHAIN"
   VF="$VF_CHAIN"

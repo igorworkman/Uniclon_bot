@@ -237,6 +237,61 @@ OUTPUT_LOG="${OUTPUT_LOG:-$OUTPUT_DIR/process.log}"
 
 AUDIO_MODE="normal"
 
+# --- Safe helper: clip_start ---
+_clip_start_to_seconds() {
+  local raw="${1:-}"
+  awk -v t="$raw" '
+    function fail(){ exit 1 }
+    BEGIN{
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
+      if (t == "" || t ~ /^-/) fail()
+      n=split(t, parts, ":")
+      if (n == 1) {
+        if (t !~ /^[0-9]+(\.[0-9]+)?$/) fail()
+        printf "%.6f", t + 0
+        exit 0
+      }
+      if (n < 2 || n > 3) fail()
+      total = 0
+      for (i = 1; i <= n; i++) {
+        if (parts[i] !~ /^[0-9]+(\.[0-9]+)?$/) fail()
+      }
+      if (n == 2) {
+        total = parts[1] * 60 + parts[2]
+      } else {
+        total = parts[1] * 3600 + parts[2] * 60 + parts[3]
+      }
+      printf "%.6f", total + 0
+    }'
+}
+
+clip_start() {
+  local value="${1:-0.000}"
+  local fallback="${2:-0.000}"
+  local label="${3:-clip_start}"
+  local copy_id="${4:-}"
+  local normalized=""
+  local fallback_seconds=""
+  local context=""
+
+  if [ -n "$copy_id" ]; then
+    context=" (${copy_id})"
+  fi
+
+  if normalized=$(_clip_start_to_seconds "$value" 2>/dev/null); then
+    printf "%.3f" "$normalized"
+    return 0
+  fi
+
+  if ! fallback_seconds=$(_clip_start_to_seconds "$fallback" 2>/dev/null); then
+    fallback_seconds="0.000"
+  fi
+
+  fallback_seconds=$(printf "%.3f" "$fallback_seconds")
+  echo "⚠️ [$label] Некорректное значение '$value' — используется fallback=${fallback_seconds}${context}"
+  printf "%s" "$fallback_seconds"
+}
+
 validate_video_params() {
   local width="${1:-0}"
   local height="${2:-0}"
@@ -576,21 +631,6 @@ $(awk -v orig="$ORIG_DURATION" -v base="$base_target" -v shift="$shift" -v delta
   printf "%.3f %.3f %.6f %.6f", start, target, stretch, tempo;
 }')
 EOF
-}
-
-# --- Safe helper: clip_start ---
-clip_start() {
-  local value="${1:-0.000}"
-  local fallback="${2:-0.000}"
-  local label="${3:-clip_start}"
-  local copy_id="${4:-}"
-  # sanitize numeric value
-  if awk -v v="$value" 'BEGIN{exit (v+0>=0?0:1)}'; then
-    printf "%.3f" "$value"
-  else
-    echo "⚠️ [$label] Некорректное значение '$value' — используется fallback=${fallback} (${copy_id})"
-    printf "%.3f" "$fallback"
-  fi
 }
 
 pick_crop_offsets() {

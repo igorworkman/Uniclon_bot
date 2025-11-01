@@ -7,6 +7,66 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$SCRIPT_DIR"
 IFS=$'\n\t'
 
+# --- Safe helper: clip_start (global initialization) ---
+_clip_start_to_seconds() {
+  local raw="${1:-}"
+  awk -v t="$raw" '
+    function fail(){ exit 1 }
+    BEGIN{
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
+      if (t == "" || t ~ /^-/) fail()
+      n=split(t, parts, ":")
+      if (n == 1) {
+        if (t !~ /^[0-9]+(\.[0-9]+)?$/) fail()
+        printf "%.6f", t + 0
+        exit 0
+      }
+      if (n < 2 || n > 3) fail()
+      total = 0
+      for (i = 1; i <= n; i++) {
+        if (parts[i] !~ /^[0-9]+(\.[0-9]+)?$/) fail()
+      }
+      if (n == 2) {
+        total = parts[1] * 60 + parts[2]
+      } else {
+        total = parts[1] * 3600 + parts[2] * 60 + parts[3]
+      }
+      printf "%.6f", total + 0
+    }'
+}
+
+clip_start() {
+  local value="${1:-0.000}"
+  local fallback="${2:-0.000}"
+  local label="${3:-clip_start}"
+  local copy_id="${4:-}"
+  local normalized=""
+  local fallback_seconds=""
+  local context=""
+
+  if [ -n "$copy_id" ]; then
+    context=" (${copy_id})"
+  fi
+
+  if normalized=$(_clip_start_to_seconds "$value" 2>/dev/null); then
+    printf "%.3f" "$normalized"
+    return 0
+  fi
+
+  if ! fallback_seconds=$(_clip_start_to_seconds "$fallback" 2>/dev/null); then
+    fallback_seconds="0.000"
+  fi
+
+  fallback_seconds=$(printf "%.3f" "$fallback_seconds")
+  echo "⚠️ [$label] Некорректное значение '$value' — используется fallback=${fallback_seconds}${context}"
+  printf "%s" "$fallback_seconds"
+}
+
+if ! declare -f clip_start >/dev/null; then
+  echo "[FATAL] clip_start() not initialized" >&2
+  exit 127
+fi
+
 SOFTWARE_POOL=(
   "CapCut 12.3.3"
   "VN 2.14.2"
@@ -236,61 +296,6 @@ OUTPUT_LOG="${OUTPUT_LOG:-$OUTPUT_DIR/process.log}"
 : >"$OUTPUT_LOG"
 
 AUDIO_MODE="normal"
-
-# --- Safe helper: clip_start ---
-_clip_start_to_seconds() {
-  local raw="${1:-}"
-  awk -v t="$raw" '
-    function fail(){ exit 1 }
-    BEGIN{
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
-      if (t == "" || t ~ /^-/) fail()
-      n=split(t, parts, ":")
-      if (n == 1) {
-        if (t !~ /^[0-9]+(\.[0-9]+)?$/) fail()
-        printf "%.6f", t + 0
-        exit 0
-      }
-      if (n < 2 || n > 3) fail()
-      total = 0
-      for (i = 1; i <= n; i++) {
-        if (parts[i] !~ /^[0-9]+(\.[0-9]+)?$/) fail()
-      }
-      if (n == 2) {
-        total = parts[1] * 60 + parts[2]
-      } else {
-        total = parts[1] * 3600 + parts[2] * 60 + parts[3]
-      }
-      printf "%.6f", total + 0
-    }'
-}
-
-clip_start() {
-  local value="${1:-0.000}"
-  local fallback="${2:-0.000}"
-  local label="${3:-clip_start}"
-  local copy_id="${4:-}"
-  local normalized=""
-  local fallback_seconds=""
-  local context=""
-
-  if [ -n "$copy_id" ]; then
-    context=" (${copy_id})"
-  fi
-
-  if normalized=$(_clip_start_to_seconds "$value" 2>/dev/null); then
-    printf "%.3f" "$normalized"
-    return 0
-  fi
-
-  if ! fallback_seconds=$(_clip_start_to_seconds "$fallback" 2>/dev/null); then
-    fallback_seconds="0.000"
-  fi
-
-  fallback_seconds=$(printf "%.3f" "$fallback_seconds")
-  echo "⚠️ [$label] Некорректное значение '$value' — используется fallback=${fallback_seconds}${context}"
-  printf "%s" "$fallback_seconds"
-}
 
 validate_video_params() {
   local width="${1:-0}"
@@ -1042,6 +1047,10 @@ EOF
     CLIP_DURATION=$(duration "$CLIP_DURATION" "$clip_duration_fallback" "clip_duration" "copy ${copy_index}")
     TARGET_DURATION="$CLIP_DURATION"
     CLIP_START=$(clip_start "$CLIP_START" "0.000" "clip_start" "copy ${copy_index}")
+    if [ -z "$CLIP_START" ]; then
+      CLIP_START="0.000"
+      echo "[WARN] clip_start fallback to 0.000s"
+    fi
     if [ -n "$CSHIFT" ]; then
       CLIP_START=$(creative_apply_text_shift "$CLIP_START" "$CSHIFT" "$clip_duration_fallback")
     fi

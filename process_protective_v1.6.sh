@@ -195,6 +195,24 @@ need ffprobe
 need exiftool
 need bc
 
+FFMPEG_FILTER_CACHE=""
+
+ffmpeg_filter_available() {
+  local filter_name="${1:-}"
+  if [ -z "$filter_name" ]; then
+    return 1
+  fi
+  if [ -z "${FFMPEG_FILTER_CACHE:-}" ]; then
+    if ! FFMPEG_FILTER_CACHE="$(ffmpeg -hide_banner -filters 2>/dev/null)"; then
+      FFMPEG_FILTER_CACHE=""
+    fi
+  fi
+  if [ -z "$FFMPEG_FILTER_CACHE" ]; then
+    return 1
+  fi
+  printf '%s\n' "$FFMPEG_FILTER_CACHE" | grep -E "[[:space:]]${filter_name}([[:space:]]|$)" >/dev/null 2>&1
+}
+
 usage() { echo "Usage: $0 <input_video> [count]"; exit 1; }
 [ "${1:-}" ] || usage
 SRC="$1"
@@ -961,6 +979,7 @@ EOF
       fi
     fi
 
+    unset clip_start clip_duration CLIP_START CLIP_DURATION
     local CLIP_START="0.000" CLIP_DURATION="$TARGET_DURATION"
     local clip_duration_fallback="$TARGET_DURATION"
     compute_clip_window "$TARGET_DURATION"
@@ -1435,6 +1454,53 @@ PY
   local vf_payload
   vf_payload=$(ensure_vf_format "$VF")
   local VF_CHAIN="$vf_payload"
+  local filter_parts=()
+  IFS=',' read -r -a filter_parts <<< "$VF_CHAIN"
+  local cleaned_filters=()
+  local filter_entry
+  for filter_entry in "${filter_parts[@]}"; do
+    local trimmed_filter
+    trimmed_filter="$(printf '%s\n' "$filter_entry" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [ -z "$trimmed_filter" ] && continue
+    local filter_name="${trimmed_filter%%=*}"
+    case "$filter_name" in
+      highpass)
+        if ! ffmpeg_filter_available "$filter_name"; then
+          echo "[WARN] Filter 'highpass' unavailable — replacing with fallback lowpass=f=3000"
+          if ffmpeg_filter_available "lowpass"; then
+            trimmed_filter="lowpass=f=3000"
+            filter_name="lowpass"
+          else
+            echo "[WARN] Fallback filter 'lowpass' unavailable — removing from chain"
+            continue
+          fi
+        fi
+        ;;
+      superequalizer)
+        if ! ffmpeg_filter_available "$filter_name"; then
+          echo "[WARN] Filter 'superequalizer' unavailable — removing from chain"
+          continue
+        fi
+        ;;
+      *)
+        if ! ffmpeg_filter_available "$filter_name"; then
+          echo "[WARN] Filter '$filter_name' unavailable — removing from chain"
+          continue
+        fi
+        ;;
+    esac
+    cleaned_filters+=("$trimmed_filter")
+  done
+  if [ ${#cleaned_filters[@]} -gt 0 ]; then
+    local IFS=','
+    VF_CHAIN="${cleaned_filters[*]}"
+  else
+    VF_CHAIN=""
+  fi
+  if [ -z "$VF_CHAIN" ]; then
+    VF_CHAIN="null"
+  fi
+  echo "[DEBUG] Final VF chain: $VF_CHAIN"
   if ! ffmpeg -hide_banner -loglevel error -f lavfi -i "color=c=black:s=16x16:d=0.1" -vf "$VF_CHAIN" -f null - 2>/dev/null; then
     # --- Safe cleanup block (POSIX-compatible, no function calls) ---
     echo "[WARN] VF chain invalid — performing safe cleanup"

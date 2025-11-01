@@ -1680,8 +1680,12 @@ PY
       fi
       fallback_af_chain=$(sanitize_audio_filters "$fallback_af_chain")
       fallback_af_chain=$(ensure_superequalizer_bounds "$fallback_af_chain")
+
       # REGION AI: ensure fallback ffmpeg filter quoting
       local fallback_args=(
+
+      local -a fallback_ffmpeg_args=(
+
         -y -hide_banner -loglevel warning
         -ss "$CLIP_START" -i "$SRC"
         -t "$CLIP_DURATION"
@@ -1689,10 +1693,17 @@ PY
         -vf "$fallback_vf_chain"
         -c:a aac -b:a "$AUDIO_BR" -ar "$AUDIO_SR" -ac 2
         -af "$fallback_af_chain"
+
         -movflags +faststart "$OUT"
       )
       ffmpeg_exec "${fallback_args[@]}"
       # END REGION AI
+
+        -movflags +faststart
+        "$OUT"
+      )
+      ffmpeg_exec "${fallback_ffmpeg_args[@]}"
+
       continue
     fi
     if [ "$uniqueness_verdict" = "ACCEPT_WARN" ] && [ -z "$fallback_reason_entry" ]; then

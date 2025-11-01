@@ -1697,23 +1697,41 @@ PY
   local INPUT_FILE="$SRC"
   local OUTPUT_FILE="$ENCODE_TARGET"
   local rc=0
+  local ffmpeg_failed=false
 
   if [ ! -f "$INPUT_FILE" ]; then
     echo "[FATAL] Input file not found: $INPUT_FILE"
-    exit 127
+    FAILED_COUNT=$((FAILED_COUNT + 1))
+    copy_failed=true
+    break
   fi
 
   echo "[DEBUG] Input file: $INPUT_FILE ($(du -h "$INPUT_FILE" | cut -f1))"
 
   if ! timeout 300 ffmpeg "${FFMPEG_ARGS[@]}"; then
     rc=$?
-    echo "[FATAL] FFmpeg failed or timed out (code $rc)"
-    exit $rc
+    echo "[ERROR] FFmpeg failed or timed out (code $rc)"
+    ffmpeg_failed=true
+  elif [ ! -s "$OUTPUT_FILE" ]; then
+    rc=1
+    echo "[ERROR] Output file is empty or missing — FFmpeg pipeline failed"
+    ffmpeg_failed=true
   fi
 
-  if [ ! -s "$OUTPUT_FILE" ]; then
-    echo "[FATAL] Output file is empty or missing — FFmpeg pipeline failed"
-    exit 1
+  if [ "$ffmpeg_failed" = true ]; then
+    echo "❌ FFmpeg failed with exit code $rc"
+    render_retry=$((render_retry + 1))
+    echo "[ERROR] Copy ${copy_index} failed during processing." >>"$OUTPUT_LOG"
+    rm -f "$OUTPUT_FILE" 2>/dev/null || true
+    if [ "$render_retry" -ge "$max_render_retry" ]; then
+      echo "[WARN] Skipped due to FFmpeg failure."
+      FAILED_COUNT=$((FAILED_COUNT + 1))
+      copy_failed=true
+      break
+    fi
+    echo "[WARN] Retrying copy ${copy_index} (${render_retry}/$max_render_retry)…"
+    attempt=$((attempt + 1))
+    continue
   fi
   # END REGION AI
 

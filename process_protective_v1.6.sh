@@ -1,11 +1,7 @@
 #!/bin/bash
 # Безопасный режим исполнения
 set -euo pipefail
-
-# Определение абсолютного пути скрипта
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-BASE_DIR="$SCRIPT_DIR"
-IFS=$'\n\t'
+trap 'rc=$?; echo "[SAFE EXIT] Ошибка обработки — код $rc"; exit $rc' ERR
 
 # --- Safe helper: clip_start (global initialization) ---
 _clip_start_to_seconds() {
@@ -63,9 +59,14 @@ clip_start() {
 }
 
 if ! declare -f clip_start >/dev/null; then
-  echo "[FATAL] clip_start() not initialized" >&2
+  echo "[FATAL] clip_start() not initialized"
   exit 127
 fi
+
+# Определение абсолютного пути скрипта
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+BASE_DIR="$SCRIPT_DIR"
+IFS=$'\n\t'
 
 SOFTWARE_POOL=(
   "CapCut 12.3.3"

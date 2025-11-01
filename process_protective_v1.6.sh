@@ -1446,13 +1446,13 @@ PY
       -vf "scale=1080:-2,format=yuv420p" \
       -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 128k \
       -movflags +faststart "$OUTPUT_DIR/${BASENAME}_safe.mp4"
-    rc=$?
+    local rc=$?
     if [ $rc -eq 0 ]; then
       echo "[SAFE] Fallback pipeline succeeded."
-      exit 0
+      return 0
     else
       echo "[FATAL] Safe fallback pipeline failed with code $rc."
-      exit $rc
+      return $rc
     fi
   fi
   vf_payload="$VF_CHAIN"

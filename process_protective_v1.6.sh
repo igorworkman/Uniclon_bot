@@ -1473,7 +1473,7 @@ PY
 
   # Sanitize VF chain from broken quotes and invalid substrings
   VF_CHAIN=$(echo "$VF_CHAIN" | sed -E "s/'/\"/g" | sed -E 's/\)\):/\):/g' | sed -E 's/,+/,/g' | tr -s ' ')
-  VF_CHAIN=$(echo "$VF_CHAIN" | tr -d "\n" | sed -E "s/[^a-zA-Z0-9_=:,.;()' -]//g")
+  VF_CHAIN=$(printf '%s' "$VF_CHAIN" | tr -d '\r\n' | sed -E 's/[[:cntrl:]]//g')
   if ! ffmpeg -hide_banner -loglevel error -f lavfi -i "color=c=black:s=16x16:d=0.1" -vf "$VF_CHAIN" -f null - 2>/dev/null; then
     echo "[WARN] VF chain invalid — resetting to minimal"
     VF_CHAIN="scale=1080:-2,format=yuv420p,setpts=PTS"

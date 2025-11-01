@@ -915,6 +915,11 @@ async def _run_and_send(
         await message.answer("Произошла ошибка при обработке. Попробуйте ещё раз.")
         raise
 
+    try:
+        from uniclon_bot import notify_processing_result  # type: ignore
+    except ImportError:  # pragma: no cover - defensive fallback
+        notify_processing_result = None
+
     tail_lines: List[str] = []
     tail_text = ""
     last_log_line = ""
@@ -1006,6 +1011,8 @@ async def _run_and_send(
                 copies,
                 profile,
             )
+            if notify_processing_result is not None:
+                await notify_processing_result(message, rc)
             error_reason = ERROR_MAP.get(rc, "Unknown error")
             try:
                 from uniclon_bot import log_render_error
@@ -1103,6 +1110,9 @@ async def _run_and_send(
 
     if message.from_user:
         register_user_outputs(message.from_user.id, new_files)
+
+    if notify_processing_result is not None:
+        await notify_processing_result(message, 0)
 
     await message.answer(
         "Готово! Отправляю уникализированные копии…\n🛡 Метаданные и контейнер обновлены."

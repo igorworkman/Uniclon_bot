@@ -79,6 +79,32 @@ def log_render_error(input_path: Path, code: int) -> None:
 
 
 
+async def notify_processing_result(message: Message, result: object) -> None:
+    """Provide user-friendly feedback about the protective script outcome."""
+
+    if message is None:
+        return
+
+    returncode: Optional[int]
+    if isinstance(result, int):
+        returncode = result
+    else:
+        returncode = getattr(result, "returncode", None)
+
+    if returncode is None:
+        return
+
+    if returncode == 127:
+        await message.reply("❌ Ошибка инициализации скрипта. Проверьте модуль clip_start.")
+    elif returncode == 1:
+        await message.reply(
+            "⚠️ Ошибка FFmpeg — возможно, фильтр не поддерживается или видео повреждено."
+        )
+    elif returncode == 0:
+        await message.reply("✅ Видео успешно обработано и готово к отправке!")
+
+
+
 @dataclass
 class AuditSummary:
     copies_created: int

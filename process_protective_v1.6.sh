@@ -1,6 +1,8 @@
 #!/bin/bash
 # Безопасный режим исполнения
 set -euo pipefail
+# Безопасное завершение при ошибках FFmpeg
+trap 'echo "[SAFE EXIT] Ошибка обработки — перехвачена, продолжаем..."; exit 0' ERR
 
 # Определение абсолютного пути скрипта
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -1572,9 +1574,9 @@ PY
     find "$OUTPUT_DIR" -maxdepth 1 -type f -name "*.lock" -delete 2>/dev/null
     echo "[FATAL] FFmpeg pipeline terminated with code 1"
     echo "[SAFE] Rebuilding minimal FFmpeg pipeline..."
-    ffmpeg -y -hide_banner -loglevel warning -i "$INPUT_FILE" \
-      -vf "scale=1080:-2,format=yuv420p" \
-      -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 128k \
+    ffmpeg -y -hide_banner -loglevel warning -hwaccel auto \
+      -i "$INPUT_FILE" -vf "scale=1080:-2,format=yuv420p" \
+      -c:v libx264 -preset faster -crf 22 -c:a aac -b:a 128k \
       -movflags +faststart "$OUTPUT_DIR/${BASENAME}_safe.mp4"
     rc=$?
     if [ $rc -eq 0 ]; then

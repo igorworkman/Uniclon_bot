@@ -3,68 +3,20 @@
 set -euo pipefail
 trap 'rc=$?; echo "[SAFE EXIT] Ошибка обработки — код $rc"; exit $rc' ERR
 
-# --- Safe helper: clip_start (global initialization, must be declared first) ---
-
-_clip_start_to_seconds() {
-  local raw="${1:-}"
-  awk -v t="$raw" '
-    function fail(){ exit 1 }
-    BEGIN{
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
-      if (t == "" || t ~ /^-/) fail()
-      n=split(t, parts, ":")
-      if (n == 1) {
-        if (t !~ /^[0-9]+(\.[0-9]+)?$/) fail()
-        printf "%.6f", t + 0
-        exit 0
-      }
-      if (n < 2 || n > 3) fail()
-      total = 0
-      for (i = 1; i <= n; i++) {
-        if (parts[i] !~ /^[0-9]+(\.[0-9]+)?$/) fail()
-      }
-      if (n == 2) { total = parts[1] * 60 + parts[2] }
-      else { total = parts[1] * 3600 + parts[2] * 60 + parts[3] }
-      printf "%.6f", total + 0
-    }'
-}
-
-clip_start() {
-  local value="${1:-0.000}"
-  local fallback="${2:-0.000}"
-  local label="${3:-clip_start}"
-  local copy_id="${4:-}"
-  local normalized=""
-  local fallback_seconds=""
-  local context=""
-
-  if [ -n "$copy_id" ]; then
-    context=" (${copy_id})"
-  fi
-
-  if normalized=$(_clip_start_to_seconds "$value" 2>/dev/null); then
-    printf "%.3f" "$normalized"
-    return 0
-  fi
-
-  if ! fallback_seconds=$(_clip_start_to_seconds "$fallback" 2>/dev/null); then
-    fallback_seconds="0.000"
-  fi
-
-  fallback_seconds=$(printf "%.3f" "$fallback_seconds")
-  echo "⚠️ [$label] Некорректное значение '$value' — используется fallback=${fallback_seconds}${context}"
-  printf "%s" "$fallback_seconds"
-}
-
-# Validate presence of clip_start
-if ! declare -f clip_start >/dev/null; then
-  echo "[FATAL] clip_start() not initialized — internal load error"
-  exit 127
-fi
-
 # Определение абсолютного пути скрипта
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$SCRIPT_DIR"
+# --- Safe runtime init ---
+if [ -d "$BASE_DIR/modules" ]; then
+  for mod in "$BASE_DIR/modules/"*.sh; do
+    [ -f "$mod" ] && . "$mod"
+  done
+fi
+
+. "$BASE_DIR/modules/time_utils.sh" || { echo "[FATAL] Failed to load time_utils.sh"; exit 127; }
+
+type clip_start >/dev/null 2>&1 || { echo "[FATAL] clip_start() missing after init"; exit 127; }
+echo "[SAFE INIT] Modules sourced successfully"
 IFS=$'\n\t'
 
 SOFTWARE_POOL=(
@@ -1521,6 +1473,11 @@ PY
 
   # Sanitize VF chain from broken quotes and invalid substrings
   VF_CHAIN=$(echo "$VF_CHAIN" | sed -E "s/'/\"/g" | sed -E 's/\)\):/\):/g' | sed -E 's/,+/,/g' | tr -s ' ')
+  VF_CHAIN=$(echo "$VF_CHAIN" | tr -d "\n" | sed -E "s/[^a-zA-Z0-9_=:,.;()' -]//g")
+  if ! ffmpeg -hide_banner -loglevel error -f lavfi -i "color=c=black:s=16x16:d=0.1" -vf "$VF_CHAIN" -f null - 2>/dev/null; then
+    echo "[WARN] VF chain invalid — resetting to minimal"
+    VF_CHAIN="scale=1080:-2,format=yuv420p,setpts=PTS"
+  fi
   if [ -z "$VF_CHAIN" ]; then
     echo "[WARN] VF_CHAIN empty after sanitization, applying safe default"
     VF_CHAIN="scale=1080:-2,format=yuv420p"

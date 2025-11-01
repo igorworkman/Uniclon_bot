@@ -1,5 +1,21 @@
 #!/bin/bash
-# Time related helpers
+# modules/time_utils.sh — безопасная обработка временных меток для Uniclon
+
+_clip_start_to_seconds() {
+  local raw="${1:-}"
+  awk -v t="$raw" '
+    function fail(){ exit 1 }
+    BEGIN {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
+      if (t == "" || t ~ /^-/) fail()
+      n=split(t, parts, ":")
+      if (n == 1) { printf "%.6f", t + 0; exit 0 }
+      total=0
+      if (n == 2) total = parts[1]*60 + parts[2]
+      if (n == 3) total = parts[1]*3600 + parts[2]*60 + parts[3]
+      printf "%.6f", total + 0
+    }'
+}
 
 ffmpeg_time_to_seconds() {
   local raw="$1"
@@ -154,7 +170,20 @@ normalize_duration_value() {
 }
 
 clip_start() {
-  normalize_ss_value "$@"
+  local value="${1:-0.000}"
+  local fallback="${2:-0.000}"
+  local label="${3:-clip_start}"
+  local copy_id="${4:-}"
+  local seconds fallback_seconds
+  if seconds=$(_clip_start_to_seconds "$value" 2>/dev/null); then
+    printf "%.3f" "$seconds"
+    return 0
+  fi
+  if ! fallback_seconds=$(_clip_start_to_seconds "$fallback" 2>/dev/null); then
+    fallback_seconds="0.000"
+  fi
+  echo "⚠️ [$label] Некорректное значение '$value' — используется fallback=${fallback_seconds} (${copy_id})"
+  printf "%.3f" "$fallback_seconds"
 }
 
 duration() {

@@ -2272,3 +2272,9 @@ if [ "$AUTO_CLEAN" -eq 1 ]; then
 fi
 
 echo "All done. Outputs in: $OUTPUT_DIR | Manifest: $MANIFEST_PATH"
+
+rc=${rc:-0}
+if [ "$rc" -eq 255 ]; then
+  echo "[FATAL] FFmpeg pipeline critical error — possible invalid input or filter crash"
+  exit 255
+fi

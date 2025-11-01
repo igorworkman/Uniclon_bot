@@ -1518,6 +1518,13 @@ PY
   local vf_payload
   vf_payload=$(ensure_vf_format "$VF")
   local VF_CHAIN="$vf_payload"
+
+  # Sanitize VF chain from broken quotes and invalid substrings
+  VF_CHAIN=$(echo "$VF_CHAIN" | sed -E "s/'/\"/g" | sed -E 's/\)\):/\):/g' | sed -E 's/,+/,/g' | tr -s ' ')
+  if [ -z "$VF_CHAIN" ]; then
+    echo "[WARN] VF_CHAIN empty after sanitization, applying safe default"
+    VF_CHAIN="scale=1080:-2,format=yuv420p"
+  fi
   local filter_parts=()
   IFS=',' read -r -a filter_parts <<< "$VF_CHAIN"
   local cleaned_filters=()

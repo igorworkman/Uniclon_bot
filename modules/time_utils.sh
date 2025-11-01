@@ -11,13 +11,13 @@ _clip_start_to_seconds() {
       n=split(t, parts, ":")
       if (n < 1 || n > 3) fail()
       if (n == 1) {
-        if (t !~ /^[0-9]+(\.[0-9]+)?$/) fail()
+        if (t !~ /^([0-9]+(\.[0-9]+)?|\.[0-9]+)$/) fail()
         printf "%.6f", t + 0
         exit 0
       }
       total = 0
       for (i = 1; i <= n; i++) {
-        if (parts[i] !~ /^[0-9]+(\.[0-9]+)?$/) fail()
+        if (parts[i] !~ /^([0-9]+(\.[0-9]+)?|\.[0-9]+)$/) fail()
       }
       if (n == 2) {
         total = parts[1]*60 + parts[2]

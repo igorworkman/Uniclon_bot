@@ -578,6 +578,21 @@ $(awk -v orig="$ORIG_DURATION" -v base="$base_target" -v shift="$shift" -v delta
 EOF
 }
 
+# --- Safe helper: clip_start ---
+clip_start() {
+  local value="${1:-0.000}"
+  local fallback="${2:-0.000}"
+  local label="${3:-clip_start}"
+  local copy_id="${4:-}"
+  # sanitize numeric value
+  if awk -v v="$value" 'BEGIN{exit (v+0>=0?0:1)}'; then
+    printf "%.3f" "$value"
+  else
+    echo "⚠️ [$label] Некорректное значение '$value' — используется fallback=${fallback} (${copy_id})"
+    printf "%.3f" "$fallback"
+  fi
+}
+
 pick_crop_offsets() {
   CROP_W=$(rand_int 0 "$CROP_MAX_PX")
   CROP_H=$(rand_int 0 "$CROP_MAX_PX")

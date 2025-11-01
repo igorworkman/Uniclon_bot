@@ -803,6 +803,158 @@ REGEN_OCCURRED=0
 LOW_UNIQUENESS_TRIGGERED=0
 MAX_REGEN_ATTEMPTS=2; RUN_COMBO_POS=0
 
+register_copy_metadata() {
+  FILE_NAME="$(basename "$OUT")"
+  local MEDIA_DURATION_RAW=""
+  local MEDIA_DURATION_SEC=""
+  MEDIA_DURATION_RAW=$(ffmpeg_media_duration_raw "$OUT")
+  MEDIA_DURATION_SEC=$(ffmpeg_media_duration_seconds "$OUT" 2>/dev/null || true)
+  local PREVIEW_NAME=""
+  local PREVIEW_PATH="${PREVIEW_DIR}/${FILE_STEM}.png"
+  if [ -n "$MEDIA_DURATION_RAW" ] && [ "$MEDIA_DURATION_RAW" != "N/A" ]; then
+    if [ -z "$MEDIA_DURATION_SEC" ]; then
+      echo "⚠️ Не удалось преобразовать длительность $FILE_NAME (${MEDIA_DURATION_RAW}) для проверки превью"
+    fi
+  else
+    echo "⚠️ Не удалось определить длительность $FILE_NAME перед генерацией превью"
+    MEDIA_DURATION_RAW=""
+    MEDIA_DURATION_SEC=""
+  fi
+
+  local preview_seek_value="$PREVIEW_SS_NORMALIZED"
+  local preview_seek_seconds=""
+  preview_seek_seconds=$(ffmpeg_time_to_seconds "$preview_seek_value" 2>/dev/null || true)
+  if [ -z "$preview_seek_seconds" ]; then
+    preview_seek_value="$PREVIEW_SS_FALLBACK"
+    preview_seek_seconds=$(ffmpeg_time_to_seconds "$preview_seek_value" 2>/dev/null || true)
+  fi
+  if [ -z "$preview_seek_seconds" ]; then
+    echo "⚠️ Превью для $FILE_NAME: не удалось интерпретировать значение времени '${preview_seek_value}', используется 0.000"
+    preview_seek_value="0.000"
+    preview_seek_seconds="0.000"
+  fi
+
+  if [ -n "$MEDIA_DURATION_SEC" ] && [ -n "$preview_seek_seconds" ]; then
+    if ! awk -v seek="$preview_seek_seconds" -v dur="$MEDIA_DURATION_SEC" 'BEGIN{exit (dur>0 && seek<dur ? 0 : 1)}'; then
+      local preview_seek_seconds_fmt=""
+      preview_seek_seconds_fmt=$(awk -v s="$preview_seek_seconds" 'BEGIN{printf "%.3f", s+0}')
+      local media_duration_fmt=""
+      media_duration_fmt=$(awk -v d="$MEDIA_DURATION_SEC" 'BEGIN{printf "%.3f", d+0}')
+      echo "⚠️ Превью для $FILE_NAME: время ${preview_seek_value} (≈${preview_seek_seconds_fmt}s) выходит за пределы длительности ${media_duration_fmt}s"
+      local adjusted_seek=""
+      adjusted_seek=$(awk -v dur="$MEDIA_DURATION_SEC" 'BEGIN{if(dur<=0){printf "0.000"; exit} adj=dur-0.250; if(adj<0) adj=0; printf "%.3f", adj}')
+      preview_seek_value="$adjusted_seek"
+      preview_seek_seconds="$adjusted_seek"
+      preview_seek_seconds_fmt=$(awk -v s="$preview_seek_seconds" 'BEGIN{printf "%.3f", s+0}')
+      echo "ℹ️ Превью для $FILE_NAME будет взято по скорректированному времени ${preview_seek_seconds_fmt}s"
+    fi
+  fi
+
+  if [ "$DEBUG" -eq 1 ]; then
+    local media_duration_dbg="unknown"
+    if [ -n "$MEDIA_DURATION_SEC" ]; then
+      media_duration_dbg=$(awk -v d="$MEDIA_DURATION_SEC" 'BEGIN{printf "%.3f", d+0}')
+    fi
+    if [ -n "$preview_seek_seconds" ]; then
+      local preview_seek_seconds_dbg="$(awk -v s="$preview_seek_seconds" 'BEGIN{printf "%.3f", s+0}')"
+      echo "DEBUG preview_ss=${preview_seek_value} (~${preview_seek_seconds_dbg}s) duration=${media_duration_dbg}s"
+    else
+      echo "DEBUG preview_ss=${preview_seek_value} duration=${media_duration_dbg}s (seconds unresolved)"
+    fi
+  fi
+
+  if ffmpeg_exec -y -hide_banner -loglevel error -ss "$preview_seek_value" -i "$OUT" -vframes 1 "$PREVIEW_PATH"; then
+    if [ -s "$PREVIEW_PATH" ]; then
+      PREVIEW_NAME="previews/${FILE_STEM}.png"
+    else
+      echo "⚠️ Превью для $FILE_NAME пустое"
+      rm -f "$PREVIEW_PATH"
+    fi
+  else
+    echo "⚠️ Не удалось создать превью для $FILE_NAME"
+    rm -f "$PREVIEW_PATH" 2>/dev/null || true
+  fi
+  DURATION_RAW="$MEDIA_DURATION_RAW"
+  if [ -z "$DURATION_RAW" ]; then
+    DURATION_RAW=$(ffprobe_exec -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$OUT")
+  fi
+  DURATION=$(awk -v d="$DURATION_RAW" 'BEGIN{if(d==""||d=="N/A") printf "0"; else printf "%.3f", d}')
+  SIZE_BYTES=$(file_size_bytes "$OUT")
+  SIZE_KB=$(awk -v s="$SIZE_BYTES" 'BEGIN{if(s==""||s==0) printf "0"; else printf "%.0f", s/1024}')
+  RUN_FILES+=("$FILE_NAME")
+  RUN_FPS+=("$FPS")
+  RUN_DURATIONS+=("$DURATION")
+  RUN_SIZES+=("$SIZE_KB")
+  RUN_ENCODERS+=("$ENCODER_TAG")
+  RUN_SOFTWARES+=("$SOFTWARE_TAG")
+  RUN_CREATION_TIMES+=("$CREATION_TIME")
+  RUN_SEEDS+=("$SEED")
+  RUN_TARGET_DURS+=("$TARGET_DURATION")
+  RUN_TARGET_BRS+=("$BR")
+  RUN_COMBO_HISTORY+=("$combo_key")
+  RUN_PROFILES+=("$PROFILE_VALUE")
+  RUN_QUALITIES+=("$QUALITY")
+  RUN_QT_MAKES+=("$QT_MAKE")
+  RUN_QT_MODELS+=("$QT_MODEL")
+
+  RUN_QT_SOFTWARES+=("$QT_SOFTWARE")
+  RUN_CREATIVE_MIRROR+=("$MIRROR_DESC")
+  RUN_CREATIVE_INTRO+=("$INTRO_DESC")
+  RUN_CREATIVE_LUT+=("$LUT_DESC")
+  RUN_PREVIEWS+=("$PREVIEW_NAME")
+  RUN_FS_TIMESTAMPS+=("${variant_fs_epoch:-}")
+  if [ -n "$CURRENT_VARIANT_KEY" ]; then
+    mark_variant_key "$CURRENT_VARIANT_KEY"
+    RUN_VARIANT_KEYS+=("$CURRENT_VARIANT_KEY")
+  else
+    RUN_VARIANT_KEYS+=("")
+  fi
+}
+
+register_fallback_metrics() {
+  local metrics metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq
+  metrics=$(metrics_compute_copy_metrics "$SRC" "$OUT")
+  IFS='|' read -r metrics_ssim metrics_psnr metrics_phash metrics_bitrate metrics_delta metrics_uniq <<< "$metrics"
+  if [ -z "$metrics_ssim" ]; then
+    metrics_ssim="0.000"
+  fi
+  if [ -z "$metrics_psnr" ]; then
+    metrics_psnr="0.000"
+  fi
+  if [ -z "$metrics_phash" ]; then
+    metrics_phash="0.0000"
+  fi
+  if [ -z "$metrics_bitrate" ]; then
+    metrics_bitrate="0"
+  fi
+  if [ -z "$metrics_uniq" ]; then
+    metrics_uniq="0.00"
+  fi
+
+  RUN_FALLBACK_REASON+=("safe_fallback")
+  RUN_COMBO_USED+=("safe_fallback")
+  RUN_ATTEMPTS+=("0")
+  RUN_SSIM+=("$metrics_ssim")
+  RUN_PSNR+=("$metrics_psnr")
+  RUN_PHASH+=("$metrics_phash")
+  RUN_UNIQ+=("$metrics_uniq")
+  RUN_BITRATES+=("$metrics_bitrate")
+  local trust_score_value="0.00"
+  if [ -n "$metrics_ssim" ] && [ -n "$metrics_phash" ]; then
+    trust_score_value=$(python3 "$BASE_DIR/modules/utils/video_tools.py" score --ssim "$metrics_ssim" --phash "$metrics_phash" 2>/dev/null || printf '0.00')
+  fi
+  RUN_TRUST_SCORE+=("$trust_score_value")
+  SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+
+  if [ -n "${LOG_FILE:-}" ]; then
+    echo "[META] Copy $CURRENT_COPY_INDEX → software=$SOFTWARE_TAG | creation_time=$CREATION_TIME | encoder=$ENCODER_TAG" >>"$LOG_FILE"
+  fi
+
+  echo "✅ done: $OUT"
+  printf '[Uniclon v1.7] Saved as: %s  (seed=%s, software=%s)\n' \
+    "$OUT_NAME" "${CURRENT_SEED_PRINT:-0.000}" "$SOFTWARE_TAG"
+}
+
 duration_bucket() {
   local value="$1"
   awk -v v="$value" 'BEGIN { printf "%.1f", v }'
@@ -1449,6 +1601,11 @@ PY
     local rc=$?
     if [ $rc -eq 0 ]; then
       echo "[SAFE] Fallback pipeline succeeded."
+      OUT="$OUTPUT_DIR/${BASENAME}_safe.mp4"
+      OUT_NAME="$(basename "$OUT")"
+      FILE_STEM="${OUT_NAME%.*}"
+      register_copy_metadata
+      register_fallback_metrics
       return 0
     else
       echo "[FATAL] Safe fallback pipeline failed with code $rc."
@@ -1730,105 +1887,7 @@ PY
   else
     touch_randomize_mtime "$OUT"
   fi
-  FILE_NAME="$(basename "$OUT")"
-  local MEDIA_DURATION_RAW=""
-  local MEDIA_DURATION_SEC=""
-  MEDIA_DURATION_RAW=$(ffmpeg_media_duration_raw "$OUT")
-  MEDIA_DURATION_SEC=$(ffmpeg_media_duration_seconds "$OUT" 2>/dev/null || true)
-  local PREVIEW_NAME=""
-  local PREVIEW_PATH="${PREVIEW_DIR}/${FILE_STEM}.png"
-  if [ -n "$MEDIA_DURATION_RAW" ] && [ "$MEDIA_DURATION_RAW" != "N/A" ]; then
-    if [ -z "$MEDIA_DURATION_SEC" ]; then
-      echo "⚠️ Не удалось преобразовать длительность $FILE_NAME (${MEDIA_DURATION_RAW}) для проверки превью"
-    fi
-  else
-    echo "⚠️ Не удалось определить длительность $FILE_NAME перед генерацией превью"
-    MEDIA_DURATION_RAW=""
-    MEDIA_DURATION_SEC=""
-  fi
-
-  local preview_seek_value="$PREVIEW_SS_NORMALIZED"
-  local preview_seek_seconds=""
-  preview_seek_seconds=$(ffmpeg_time_to_seconds "$preview_seek_value" 2>/dev/null || true)
-  if [ -z "$preview_seek_seconds" ]; then
-    preview_seek_value="$PREVIEW_SS_FALLBACK"
-    preview_seek_seconds=$(ffmpeg_time_to_seconds "$preview_seek_value" 2>/dev/null || true)
-  fi
-  if [ -z "$preview_seek_seconds" ]; then
-    echo "⚠️ Превью для $FILE_NAME: не удалось интерпретировать значение времени '${preview_seek_value}', используется 0.000"
-    preview_seek_value="0.000"
-    preview_seek_seconds="0.000"
-  fi
-
-  if [ -n "$MEDIA_DURATION_SEC" ] && [ -n "$preview_seek_seconds" ]; then
-    if ! awk -v seek="$preview_seek_seconds" -v dur="$MEDIA_DURATION_SEC" 'BEGIN{exit (dur>0 && seek<dur ? 0 : 1)}'; then
-      local preview_seek_seconds_fmt=""
-      preview_seek_seconds_fmt=$(awk -v s="$preview_seek_seconds" 'BEGIN{printf "%.3f", s+0}')
-      local media_duration_fmt=""
-      media_duration_fmt=$(awk -v d="$MEDIA_DURATION_SEC" 'BEGIN{printf "%.3f", d+0}')
-      echo "⚠️ Превью для $FILE_NAME: время ${preview_seek_value} (≈${preview_seek_seconds_fmt}s) выходит за пределы длительности ${media_duration_fmt}s"
-      local adjusted_seek=""
-      adjusted_seek=$(awk -v dur="$MEDIA_DURATION_SEC" 'BEGIN{if(dur<=0){printf "0.000"; exit} adj=dur-0.250; if(adj<0) adj=0; printf "%.3f", adj}')
-      preview_seek_value="$adjusted_seek"
-      preview_seek_seconds="$adjusted_seek"
-      preview_seek_seconds_fmt=$(awk -v s="$preview_seek_seconds" 'BEGIN{printf "%.3f", s+0}')
-      echo "ℹ️ Превью для $FILE_NAME будет взято по скорректированному времени ${preview_seek_seconds_fmt}s"
-    fi
-  fi
-
-  if [ "$DEBUG" -eq 1 ]; then
-    local media_duration_dbg="unknown"
-    if [ -n "$MEDIA_DURATION_SEC" ]; then
-      media_duration_dbg=$(awk -v d="$MEDIA_DURATION_SEC" 'BEGIN{printf "%.3f", d+0}')
-    fi
-    if [ -n "$preview_seek_seconds" ]; then
-      local preview_seek_seconds_dbg="$(awk -v s="$preview_seek_seconds" 'BEGIN{printf "%.3f", s+0}')"
-      echo "DEBUG preview_ss=${preview_seek_value} (~${preview_seek_seconds_dbg}s) duration=${media_duration_dbg}s"
-    else
-      echo "DEBUG preview_ss=${preview_seek_value} duration=${media_duration_dbg}s (seconds unresolved)"
-    fi
-  fi
-
-  if ffmpeg_exec -y -hide_banner -loglevel error -ss "$preview_seek_value" -i "$OUT" -vframes 1 "$PREVIEW_PATH"; then
-    if [ -s "$PREVIEW_PATH" ]; then
-      PREVIEW_NAME="previews/${FILE_STEM}.png"
-    else
-      echo "⚠️ Превью для $FILE_NAME пустое"
-      rm -f "$PREVIEW_PATH"
-    fi
-  else
-    echo "⚠️ Не удалось создать превью для $FILE_NAME"
-    rm -f "$PREVIEW_PATH" 2>/dev/null || true
-  fi
-  DURATION_RAW="$MEDIA_DURATION_RAW"
-  if [ -z "$DURATION_RAW" ]; then
-    DURATION_RAW=$(ffprobe_exec -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$OUT")
-  fi
-  DURATION=$(awk -v d="$DURATION_RAW" 'BEGIN{if(d==""||d=="N/A") printf "0"; else printf "%.3f", d}')
-  SIZE_BYTES=$(file_size_bytes "$OUT")
-  SIZE_KB=$(awk -v s="$SIZE_BYTES" 'BEGIN{if(s==""||s==0) printf "0"; else printf "%.0f", s/1024}')
-  RUN_FILES+=("$FILE_NAME")
-  RUN_FPS+=("$FPS")
-  RUN_DURATIONS+=("$DURATION")
-  RUN_SIZES+=("$SIZE_KB")
-  RUN_ENCODERS+=("$ENCODER_TAG")
-  RUN_SOFTWARES+=("$SOFTWARE_TAG")
-  RUN_CREATION_TIMES+=("$CREATION_TIME")
-  RUN_SEEDS+=("$SEED")
-  RUN_TARGET_DURS+=("$TARGET_DURATION")
-  RUN_TARGET_BRS+=("$BR")
-  RUN_COMBO_HISTORY+=("$combo_key")
-  RUN_PROFILES+=("$PROFILE_VALUE")
-  RUN_QUALITIES+=("$QUALITY")
-  RUN_QT_MAKES+=("$QT_MAKE")
-  RUN_QT_MODELS+=("$QT_MODEL")
-
-  RUN_QT_SOFTWARES+=("$QT_SOFTWARE")
-  RUN_CREATIVE_MIRROR+=("$MIRROR_DESC")
-  RUN_CREATIVE_INTRO+=("$INTRO_DESC")
-  RUN_CREATIVE_LUT+=("$LUT_DESC")
-  RUN_PREVIEWS+=("$PREVIEW_NAME")
-  RUN_FS_TIMESTAMPS+=("${variant_fs_epoch:-}")
+  register_copy_metadata
 # REGION AI: persist variant signature state
   if [ -n "$CURRENT_VARIANT_KEY" ]; then
     mark_variant_key "$CURRENT_VARIANT_KEY"

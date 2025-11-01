@@ -1,6 +1,7 @@
 #!/bin/bash
 # Безопасный режим исполнения
 set -euo pipefail
+trap 'rc=$?; echo "[SAFE EXIT] Ошибка обработки — код $rc"; exit $rc' ERR
 
 # Определение абсолютного пути скрипта
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

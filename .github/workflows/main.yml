@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            echo "No requirements.txt found, skipping install step..."
+          fi
+
+      - name: Check Bash syntax
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            find . -name '*.sh' -print0 | xargs -0 -r shellcheck
+          else
+            echo "ShellCheck not available, falling back to bash -n checks"
+            find . -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
+          fi
+
+      - name: Check Python syntax
+        run: |
+          python3 -m compileall .
+
+      - name: Test Python FSM
+        run: |
+          if [ -d "tests" ]; then
+            python3 -m unittest discover -s tests -p "test_*.py"
+          else
+            echo "No tests directory found, skipping test step..."
+          fi

@@ -1472,6 +1472,55 @@ PY
   local VF_CHAIN="$vf_payload"
 
   # Sanitize VF chain from broken quotes and invalid substrings
+
+  VF_CHAIN=$(python3 - "$VF_CHAIN" <<'PY'
+import sys
+
+def sanitize_quotes(chain):
+    result = []
+    stack = []
+    escaping = False
+
+    for char in chain:
+        if escaping:
+            result.append(char)
+            escaping = False
+            continue
+
+        if char == '\\':
+            result.append(char)
+            escaping = True
+            continue
+
+        if char in {'"', '\''}:
+            if stack and stack[-1][0] == char:
+                stack.pop()
+                result.append(char)
+            elif stack:
+                result.append(char)
+            else:
+                stack.append((char, len(result)))
+                result.append(char)
+            continue
+
+        result.append(char)
+
+    while stack:
+        quote_char, position = stack.pop()
+        if quote_char == '\'':
+            result[position] = '"'
+            result.append('"')
+        else:
+            result.append('"')
+
+    return ''.join(result)
+
+
+print(sanitize_quotes(sys.argv[1]), end='')
+PY
+)
+  VF_CHAIN=$(echo "$VF_CHAIN" | sed -E 's/\)\):/\):/g' | sed -E 's/,+/,/g' | tr -s ' ')
+
   VF_CHAIN=$(echo "$VF_CHAIN" | sed -E "s/'/\"/g" | sed -E 's/\)\):/\):/g' | sed -E 's/,+/,/g' | tr -s ' ')
 
   VF_CHAIN=$(printf '%s' "$VF_CHAIN" | tr -d '\r\n' | sed -E 's/[[:cntrl:]]//g')
@@ -1484,6 +1533,7 @@ PY
 
     VF_CHAIN="scale=1080:-2,format=yuv420p,setpts=PTS"
   fi
+
   if [ -z "$VF_CHAIN" ]; then
     echo "[WARN] VF_CHAIN empty after sanitization, applying safe default"
     VF_CHAIN="scale=1080:-2,format=yuv420p"

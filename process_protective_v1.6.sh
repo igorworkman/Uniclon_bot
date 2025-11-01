@@ -1,70 +1,22 @@
 #!/bin/bash
 # Безопасный режим исполнения
 set -euo pipefail
-trap 'rc=$?; echo "[SAFE EXIT] Ошибка обработки — код $rc"; exit $rc' ERR
-
-# --- Safe helper: clip_start (global initialization, must be declared first) ---
-
-_clip_start_to_seconds() {
-  local raw="${1:-}"
-  awk -v t="$raw" '
-    function fail(){ exit 1 }
-    BEGIN{
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
-      if (t == "" || t ~ /^-/) fail()
-      n=split(t, parts, ":")
-      if (n == 1) {
-        if (t !~ /^[0-9]+(\.[0-9]+)?$/) fail()
-        printf "%.6f", t + 0
-        exit 0
-      }
-      if (n < 2 || n > 3) fail()
-      total = 0
-      for (i = 1; i <= n; i++) {
-        if (parts[i] !~ /^[0-9]+(\.[0-9]+)?$/) fail()
-      }
-      if (n == 2) { total = parts[1] * 60 + parts[2] }
-      else { total = parts[1] * 3600 + parts[2] * 60 + parts[3] }
-      printf "%.6f", total + 0
-    }'
-}
-
-clip_start() {
-  local value="${1:-0.000}"
-  local fallback="${2:-0.000}"
-  local label="${3:-clip_start}"
-  local copy_id="${4:-}"
-  local normalized=""
-  local fallback_seconds=""
-  local context=""
-
-  if [ -n "$copy_id" ]; then
-    context=" (${copy_id})"
-  fi
-
-  if normalized=$(_clip_start_to_seconds "$value" 2>/dev/null); then
-    printf "%.3f" "$normalized"
-    return 0
-  fi
-
-  if ! fallback_seconds=$(_clip_start_to_seconds "$fallback" 2>/dev/null); then
-    fallback_seconds="0.000"
-  fi
-
-  fallback_seconds=$(printf "%.3f" "$fallback_seconds")
-  echo "⚠️ [$label] Некорректное значение '$value' — используется fallback=${fallback_seconds}${context}"
-  printf "%s" "$fallback_seconds"
-}
-
-# Validate presence of clip_start
-if ! declare -f clip_start >/dev/null; then
-  echo "[FATAL] clip_start() not initialized — internal load error"
-  exit 127
-fi
+trap 'rc=$?; echo "[SAFE EXIT] Process terminated (code $rc)"; exit $rc' ERR
 
 # Определение абсолютного пути скрипта
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$SCRIPT_DIR"
+# --- Safe runtime init ---
+if [ -d "$BASE_DIR/modules" ]; then
+  for mod in "$BASE_DIR/modules/"*.sh; do
+    [ -f "$mod" ] && . "$mod"
+  done
+fi
+
+. "$BASE_DIR/modules/time_utils.sh" || { echo "[FATAL] Failed to load time_utils.sh"; exit 127; }
+
+type clip_start >/dev/null 2>&1 || { echo "[FATAL] clip_start() missing after init"; exit 127; }
+echo "[SAFE INIT] Modules sourced successfully"
 IFS=$'\n\t'
 
 SOFTWARE_POOL=(
@@ -1520,6 +1472,7 @@ PY
   local VF_CHAIN="$vf_payload"
 
   # Sanitize VF chain from broken quotes and invalid substrings
+
   VF_CHAIN=$(python3 - "$VF_CHAIN" <<'PY'
 import sys
 
@@ -1567,6 +1520,20 @@ print(sanitize_quotes(sys.argv[1]), end='')
 PY
 )
   VF_CHAIN=$(echo "$VF_CHAIN" | sed -E 's/\)\):/\):/g' | sed -E 's/,+/,/g' | tr -s ' ')
+
+  VF_CHAIN=$(echo "$VF_CHAIN" | sed -E "s/'/\"/g" | sed -E 's/\)\):/\):/g' | sed -E 's/,+/,/g' | tr -s ' ')
+
+  VF_CHAIN=$(printf '%s' "$VF_CHAIN" | tr -d '\r\n' | sed -E 's/[[:cntrl:]]//g')
+  if ! ffmpeg -hide_banner -loglevel error -f lavfi -i "color=c=black:s=16x16:d=0.1" -vf "$VF_CHAIN" -f null - 2>/dev/null; then
+    echo "[WARN] VF chain invalid — resetting to minimal"
+
+  VF_CHAIN=$(echo "$VF_CHAIN" | tr -d "\n" | sed -E "s/[^a-zA-Z0-9_=:,.;()' -]//g")
+  if ! ffmpeg -hide_banner -v error -f lavfi -i "color=c=black:s=16x16:d=0.1" -vf "$VF_CHAIN" -f null - 2>/dev/null; then
+    echo "[WARN] VF chain validation failed — using safe fallback"
+
+    VF_CHAIN="scale=1080:-2,format=yuv420p,setpts=PTS"
+  fi
+
   if [ -z "$VF_CHAIN" ]; then
     echo "[WARN] VF_CHAIN empty after sanitization, applying safe default"
     VF_CHAIN="scale=1080:-2,format=yuv420p"
@@ -1782,32 +1749,27 @@ PY
   echo "ℹ️ ffmpeg command: $ffmpeg_cmd_preview"
   echo "[INFO] Safe crop: ${crop_w}x${crop_h}, scale: ${scale_w}x${scale_h}, pad: ${TARGET_W}x${TARGET_H}"
 
-  # REGION AI: safe ffmpeg execution via bash wrapper
-  local FFMPEG_CMD="$ffmpeg_cmd_preview"
-  local ffmpeg_exit_code=0
+  # REGION AI: safe ffmpeg execution via timeout guard
+  local INPUT_FILE="$SRC"
+  local OUTPUT_FILE="$ENCODE_TARGET"
+  local rc=0
 
-  if ! bash -c "$FFMPEG_CMD"; then
-    ffmpeg_exit_code=${PIPESTATUS[0]:-$?}
-    echo "[ERROR] FFmpeg crashed during copy #$copy_index (exit $ffmpeg_exit_code)"
-    ffmpeg_error=true
+  if [ ! -f "$INPUT_FILE" ]; then
+    echo "[FATAL] Input file not found: $INPUT_FILE"
+    exit 127
   fi
 
-  bash -c "$FFMPEG_CMD"
-  ffmpeg_exit_code=$?
-  if [ "$ffmpeg_exit_code" -ne 0 ]; then
-    render_retry=$((render_retry + 1))
-    echo "❌ FFmpeg failed with exit code $ffmpeg_exit_code"
-    echo "[ERROR] Copy ${copy_index} failed during processing." >>"$OUTPUT_LOG"
-    if [ "$render_retry" -ge "$max_render_retry" ]; then
-      echo "[WARN] Skipped due to FFmpeg failure."
-      FAILED_COUNT=$((FAILED_COUNT + 1))
-      copy_failed=true
-      break
-    fi
-    echo "[WARN] Retrying copy ${copy_index} (${render_retry}/$max_render_retry)…"
-    attempt=$((attempt + 1))
+  echo "[DEBUG] Input file: $INPUT_FILE ($(du -h "$INPUT_FILE" | cut -f1))"
 
-    continue
+  if ! timeout 300 ffmpeg "${FFMPEG_ARGS[@]}"; then
+    rc=$?
+    echo "[FATAL] FFmpeg failed or timed out (code $rc)"
+    exit $rc
+  fi
+
+  if [ ! -s "$OUTPUT_FILE" ]; then
+    echo "[FATAL] Output file is empty or missing — FFmpeg pipeline failed"
+    exit 1
   fi
   # END REGION AI
 
@@ -2366,3 +2328,9 @@ if [ "$AUTO_CLEAN" -eq 1 ]; then
 fi
 
 echo "All done. Outputs in: $OUTPUT_DIR | Manifest: $MANIFEST_PATH"
+
+rc=${rc:-0}
+if [ "$rc" -eq 255 ]; then
+  echo "[FATAL] FFmpeg pipeline critical error — possible invalid input or filter crash"
+  exit 255
+fi

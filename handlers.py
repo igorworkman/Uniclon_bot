@@ -985,9 +985,21 @@ async def _run_and_send(
         await message.answer("⚠️ Обнаружены слишком похожие копии, выполняется перегенерация…")
 
     if tail_text.strip():
-        await message.answer(
-            get_text(lang, "logs_tail", logs=hcode(tail_text))
-        )
+        try:
+            await message.answer(
+                get_text(lang, "logs_tail", logs=hcode(tail_text))
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to send message to Telegram: {e}")
+            await asyncio.sleep(1)
+
+    ffmpeg_status_text: Optional[str] = None
+    if rc == 255:
+        ffmpeg_status_text = "❌ FFmpeg critical error — possible filter or codec crash."
+    elif rc != 0:
+        ffmpeg_status_text = f"⚠️ Non-zero exit ({rc}) — FFmpeg pipeline issue."
+    else:
+        ffmpeg_status_text = "✅ Video processed successfully."
 
     if rc != 0:
         if sequential_delivery and delivered_files:
@@ -998,7 +1010,10 @@ async def _run_and_send(
                 copies,
             )
             rc = 0
+            ffmpeg_status_text = "✅ Video processed successfully."
         else:
+            if ffmpeg_status_text:
+                await message.answer(ffmpeg_status_text)
             logger.error(
                 "Script failed with code %s for %s (copies=%s, profile=%s)",
                 rc,
@@ -1034,6 +1049,9 @@ async def _run_and_send(
             await ack.edit_text(error_text)
             await message.answer(error_text)
             return
+
+    if ffmpeg_status_text and rc == 0:
+        await message.answer(ffmpeg_status_text)
 
     await ack.edit_text(get_text(lang, "collecting_files"))
 

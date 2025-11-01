@@ -9,10 +9,21 @@ _clip_start_to_seconds() {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
       if (t == "" || t ~ /^-/) fail()
       n=split(t, parts, ":")
-      if (n == 1) { printf "%.6f", t + 0; exit 0 }
-      total=0
-      if (n == 2) total = parts[1]*60 + parts[2]
-      if (n == 3) total = parts[1]*3600 + parts[2]*60 + parts[3]
+      if (n < 1 || n > 3) fail()
+      if (n == 1) {
+        if (t !~ /^[0-9]+(\.[0-9]+)?$/) fail()
+        printf "%.6f", t + 0
+        exit 0
+      }
+      total = 0
+      for (i = 1; i <= n; i++) {
+        if (parts[i] !~ /^[0-9]+(\.[0-9]+)?$/) fail()
+      }
+      if (n == 2) {
+        total = parts[1]*60 + parts[2]
+      } else {
+        total = parts[1]*3600 + parts[2]*60 + parts[3]
+      }
       printf "%.6f", total + 0
     }'
 }

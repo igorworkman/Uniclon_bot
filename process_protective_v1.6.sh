@@ -1,7 +1,7 @@
 #!/bin/bash
 # Безопасный режим исполнения
 set -euo pipefail
-trap 'rc=$?; echo "[SAFE EXIT] Ошибка обработки — код $rc"; exit $rc' ERR
+trap 'rc=$?; echo "[SAFE EXIT] Process terminated (code $rc)"; exit $rc' ERR
 
 # Определение абсолютного пути скрипта
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -1473,9 +1473,15 @@ PY
 
   # Sanitize VF chain from broken quotes and invalid substrings
   VF_CHAIN=$(echo "$VF_CHAIN" | sed -E "s/'/\"/g" | sed -E 's/\)\):/\):/g' | sed -E 's/,+/,/g' | tr -s ' ')
+
   VF_CHAIN=$(printf '%s' "$VF_CHAIN" | tr -d '\r\n' | sed -E 's/[[:cntrl:]]//g')
   if ! ffmpeg -hide_banner -loglevel error -f lavfi -i "color=c=black:s=16x16:d=0.1" -vf "$VF_CHAIN" -f null - 2>/dev/null; then
     echo "[WARN] VF chain invalid — resetting to minimal"
+
+  VF_CHAIN=$(echo "$VF_CHAIN" | tr -d "\n" | sed -E "s/[^a-zA-Z0-9_=:,.;()' -]//g")
+  if ! ffmpeg -hide_banner -v error -f lavfi -i "color=c=black:s=16x16:d=0.1" -vf "$VF_CHAIN" -f null - 2>/dev/null; then
+    echo "[WARN] VF chain validation failed — using safe fallback"
+
     VF_CHAIN="scale=1080:-2,format=yuv420p,setpts=PTS"
   fi
   if [ -z "$VF_CHAIN" ]; then
@@ -1693,32 +1699,27 @@ PY
   echo "ℹ️ ffmpeg command: $ffmpeg_cmd_preview"
   echo "[INFO] Safe crop: ${crop_w}x${crop_h}, scale: ${scale_w}x${scale_h}, pad: ${TARGET_W}x${TARGET_H}"
 
-  # REGION AI: safe ffmpeg execution via bash wrapper
-  local FFMPEG_CMD="$ffmpeg_cmd_preview"
-  local ffmpeg_exit_code=0
+  # REGION AI: safe ffmpeg execution via timeout guard
+  local INPUT_FILE="$SRC"
+  local OUTPUT_FILE="$ENCODE_TARGET"
+  local rc=0
 
-  if ! bash -c "$FFMPEG_CMD"; then
-    ffmpeg_exit_code=${PIPESTATUS[0]:-$?}
-    echo "[ERROR] FFmpeg crashed during copy #$copy_index (exit $ffmpeg_exit_code)"
-    ffmpeg_error=true
+  if [ ! -f "$INPUT_FILE" ]; then
+    echo "[FATAL] Input file not found: $INPUT_FILE"
+    exit 127
   fi
 
-  bash -c "$FFMPEG_CMD"
-  ffmpeg_exit_code=$?
-  if [ "$ffmpeg_exit_code" -ne 0 ]; then
-    render_retry=$((render_retry + 1))
-    echo "❌ FFmpeg failed with exit code $ffmpeg_exit_code"
-    echo "[ERROR] Copy ${copy_index} failed during processing." >>"$OUTPUT_LOG"
-    if [ "$render_retry" -ge "$max_render_retry" ]; then
-      echo "[WARN] Skipped due to FFmpeg failure."
-      FAILED_COUNT=$((FAILED_COUNT + 1))
-      copy_failed=true
-      break
-    fi
-    echo "[WARN] Retrying copy ${copy_index} (${render_retry}/$max_render_retry)…"
-    attempt=$((attempt + 1))
+  echo "[DEBUG] Input file: $INPUT_FILE ($(du -h "$INPUT_FILE" | cut -f1))"
 
-    continue
+  if ! timeout 300 ffmpeg "${FFMPEG_ARGS[@]}"; then
+    rc=$?
+    echo "[FATAL] FFmpeg failed or timed out (code $rc)"
+    exit $rc
+  fi
+
+  if [ ! -s "$OUTPUT_FILE" ]; then
+    echo "[FATAL] Output file is empty or missing — FFmpeg pipeline failed"
+    exit 1
   fi
   # END REGION AI
 
@@ -2277,3 +2278,9 @@ if [ "$AUTO_CLEAN" -eq 1 ]; then
 fi
 
 echo "All done. Outputs in: $OUTPUT_DIR | Manifest: $MANIFEST_PATH"
+
+rc=${rc:-0}
+if [ "$rc" -eq 255 ]; then
+  echo "[FATAL] FFmpeg pipeline critical error — possible invalid input or filter crash"
+  exit 255
+fi

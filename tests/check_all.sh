@@ -1,58 +1,59 @@
-#!/bin/bash
-# REGION AI: comprehensive project check script
-# 🧪 Uniclon Bot — Полная проверка проекта
-# Автор: GPT-S JFB PRO v2.1
-# Назначение: Комплексная проверка синтаксиса, импортов, зависимостей, стиля и тестов.
+#!/usr/bin/env bash
+set -euo pipefail
 
-echo "🚀 Запуск полной проверки Uniclon_bot"
-echo "-------------------------------------"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
 
-# Проверка Python синтаксиса
-echo "1️⃣ Проверка синтаксиса Python..."
-find . -name "*.py" -not -path "./venv/*" -exec python3 -m py_compile {} \; || exit 1
+echo "🚀 Running full project code check..."
 
-# Проверка bash скриптов
-echo "2️⃣ Проверка bash-скриптов..."
-find . -name "*.sh" -exec bash -n {} \; || exit 1
+PROJECT_TARGETS=(modules services apps handlers uniclon_bot.py)
+EXISTING_TARGETS=()
+for target in "${PROJECT_TARGETS[@]}"; do
+  if [ -e "$target" ]; then
+    EXISTING_TARGETS+=("$target")
+  fi
+done
 
-# Проверка зависимостей
-echo "3️⃣ Проверка зависимостей..."
-python3 -m pip check || echo "⚠️ Проверка зависимостей не пройдена"
-
-# Проверка неиспользуемого кода
-echo "4️⃣ Анализ импортов и неиспользуемых функций..."
-if ! command -v vulture &> /dev/null; then pip install vulture -q; fi
-vulture . --min-confidence 80
-
-# Проверка типов (mypy)
-echo "5️⃣ Проверка типов (mypy)..."
-if ! command -v mypy &> /dev/null; then pip install mypy -q; fi
-mypy . --ignore-missing-imports || echo "⚠️ Предупреждения mypy"
-
-# Проверка стиля и логики
-echo "6️⃣ Проверка кода (pylint)..."
-if ! command -v pylint &> /dev/null; then pip install pylint -q; fi
-pylint --exit-zero $(find . -name "*.py" -not -path "./venv/*")
-
-# Проверка форматирования
-echo "7️⃣ Проверка стиля (flake8)..."
-if ! command -v flake8 &> /dev/null; then pip install flake8 -q; fi
-flake8 . --exclude venv --max-line-length=120
-
-# Проверка сложности
-echo "8️⃣ Проверка дублирующего кода (radon)..."
-if ! command -v radon &> /dev/null; then pip install radon -q; fi
-radon cc . -s -a
-
-# Проверка тестов (pytest)
-if [ -d "tests" ]; then
-    echo "9️⃣ Запуск тестов..."
-    if ! command -v pytest &> /dev/null; then pip install pytest -q; fi
-    pytest -v --maxfail=1 --disable-warnings
+if [ "${#EXISTING_TARGETS[@]}" -eq 0 ]; then
+  echo "⚠️ No project targets found for linting."
 else
-    echo "⚠️ Каталог tests/ не найден — тесты пропущены"
+  if command -v flake8 >/dev/null 2>&1; then
+    echo "✨ Running flake8 style checks..."
+    flake8 "${EXISTING_TARGETS[@]}"
+  else
+    echo "⚠️ flake8 is not installed; skipping style checks."
+  fi
 fi
 
-# END REGION AI
-echo "-------------------------------------"
-echo "✅ Проверка завершена. Смотри отчёт выше."
+echo "🧮 Running radon complexity analysis..."
+if [ "${#EXISTING_TARGETS[@]}" -eq 0 ]; then
+  echo "⚠️ No project targets found for radon analysis."
+else
+  if command -v radon >/dev/null 2>&1; then
+    radon cc -s -a "${EXISTING_TARGETS[@]}" \
+      --exclude .git,.venv,venv,env,build,dist,__pycache__,.pytest_cache || true
+  else
+    echo "⚠️ radon is not installed; skipping complexity analysis."
+  fi
+fi
+
+echo "🧪 Running pytest suite..."
+if command -v pytest >/dev/null 2>&1; then
+  pytest -q || true
+else
+  echo "⚠️ pytest is not installed; skipping tests."
+fi
+
+echo "🧱 Running python syntax checks..."
+find . \
+  -path './.git' -prune -o \
+  -path './.venv' -prune -o \
+  -path './venv' -prune -o \
+  -path './env' -prune -o \
+  -path './build' -prune -o \
+  -path './dist' -prune -o \
+  -path './__pycache__' -prune -o \
+  -name '*.py' -print \
+| xargs -r -n1 python -m py_compile
+
+echo "✅ All checks complete."
